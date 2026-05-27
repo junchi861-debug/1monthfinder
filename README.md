@@ -64,9 +64,15 @@ python -m stock_finder.cli backtest --watchlist config/watchlist.csv --out repor
 
 설명 웹사이트는 `site/` 폴더에 있습니다.
 
-웹사이트는 `site/data/latest.json`, `site/data/history.json`, `site/data/prices.json`을 읽어 오늘의 최종 후보, 원자료, 후보군 축소 과정, 최근 1년치 점수/가격 이력을 보여줍니다.
+웹사이트는 `site/data/market_report.json`을 우선 읽어 국내 주식, 미국 주식, 코인으로 나눈 대시보드를 보여줍니다. 현재 자동 계산이 연결된 자산군은 국내 주식이며, KOSPI/KOSDAQ 전체를 모데이터로 가져온 뒤 거래대금 상위 분석군에 대해 1일, 1주, 1달, 1년 전략을 계산합니다.
 
-데이터 파일은 다음 명령으로 만들 수 있습니다.
+국내 주식 대시보드 데이터는 다음 명령으로 만들 수 있습니다.
+
+```powershell
+.\.venv\Scripts\python.exe -m stock_finder.cli market --out-dir site/data --domestic-limit 250 --years 3
+```
+
+기존 샘플 watchlist 기반 데이터는 다음 명령으로 만들 수 있습니다.
 
 ```powershell
 .\.venv\Scripts\python.exe -m stock_finder.cli daily --watchlist config/watchlist.csv --out-dir site/data
@@ -77,5 +83,14 @@ GitHub Pages 배포는 `.github/workflows/pages.yml`이 담당합니다. 이 워
 - `main` 브랜치에 push
 - 매일 23:30 KST
 - GitHub Actions에서 수동 실행
+
+웹에서 확인할 수 있는 항목:
+
+- KOSPI/KOSDAQ 전체 모데이터 규모
+- 1일, 1주, 1달, 1년 기간별 최종 후보
+- 모데이터에서 후보군이 좁혀지는 단계
+- 전체 원자료와 분석 여부
+- 과거 동일 규칙으로 거래했을 때의 승률, 평균 수익률, 최대 낙폭, 성공/실패 사례
+- 검증된 필터와 이슈/커뮤니티형 관심도 보조 필터
 
 GitHub 저장소에서 Pages를 처음 켤 때는 **Settings > Pages > Build and deployment > Source**를 **GitHub Actions**로 설정하세요.

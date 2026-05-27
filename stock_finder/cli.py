@@ -8,6 +8,7 @@ import pandas as pd
 from stock_finder.backtest import walk_forward_scores
 from stock_finder.data import fetch_history, load_watchlist
 from stock_finder.daily_report import build_daily_site_data
+from stock_finder.market_report import build_market_site_data
 from stock_finder.scoring import score_history
 
 
@@ -73,6 +74,21 @@ def build_daily(args: argparse.Namespace) -> None:
     )
 
 
+def build_market(args: argparse.Namespace) -> None:
+    report = build_market_site_data(
+        out_dir=args.out_dir,
+        domestic_limit=args.domestic_limit,
+        years=args.years,
+        transaction_cost=args.transaction_cost,
+    )
+    summary = report["domestic"]["universe_summary"]
+    print(
+        "saved market report to "
+        f"{args.out_dir} "
+        f"(universe={summary['total_count']}, history_ready={summary['history_ready_count']})"
+    )
+
+
 def make_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Find one-month stock trade candidates.")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -97,6 +113,13 @@ def make_parser() -> argparse.ArgumentParser:
     daily.add_argument("--period", default="18mo")
     daily.add_argument("--out-dir", default="site/data")
     daily.set_defaults(func=build_daily)
+
+    market = subparsers.add_parser("market", help="build segmented market dashboard data")
+    market.add_argument("--out-dir", default="site/data")
+    market.add_argument("--domestic-limit", type=int, default=250)
+    market.add_argument("--years", type=int, default=3)
+    market.add_argument("--transaction-cost", type=float, default=0.0015)
+    market.set_defaults(func=build_market)
 
     return parser
 
