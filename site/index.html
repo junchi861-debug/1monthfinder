@@ -8,7 +8,7 @@
       name="description"
       content="국내 주식 모데이터, 기간별 후보, 백테스트 검증, 원자료를 탭으로 확인하는 1MonthFinder 대시보드"
     />
-    <link rel="stylesheet" href="styles.css?v=20260528-tabs" />
+    <link rel="stylesheet" href="styles.css?v=20260528-mobile-algos" />
   </head>
   <body>
     <header class="topbar">
@@ -30,10 +30,10 @@
         <div class="hero-overlay" aria-hidden="true"></div>
         <div class="hero-content">
           <p class="eyebrow">Nightly stock candidate system</p>
-          <h1 id="hero-title">매일 밤 기준 자료로 후보를 다시 고르고, 과거 검증까지 함께 봅니다</h1>
+          <h1 id="hero-title">1일 후보부터 먼저 보고, 기간과 알고리즘을 바로 바꿉니다</h1>
           <p class="hero-copy">
-            국내 주식 전체 모데이터에서 시작해 기간별 알고리즘, 후보군 축소 과정, 백테스트,
-            원자료를 탭으로 나누어 읽기 쉽게 정리했습니다.
+            모바일 첫 화면에서 오늘의 결론과 요약을 확인하고, 탭과 셀렉터로 후보군 축소 과정,
+            백테스트, 원자료를 이어서 볼 수 있게 정리했습니다.
           </p>
           <div class="hero-status" id="heroStatus" aria-live="polite">
             <span class="status-label">데이터</span>
@@ -41,7 +41,7 @@
             <span>GitHub Pages 데이터 파일을 읽고 있습니다.</span>
           </div>
           <div class="hero-actions">
-            <a class="button primary" href="#workspace" data-view-link="candidates">오늘 후보 보기</a>
+            <a class="button primary" href="#workspace" data-view-link="overview">오늘 요약 보기</a>
             <a class="button secondary" href="#workspace" data-view-link="validation">검증 결과 보기</a>
           </div>
         </div>
@@ -51,26 +51,37 @@
         <div class="workspace-heading">
           <div>
             <p class="eyebrow">Dashboard</p>
-            <h2 id="workspace-title">탭으로 읽는 후보 탐색 결과</h2>
+            <h2 id="workspace-title">오늘의 후보와 요약</h2>
             <p>
-              먼저 자산군과 기간을 고른 뒤, 아래 탭에서 필요한 자료만 펼쳐보세요.
-              현재 자동 계산은 국내 주식에 연결되어 있고 미국 주식과 코인은 확장 슬롯입니다.
+              1일 단기 후보를 기본으로 열고, 기간과 알고리즘을 바꾸면서 같은 기준의 결과를 비교합니다.
             </p>
           </div>
           <a class="download-link" href="data/market_report.json">JSON 다운로드</a>
         </div>
 
-        <div class="switcher" aria-label="자산군 선택">
-          <button class="switch-button active" data-asset="kr" type="button">국내 주식</button>
-          <button class="switch-button" data-asset="us" type="button">미국 주식</button>
-          <button class="switch-button" data-asset="crypto" type="button">코인</button>
+        <div class="top-options" aria-label="상단 옵션">
+          <div class="asset-tabs" aria-label="자산군 선택">
+            <button class="switch-button active" data-asset="kr" type="button">국내 주식</button>
+            <button class="switch-button" data-asset="us" type="button">미국 주식</button>
+            <button class="switch-button" data-asset="crypto" type="button">코인</button>
+          </div>
+          <label class="selector-field period-field" for="periodSelect">
+            <span>기간</span>
+            <select id="periodSelect">
+              <option value="1d">1일</option>
+              <option value="1w">1주</option>
+              <option value="1m">1달</option>
+              <option value="1y">1년</option>
+            </select>
+          </label>
         </div>
 
-        <div class="switcher period-switcher" aria-label="기간 선택">
-          <button class="switch-button" data-period="1d" type="button">1일</button>
-          <button class="switch-button" data-period="1w" type="button">1주</button>
-          <button class="switch-button active" data-period="1m" type="button">1달</button>
-          <button class="switch-button" data-period="1y" type="button">1년</button>
+        <div class="algorithm-row">
+          <label class="selector-field algorithm-field" for="algorithmSelect">
+            <span>알고리즘</span>
+            <select id="algorithmSelect"></select>
+          </label>
+          <p id="algorithmDescription">알고리즘 정보를 불러오는 중입니다.</p>
         </div>
 
         <nav class="view-tabs" aria-label="자료 탭">
@@ -87,23 +98,33 @@
             <p class="eyebrow">Summary</p>
             <h2 id="overview-title">한눈에 보는 오늘의 상태</h2>
           </div>
-          <div class="stat-grid" aria-label="오늘 요약">
-            <article class="stat">
-              <span>최종 후보</span>
-              <strong id="candidateCount">-</strong>
-            </article>
-            <article class="stat">
-              <span>과거 승률</span>
-              <strong id="watchCount">-</strong>
-            </article>
-            <article class="stat">
-              <span>모데이터</span>
-              <strong id="universeCount">-</strong>
-            </article>
-            <article class="stat">
-              <span>기준일</span>
-              <strong id="asOfDate">-</strong>
-            </article>
+          <div class="result-board" aria-live="polite">
+            <div class="result-headline">
+              <span id="decisionPeriod">국내 주식 · 1일</span>
+              <strong id="decisionTitle">후보를 계산하고 있습니다.</strong>
+              <p id="decisionCopy">데이터를 불러오면 최종 후보와 요약 지표가 표시됩니다.</p>
+            </div>
+            <div class="compact-stats" aria-label="오늘 요약">
+              <article>
+                <span>최종 후보</span>
+                <strong id="candidateCount">-</strong>
+              </article>
+              <article>
+                <span>과거 승률</span>
+                <strong id="watchCount">-</strong>
+              </article>
+              <article>
+                <span>모데이터</span>
+                <strong id="universeCount">-</strong>
+              </article>
+              <article>
+                <span>기준일</span>
+                <strong id="asOfDate">-</strong>
+              </article>
+            </div>
+            <div class="candidate-cards" id="topCandidateCards">
+              <article class="candidate-card empty">데이터를 불러오는 중입니다.</article>
+            </div>
           </div>
           <div class="final-callout" id="finalCallout">
             <strong>데이터를 불러오고 있습니다.</strong>
@@ -286,6 +307,6 @@
       <a href="https://github.com/junchi861-debug/1monthfinder">GitHub 저장소</a>
     </footer>
 
-    <script src="script.js?v=20260528-tabs"></script>
+    <script src="script.js?v=20260528-mobile-algos"></script>
   </body>
 </html>

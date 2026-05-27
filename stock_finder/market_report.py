@@ -79,6 +79,36 @@ ISSUE_FILTERS = [
     "추후 확장: 네이버 데이터랩, Reddit, Stocktwits, 뉴스 키워드 API 연결",
 ]
 
+ALGORITHMS: dict[str, dict[str, str]] = {
+    "pulse": {
+        "label": "단기 탄력",
+        "short_label": "탄력",
+        "description": "1일/1주 움직임, 거래대금 급증, 거래량 급증을 우선해 짧은 기회를 찾습니다.",
+    },
+    "balanced": {
+        "label": "균형 검증",
+        "short_label": "균형",
+        "description": "모멘텀, 리스크, 유동성, 관심도, 추세를 균형 있게 반영합니다.",
+    },
+    "issue": {
+        "label": "이슈 포착",
+        "short_label": "이슈",
+        "description": "거래대금 확산, 신고가 근접, 커뮤니티성 관심도 대리변수를 더 크게 봅니다.",
+    },
+    "defensive": {
+        "label": "리스크 관리",
+        "short_label": "방어",
+        "description": "변동성, 최대 낙폭, 이동평균 추세를 더 엄격하게 반영합니다.",
+    },
+}
+
+DEFAULT_ALGORITHM_BY_PERIOD = {
+    "1d": "pulse",
+    "1w": "balanced",
+    "1m": "balanced",
+    "1y": "defensive",
+}
+
 
 @dataclass(frozen=True)
 class StrategyResult:
@@ -87,6 +117,28 @@ class StrategyResult:
     backtest: dict[str, object]
     final_candidates: list[dict[str, object]]
     watch: list[dict[str, object]]
+
+
+def _algorithm_options() -> list[dict[str, str]]:
+    return [
+        {"key": key, "label": config["label"], "short_label": config["short_label"], "description": config["description"]}
+        for key, config in ALGORITHMS.items()
+    ]
+
+
+def _period_payload(config: dict[str, object], result: StrategyResult, algorithm_key: str) -> dict[str, object]:
+    return {
+        "label": config["label"],
+        "description": config["description"],
+        "holding_days": config["holding_days"],
+        "algorithm": algorithm_key,
+        "algorithm_label": ALGORITHMS[algorithm_key]["label"],
+        "rows": result.rows,
+        "funnel": result.funnel,
+        "backtest": result.backtest,
+        "final_candidates": result.final_candidates,
+        "watch": result.watch,
+    }
 
 
 def build_market_site_data(
@@ -105,22 +157,33 @@ def build_market_site_data(
 
     period_results: dict[str, dict[str, object]] = {}
     for period_key, config in PERIODS.items():
-        result = _build_strategy(period_key, config, universe, selected, histories, transaction_cost)
+        algorithm_results = {}
+        for algorithm_key in ALGORITHMS:
+            result = _build_strategy(period_key, config, algorithm_key, universe, selected, histories, transaction_cost)
+            algorithm_results[algorithm_key] = _period_payload(config, result, algorithm_key)
+
+        default_algorithm = DEFAULT_ALGORITHM_BY_PERIOD.get(period_key, "balanced")
+        default_payload = algorithm_results[default_algorithm]
         period_results[period_key] = {
             "label": config["label"],
             "description": config["description"],
             "holding_days": config["holding_days"],
-            "rows": result.rows,
-            "funnel": result.funnel,
-            "backtest": result.backtest,
-            "final_candidates": result.final_candidates,
-            "watch": result.watch,
+            "default_algorithm": default_algorithm,
+            "algorithm_options": _algorithm_options(),
+            "algorithms": algorithm_results,
+            "algorithm": default_algorithm,
+            "rows": default_payload["rows"],
+            "funnel": default_payload["funnel"],
+            "backtest": default_payload["backtest"],
+            "final_candidates": default_payload["final_candidates"],
+            "watch": default_payload["watch"],
         }
 
     report = {
         "generated_at": generated_at.isoformat(),
         "timezone": TIMEZONE,
         "asset_classes": ASSET_CLASSES,
+        "algorithms": ALGORITHMS,
         "validated_filters": VALIDATED_FILTERS,
         "issue_filters": ISSUE_FILTERS,
         "domestic": {
@@ -227,6 +290,7 @@ def _load_histories(selected: list[dict[str, object]], start: str) -> dict[str, 
 def _build_strategy(
     period_key: str,
     config: dict[str, object],
+    algorithm_key: str,
     universe: list[dict[str, object]],
     selected: list[dict[str, object]],
     histories: dict[str, pd.DataFrame],
@@ -240,33 +304,37 @@ def _build_strategy(
         if history is None or len(history) < int(config["min_lookback"]):
             continue
         features = _features_at(history, len(history) - 1)
-        score_parts = _period_score(period_key, features)
+        score_parts = _period_score(period_key, features, algorithm_key)
         row = {
             "symbol": symbol,
             "name": base["name"],
             "market": base["market"],
             "tags": base.get("tags", []),
             "as_of": _date_string(history.index[-1]),
+            "algorithm": algorithm_key,
+            "algorithm_label": ALGORITHMS[algorithm_key]["label"],
             **features,
             **score_parts,
         }
-        row["final_action"] = _action_for_row(row)
-        row["reason"] = _reason_for_row(row)
+        row["final_action"] = _action_for_row(row, period_key, algorithm_key)
+        row["reason"] = _reason_for_row(row, period_key, algorithm_key)
         rows.append(_clean(row))
 
     rows = sorted(rows, key=lambda row: _number(row.get("score")), reverse=True)
     for index, row in enumerate(rows, start=1):
         row["rank"] = index
 
-    backtest = _backtest_period(period_key, config, selected_by_symbol, histories, transaction_cost)
+    backtest = _backtest_period(period_key, config, algorithm_key, selected_by_symbol, histories, transaction_cost)
     strategy_ok = _strategy_validation(backtest)
     for row in rows:
         row["strategy_validation"] = strategy_ok
-        if row["final_action"] == "candidate" and not strategy_ok["passed"]:
+        if row["final_action"] == "candidate" and not strategy_ok["passed"] and not _keeps_short_term_candidates(period_key, algorithm_key):
             row["final_action"] = "watch"
             row["reason"] = "점수는 높지만 과거 동일 규칙 검증 기준을 아직 통과하지 못했습니다."
 
-    funnel = _build_period_funnel(period_key, universe, selected, histories, rows)
+    _promote_target_candidates(rows, period_key, algorithm_key, strategy_ok)
+
+    funnel = _build_period_funnel(period_key, algorithm_key, universe, selected, histories, rows)
     final_candidates = [row for row in rows if row["final_action"] == "candidate"][:20]
     watch = [row for row in rows if row["final_action"] == "watch"][:20]
 
@@ -336,7 +404,7 @@ def _features_at(history: pd.DataFrame, position: int) -> dict[str, object]:
     }
 
 
-def _period_score(period_key: str, features: dict[str, object]) -> dict[str, object]:
+def _period_score(period_key: str, features: dict[str, object], algorithm_key: str = "balanced") -> dict[str, object]:
     liquidity = _clip(_safe_log10(features.get("amount_20d")), 9.0, 11.5)
     attention = (
         0.45 * _clip(_number(features.get("amount_surge")), 0.8, 3.0)
@@ -352,19 +420,31 @@ def _period_score(period_key: str, features: dict[str, object]) -> dict[str, obj
     if period_key == "1d":
         momentum = 0.65 * _clip(_number(features.get("ret_1d")), -0.02, 0.08) + 0.35 * _clip(_number(features.get("ret_5d")), -0.04, 0.12)
         risk = _inverse_clip(_number(features.get("vol_5d")), 0.20, 1.60)
-        score = 100 * (0.35 * attention + 0.25 * momentum + 0.20 * liquidity + 0.10 * risk + 0.10 * trend)
+        balanced_score = 0.35 * attention + 0.25 * momentum + 0.20 * liquidity + 0.10 * risk + 0.10 * trend
     elif period_key == "1w":
         momentum = 0.65 * _clip(_number(features.get("ret_5d")), -0.03, 0.14) + 0.35 * _clip(_number(features.get("ret_21d")), -0.06, 0.22)
         risk = 0.6 * _inverse_clip(_number(features.get("vol_21d")), 0.20, 1.10) + 0.4 * _clip(_number(features.get("max_drawdown_63d")), -0.35, -0.03)
-        score = 100 * (0.40 * momentum + 0.20 * attention + 0.15 * liquidity + 0.15 * risk + 0.10 * trend)
+        balanced_score = 0.40 * momentum + 0.20 * attention + 0.15 * liquidity + 0.15 * risk + 0.10 * trend
     elif period_key == "1m":
         momentum = 0.60 * _clip(_number(features.get("ret_21d")), -0.03, 0.12) + 0.40 * _clip(_number(features.get("ret_63d")), -0.08, 0.25)
         risk = 0.55 * _inverse_clip(_number(features.get("vol_21d")), 0.18, 0.75) + 0.45 * _clip(_number(features.get("max_drawdown_63d")), -0.30, -0.03)
-        score = 100 * (0.45 * momentum + 0.25 * risk + 0.15 * liquidity + 0.10 * attention + 0.05 * trend)
+        balanced_score = 0.45 * momentum + 0.25 * risk + 0.15 * liquidity + 0.10 * attention + 0.05 * trend
     else:
         momentum = 0.55 * _clip(_number(features.get("ret_126d")), -0.10, 0.35) + 0.45 * _clip(_number(features.get("ret_252d")), -0.20, 0.60)
         risk = 0.50 * _inverse_clip(_number(features.get("vol_63d")), 0.15, 0.65) + 0.50 * _clip(_number(features.get("max_drawdown_252d")), -0.45, -0.08)
-        score = 100 * (0.35 * momentum + 0.25 * risk + 0.15 * liquidity + 0.15 * trend + 0.10 * attention)
+        balanced_score = 0.35 * momentum + 0.25 * risk + 0.15 * liquidity + 0.15 * trend + 0.10 * attention
+
+    if algorithm_key == "pulse":
+        if period_key == "1d":
+            score = 100 * (0.42 * attention + 0.34 * momentum + 0.12 * liquidity + 0.07 * trend + 0.05 * risk)
+        else:
+            score = 100 * (0.35 * momentum + 0.25 * attention + 0.15 * liquidity + 0.15 * risk + 0.10 * trend)
+    elif algorithm_key == "issue":
+        score = 100 * (0.45 * attention + 0.20 * momentum + 0.15 * liquidity + 0.10 * trend + 0.10 * risk)
+    elif algorithm_key == "defensive":
+        score = 100 * (0.35 * risk + 0.25 * trend + 0.20 * liquidity + 0.15 * momentum + 0.05 * attention)
+    else:
+        score = 100 * balanced_score
 
     return {
         "score": round(float(np.clip(score, 0, 100)), 2),
@@ -376,16 +456,19 @@ def _period_score(period_key: str, features: dict[str, object]) -> dict[str, obj
     }
 
 
-def _action_for_row(row: dict[str, object]) -> str:
-    if _number(row.get("score")) >= 70:
+def _action_for_row(row: dict[str, object], period_key: str, algorithm_key: str) -> str:
+    score = _number(row.get("score"))
+    if score >= _candidate_threshold(period_key, algorithm_key):
         return "candidate"
-    if _number(row.get("score")) >= 55:
+    if score >= _watch_threshold(period_key, algorithm_key):
         return "watch"
     return "avoid"
 
 
-def _reason_for_row(row: dict[str, object]) -> str:
+def _reason_for_row(row: dict[str, object], period_key: str, algorithm_key: str) -> str:
     if row["final_action"] == "candidate":
+        if _keeps_short_term_candidates(period_key, algorithm_key):
+            return "1일 단기 알고리즘에서 거래대금, 탄력, 관심도 기준 상위권입니다. 검증 지표와 함께 확인하세요."
         return "점수 기준을 통과했습니다. 과거 동일 규칙 검증 결과와 함께 확인하세요."
     if _number(row.get("liquidity_score")) < 0.35:
         return "유동성 점수가 낮아 제외했습니다."
@@ -396,9 +479,83 @@ def _reason_for_row(row: dict[str, object]) -> str:
     return "관찰 대상입니다."
 
 
+def _candidate_threshold(period_key: str, algorithm_key: str) -> float:
+    if period_key == "1d" and algorithm_key in {"pulse", "issue"}:
+        return 58
+    if algorithm_key == "defensive":
+        return 68
+    return 70
+
+
+def _watch_threshold(period_key: str, algorithm_key: str) -> float:
+    if period_key == "1d" and algorithm_key in {"pulse", "issue"}:
+        return 48
+    return 55
+
+
+def _signal_threshold(period_key: str, algorithm_key: str) -> float:
+    if period_key == "1d" and algorithm_key in {"pulse", "issue"}:
+        return 55
+    return _candidate_threshold(period_key, algorithm_key)
+
+
+def _target_candidate_count(period_key: str, algorithm_key: str) -> int | None:
+    if period_key == "1d" and algorithm_key in {"pulse", "issue"}:
+        return 3
+    return None
+
+
+def _keeps_short_term_candidates(period_key: str, algorithm_key: str) -> bool:
+    return period_key == "1d" and algorithm_key in {"pulse", "issue"}
+
+
+def _short_term_guardrail(row: dict[str, object]) -> bool:
+    return (
+        _number(row.get("score")) >= 50
+        and _number(row.get("liquidity_score")) >= 0.35
+        and _number(row.get("issue_score")) >= 0.30
+        and _number(row.get("risk_score")) >= 0.10
+    )
+
+
+def _promote_target_candidates(
+    rows: list[dict[str, object]],
+    period_key: str,
+    algorithm_key: str,
+    strategy_ok: dict[str, object],
+) -> None:
+    target = _target_candidate_count(period_key, algorithm_key)
+    if not target:
+        return
+
+    selected_symbols = set(
+        row["symbol"]
+        for row in rows
+        if _short_term_guardrail(row)
+    )
+    selected_symbols = set([row["symbol"] for row in rows if row["symbol"] in selected_symbols][:target])
+    if len(selected_symbols) < target:
+        for row in rows:
+            if row["symbol"] in selected_symbols or _number(row.get("score")) < 45:
+                continue
+            selected_symbols.add(row["symbol"])
+            if len(selected_symbols) >= target:
+                break
+
+    for row in rows:
+        if row["symbol"] in selected_symbols:
+            row["final_action"] = "candidate"
+            row["strategy_validation"] = strategy_ok
+            row["reason"] = "1일 단기 알고리즘 기준 상위 3개 후보입니다. 당일 이슈성 신호라 검증 지표와 리스크를 함께 확인하세요."
+        elif row["final_action"] == "candidate":
+            row["final_action"] = "watch"
+            row["reason"] = "후보 기준은 넘었지만 1일 화면에서는 상위 3개만 최종 후보로 표시합니다."
+
+
 def _backtest_period(
     period_key: str,
     config: dict[str, object],
+    algorithm_key: str,
     selected_by_symbol: dict[str, dict[str, object]],
     histories: dict[str, pd.DataFrame],
     transaction_cost: float,
@@ -414,8 +571,8 @@ def _backtest_period(
             continue
         for position in range(min_lookback, len(history) - holding_days, step):
             features = _features_at(history, position)
-            scored = _period_score(period_key, features)
-            if scored["score"] < 70:
+            scored = _period_score(period_key, features, algorithm_key)
+            if scored["score"] < _signal_threshold(period_key, algorithm_key):
                 continue
             entry = float(history["close"].iloc[position])
             exit_price = float(history["close"].iloc[position + holding_days])
@@ -512,6 +669,7 @@ def _strategy_validation(backtest: dict[str, object]) -> dict[str, object]:
 
 def _build_period_funnel(
     period_key: str,
+    algorithm_key: str,
     universe: list[dict[str, object]],
     selected: list[dict[str, object]],
     histories: dict[str, pd.DataFrame],
@@ -527,7 +685,7 @@ def _build_period_funnel(
         ("liquidity", "유동성 검증", "거래대금 기반 유동성 점수 0.35 이상", [symbol for symbol, row in row_by_symbol.items() if _number(row.get("liquidity_score")) >= 0.35]),
         ("validated", "검증 필터", "모멘텀, 추세, 리스크 점수를 통과한 종목", [symbol for symbol, row in row_by_symbol.items() if _number(row.get("momentum_score")) >= 0.35 and _number(row.get("risk_score")) >= 0.25]),
         ("issue", "이슈/관심도 필터", "거래량·거래대금 급증과 신고가 근접도 기반 관심도", [symbol for symbol, row in row_by_symbol.items() if _number(row.get("issue_score")) >= _issue_threshold(period_key)]),
-        ("final", "최종 후보", "점수와 과거 동일 규칙 검증을 함께 통과", [row["symbol"] for row in rows if row.get("final_action") == "candidate"]),
+        ("final", "최종 후보", _final_stage_description(period_key, algorithm_key), [row["symbol"] for row in rows if row.get("final_action") == "candidate"]),
     ]
 
     funnel = []
@@ -554,6 +712,12 @@ def _build_period_funnel(
 
 def _issue_threshold(period_key: str) -> float:
     return {"1d": 0.45, "1w": 0.35, "1m": 0.20, "1y": 0.15}[period_key]
+
+
+def _final_stage_description(period_key: str, algorithm_key: str) -> str:
+    if _keeps_short_term_candidates(period_key, algorithm_key):
+        return "1일 단기 알고리즘 상위 3개를 최종 후보로 표시"
+    return "점수와 과거 동일 규칙 검증을 함께 통과"
 
 
 def _equity_curve(daily: pd.DataFrame) -> list[dict[str, object]]:
