@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-05-28T05:42:17+09:00",
+  "generated_at": "2026-05-28T06:08:12+09:00",
   "timezone": "Asia/Seoul",
   "asset_classes": {
     "kr": {
@@ -46752,11 +46752,11 @@
           ],
           "best_trades": [
             {
-              "date": "2026-04-08",
-              "exit_date": "2026-04-09",
-              "symbol": "017900",
-              "name": "광전자",
-              "score": 83.12,
+              "date": "2026-05-22",
+              "exit_date": "2026-05-26",
+              "symbol": "001820",
+              "name": "삼화콘덴서",
+              "score": 82.64,
               "gross_return": 0.3,
               "net_return": 0.2985
             },
@@ -46770,11 +46770,11 @@
               "net_return": 0.2985
             },
             {
-              "date": "2026-05-22",
-              "exit_date": "2026-05-26",
-              "symbol": "001820",
-              "name": "삼화콘덴서",
-              "score": 82.64,
+              "date": "2026-04-08",
+              "exit_date": "2026-04-09",
+              "symbol": "017900",
+              "name": "광전자",
+              "score": 83.12,
               "gross_return": 0.3,
               "net_return": 0.2985
             },
