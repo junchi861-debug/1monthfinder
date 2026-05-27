@@ -37,11 +37,13 @@ jobs:
         run: python -m pip install -r requirements.txt
 
       - name: Build nightly recommendation data
+        if: github.event_name != 'push'
         run: |
           python -m stock_finder.cli market --out-dir site/data --domestic-limit 250 --years 3
           python -m stock_finder.cli daily --watchlist config/watchlist.csv --out-dir site/data
 
       - name: Commit generated market report
+        if: github.event_name != 'push'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
