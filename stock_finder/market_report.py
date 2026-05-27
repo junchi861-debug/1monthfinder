@@ -337,7 +337,7 @@ def _features_at(history: pd.DataFrame, position: int) -> dict[str, object]:
 
 
 def _period_score(period_key: str, features: dict[str, object]) -> dict[str, object]:
-    liquidity = _clip(math.log10(_number(features.get("amount_20d"))), 9.0, 11.5)
+    liquidity = _clip(_safe_log10(features.get("amount_20d")), 9.0, 11.5)
     attention = (
         0.45 * _clip(_number(features.get("amount_surge")), 0.8, 3.0)
         + 0.35 * _clip(_number(features.get("volume_surge")), 0.8, 2.8)
@@ -628,6 +628,13 @@ def _clip(value: float, low: float, high: float) -> float:
 
 def _inverse_clip(value: float, low: float, high: float) -> float:
     return 1 - _clip(value, low, high)
+
+
+def _safe_log10(value: object) -> float:
+    number = _number(value, default=0.0)
+    if number <= 0:
+        return np.nan
+    return math.log10(number)
 
 
 def _number(value: object, default: float = 0.0) -> float:

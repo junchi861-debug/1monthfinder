@@ -5,3 +5,4 @@ __pycache__/
 reports/*.csv
 site/data/*.csv
 site/data/*.json
+!site/data/market_report.json
