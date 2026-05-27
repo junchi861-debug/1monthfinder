@@ -1,0 +1,278 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>1개월 보유 주식 후보 탐색기</title>
+    <meta
+      name="description"
+      content="1개월 보유 후 매도를 전제로 주식 후보를 점수화하고 백테스트하는 시스템 설명 사이트"
+    />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="topbar" aria-label="주요 탐색">
+      <a class="brand" href="#top" aria-label="첫 화면으로 이동">
+        <span class="brand-mark" aria-hidden="true">1M</span>
+        <span>주식 후보 탐색기</span>
+      </a>
+      <nav class="nav-links">
+        <a href="#workflow">흐름</a>
+        <a href="#score">점수</a>
+        <a href="#run">실행</a>
+        <a href="#interpret">해석</a>
+      </nav>
+    </header>
+
+    <main id="top">
+      <section class="hero" aria-labelledby="hero-title">
+        <img class="hero-image" src="assets/hero-dashboard.png" alt="주식 후보 탐색 대시보드 일러스트" />
+        <div class="hero-overlay" aria-hidden="true"></div>
+        <div class="hero-content">
+          <p class="eyebrow">21거래일 보유 전략 리서치 도구</p>
+          <h1 id="hero-title">1개월 후 팔 주식 후보를 검증 가능한 기준으로 찾습니다</h1>
+          <p class="hero-copy">
+            가격 데이터, 모멘텀, 변동성, 낙폭, RSI, 유동성을 함께 보고 후보를 점수화합니다.
+            감으로 고르는 대신 CSV 리포트와 백테스트 결과로 판단 과정을 남기는 시스템입니다.
+          </p>
+          <div class="hero-actions">
+            <a class="button primary" href="#run">바로 실행 방법 보기</a>
+            <a class="button secondary" href="#score">점수 구조 이해하기</a>
+          </div>
+        </div>
+      </section>
+
+      <section class="summary-band" aria-label="시스템 핵심 요약">
+        <div class="summary-grid">
+          <article>
+            <strong>입력</strong>
+            <span>관심 종목 티커 목록</span>
+          </article>
+          <article>
+            <strong>분석</strong>
+            <span>가격 기반 지표와 리스크 점수</span>
+          </article>
+          <article>
+            <strong>출력</strong>
+            <span>candidate, watch, avoid 판정</span>
+          </article>
+          <article>
+            <strong>검증</strong>
+            <span>21거래일 보유 워크포워드 백테스트</span>
+          </article>
+        </div>
+      </section>
+
+      <section class="section two-column" id="why">
+        <div>
+          <p class="eyebrow">목적</p>
+          <h2>이 시스템이 하는 일</h2>
+        </div>
+        <div class="prose">
+          <p>
+            목표는 “지금 사서 약 1개월 뒤 팔 만한 종목”을 자동으로 단정하는 것이 아니라,
+            매수 후보를 좁히는 반복 가능한 절차를 만드는 것입니다. 매번 같은 기준으로 종목을
+            훑고, 왜 후보가 되었는지 숫자로 남기고, 과거에는 그 기준이 어땠는지 확인합니다.
+          </p>
+          <p>
+            현재 MVP는 Yahoo Finance 가격 데이터를 사용합니다. 한국 종목은 예를 들어
+            <code>005930.KS</code>, <code>000660.KS</code>처럼 시장 접미사를 붙여 분석합니다.
+          </p>
+        </div>
+      </section>
+
+      <section class="section" id="workflow">
+        <div class="section-heading">
+          <p class="eyebrow">Workflow</p>
+          <h2>데이터가 후보 리포트가 되는 과정</h2>
+        </div>
+        <div class="flow">
+          <article class="flow-step">
+            <span>01</span>
+            <h3>관심 종목 준비</h3>
+            <p><code>config/watchlist.csv</code>에 티커와 종목명을 적습니다.</p>
+          </article>
+          <article class="flow-step">
+            <span>02</span>
+            <h3>가격 데이터 수집</h3>
+            <p>최근 18개월 가격, 거래량 데이터를 내려받아 지표 계산에 사용합니다.</p>
+          </article>
+          <article class="flow-step">
+            <span>03</span>
+            <h3>지표 계산</h3>
+            <p>1개월 수익률, 3개월 수익률, 변동성, 최대 낙폭, RSI, 거래대금을 계산합니다.</p>
+          </article>
+          <article class="flow-step">
+            <span>04</span>
+            <h3>점수와 판정</h3>
+            <p>0~100점으로 환산한 뒤 <code>candidate</code>, <code>watch</code>, <code>avoid</code>로 분류합니다.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="section split-panel" id="score">
+        <div class="section-heading">
+          <p class="eyebrow">Scoring</p>
+          <h2>점수는 이렇게 만들어집니다</h2>
+          <p>
+            현재 버전은 가격 기반 규칙 모델입니다. 머신러닝 예측값이 아니라, 사람이 이해하고
+            조정할 수 있는 필터 점수에 가깝습니다.
+          </p>
+        </div>
+        <div class="score-layout">
+          <div class="score-card">
+            <div class="score-ring" aria-label="예시 점수 70점 이상 후보">
+              <span>70+</span>
+            </div>
+            <p><strong>candidate</strong>는 모멘텀과 리스크 조건이 모두 비교적 양호한 구간입니다.</p>
+          </div>
+          <div class="weights" aria-label="점수 가중치">
+            <div class="weight-row">
+              <span>모멘텀</span>
+              <meter min="0" max="100" value="45"></meter>
+              <b>45%</b>
+            </div>
+            <div class="weight-row">
+              <span>리스크</span>
+              <meter min="0" max="100" value="30"></meter>
+              <b>30%</b>
+            </div>
+            <div class="weight-row">
+              <span>유동성</span>
+              <meter min="0" max="100" value="15"></meter>
+              <b>15%</b>
+            </div>
+            <div class="weight-row">
+              <span>RSI 균형</span>
+              <meter min="0" max="100" value="10"></meter>
+              <b>10%</b>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" id="columns">
+        <div class="section-heading">
+          <p class="eyebrow">Report</p>
+          <h2>CSV 결과에서 볼 핵심 컬럼</h2>
+        </div>
+        <div class="table-wrap" role="region" aria-label="리포트 컬럼 설명" tabindex="0">
+          <table>
+            <thead>
+              <tr>
+                <th>컬럼</th>
+                <th>의미</th>
+                <th>읽는 방법</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>score</code></td>
+                <td>0~100 종합 점수</td>
+                <td>70 이상은 후보, 55 이상은 관찰, 그 미만은 보류로 봅니다.</td>
+              </tr>
+              <tr>
+                <td><code>ret_21d</code></td>
+                <td>최근 약 1개월 수익률</td>
+                <td>단기 모멘텀이 살아 있는지 확인합니다.</td>
+              </tr>
+              <tr>
+                <td><code>vol_21d</code></td>
+                <td>최근 1개월 연율화 변동성</td>
+                <td>너무 높으면 1개월 보유 중 흔들림이 커질 수 있습니다.</td>
+              </tr>
+              <tr>
+                <td><code>max_drawdown_63d</code></td>
+                <td>최근 3개월 최대 낙폭</td>
+                <td>상승 중이어도 큰 낙폭이 있었는지 봅니다.</td>
+              </tr>
+              <tr>
+                <td><code>rsi_14</code></td>
+                <td>14일 RSI</td>
+                <td>과열 또는 침체 구간에 치우쳤는지 확인합니다.</td>
+              </tr>
+              <tr>
+                <td><code>traded_value_21d</code></td>
+                <td>최근 평균 거래대금</td>
+                <td>실제 매수·매도 가능성과 슬리피지를 가늠합니다.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="section command-section" id="run">
+        <div class="section-heading">
+          <p class="eyebrow">Run</p>
+          <h2>실행 방법</h2>
+        </div>
+        <div class="command-grid">
+          <article>
+            <h3>1. 종목 목록 수정</h3>
+            <pre><code>symbol,name
+AAPL,Apple
+005930.KS,Samsung Electronics
+000660.KS,SK Hynix</code></pre>
+          </article>
+          <article>
+            <h3>2. 후보 리포트 생성</h3>
+            <pre><code>.\.venv\Scripts\python.exe -m stock_finder.cli candidates `
+  --watchlist config/watchlist.csv `
+  --out reports/candidates.csv</code></pre>
+          </article>
+          <article>
+            <h3>3. 백테스트 실행</h3>
+            <pre><code>.\.venv\Scripts\python.exe -m stock_finder.cli backtest `
+  --watchlist config/watchlist.csv `
+  --out reports/backtest.csv</code></pre>
+          </article>
+        </div>
+      </section>
+
+      <section class="section two-column" id="interpret">
+        <div>
+          <p class="eyebrow">Decision</p>
+          <h2>결과를 판단할 때의 순서</h2>
+        </div>
+        <ol class="decision-list">
+          <li><strong>candidate만 바로 매수하지 않습니다.</strong> 먼저 백테스트에서 비슷한 점수대의 21일 후 수익률 분포를 봅니다.</li>
+          <li><strong>손절과 익절 기준을 먼저 정합니다.</strong> 1개월 전략은 보유 기간이 짧아 리스크 규칙이 없으면 결과가 흔들립니다.</li>
+          <li><strong>뉴스와 공시를 확인합니다.</strong> 가격 데이터만으로는 실적 발표, 규제, 증자, 인수합병 같은 이벤트를 설명하지 못합니다.</li>
+          <li><strong>유동성을 확인합니다.</strong> 거래대금이 작은 종목은 리포트상 점수가 좋아도 실제 체결 비용이 커질 수 있습니다.</li>
+        </ol>
+      </section>
+
+      <section class="section caution">
+        <div>
+          <p class="eyebrow">Limits</p>
+          <h2>현재 버전의 한계와 다음 단계</h2>
+        </div>
+        <div class="limit-grid">
+          <article>
+            <h3>가격 데이터 중심</h3>
+            <p>재무제표, 실적 전망, 기관 수급, 공매도, 뉴스 감성은 아직 반영하지 않습니다.</p>
+          </article>
+          <article>
+            <h3>수수료와 세금 미반영</h3>
+            <p>백테스트 결과에는 거래비용이 빠져 있으므로 실제 성과보다 좋게 보일 수 있습니다.</p>
+          </article>
+          <article>
+            <h3>시장 국면 미분리</h3>
+            <p>상승장, 하락장, 횡보장에 따라 좋은 기준이 달라질 수 있습니다.</p>
+          </article>
+          <article>
+            <h3>개선 방향</h3>
+            <p>업종 상대강도, 실적 캘린더, 손절 규칙, 포트폴리오 비중 제한을 추가하면 실전성이 올라갑니다.</p>
+          </article>
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <p>이 사이트와 도구는 투자 조언이 아닌 리서치 자동화 예시입니다.</p>
+      <a href="#top">위로 이동</a>
+    </footer>
+
+    <script src="script.js"></script>
+  </body>
+</html>
