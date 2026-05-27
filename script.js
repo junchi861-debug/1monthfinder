@@ -1,7 +1,8 @@
 const state = {
   report: null,
   asset: "kr",
-  period: "1m",
+  period: "1d",
+  algorithm: null,
   view: "overview",
 };
 
@@ -49,10 +50,20 @@ async function init() {
 
   document.querySelector("#searchInput")?.addEventListener("input", renderRawRows);
   document.querySelector("#actionFilter")?.addEventListener("change", renderRawRows);
+  document.querySelector("#periodSelect")?.addEventListener("change", (event) => {
+    state.period = event.target.value;
+    state.algorithm = null;
+    renderDashboard();
+  });
+  document.querySelector("#algorithmSelect")?.addEventListener("change", (event) => {
+    state.algorithm = event.target.value;
+    renderDashboard();
+  });
 
   document.querySelectorAll("[data-asset]").forEach((button) => {
     button.addEventListener("click", () => {
       state.asset = button.dataset.asset;
+      state.algorithm = null;
       renderDashboard();
     });
   });
@@ -60,6 +71,7 @@ async function init() {
   document.querySelectorAll("[data-period]").forEach((button) => {
     button.addEventListener("click", () => {
       state.period = button.dataset.period;
+      state.algorithm = null;
       renderDashboard();
     });
   });
@@ -90,9 +102,33 @@ function currentAsset() {
   return state.report[state.asset];
 }
 
-function currentPeriod() {
+function currentPeriodBase() {
   const asset = currentAsset();
   return asset?.periods?.[state.period] || null;
+}
+
+function currentPeriod() {
+  const base = currentPeriodBase();
+  if (!base) return null;
+  const algorithm = activeAlgorithm(base);
+  const variant = base.algorithms?.[algorithm];
+  if (!variant) return base;
+  return {
+    ...base,
+    ...variant,
+    label: base.label,
+    description: base.description,
+    algorithm,
+    default_algorithm: base.default_algorithm,
+    algorithm_options: base.algorithm_options,
+    algorithms: base.algorithms,
+  };
+}
+
+function activeAlgorithm(periodBase = currentPeriodBase()) {
+  if (!periodBase?.algorithms) return state.algorithm;
+  if (state.algorithm && periodBase.algorithms[state.algorithm]) return state.algorithm;
+  return periodBase.default_algorithm || Object.keys(periodBase.algorithms)[0];
 }
 
 function viewFromHash() {
@@ -144,8 +180,10 @@ function renderDashboard() {
   setActiveView(state.view, false);
 
   const asset = currentAsset();
-  const period = currentPeriod();
   const assetInfo = state.report.asset_classes[state.asset];
+  const periodBase = currentPeriodBase();
+  updateAlgorithmSelect(periodBase);
+  const period = currentPeriod();
 
   if (!period) {
     renderPlannedAsset(assetInfo, asset);
@@ -156,18 +194,27 @@ function renderDashboard() {
   const metrics = period.backtest.metrics;
   const candidates = period.final_candidates || [];
   const displayRows = candidates.length ? candidates : period.watch || [];
+  const algorithmLabel = period.algorithm_label || state.report.algorithms?.[period.algorithm]?.label || "기본";
 
   document.querySelector("#heroStatus").innerHTML = `
-    <span class="status-label">${assetInfo.label} · ${period.label}</span>
+    <span class="status-label">${assetInfo.label} · ${period.label} · ${algorithmLabel}</span>
     <strong>${summary.total_count.toLocaleString("ko-KR")}개 모데이터</strong>
     <span>가격 이력 ${summary.history_ready_count.toLocaleString("ko-KR")}개, 최종 후보 ${candidates.length}개</span>
   `;
+  document.querySelector("#decisionPeriod").textContent = `${assetInfo.label} · ${period.label} · ${algorithmLabel}`;
+  document.querySelector("#decisionTitle").textContent =
+    candidates.length ? `${candidates.length}개 후보를 우선 확인` : "최종 후보 없음";
+  document.querySelector("#decisionCopy").textContent =
+    candidates.length
+      ? "아래 3개 카드에서 핵심 후보를 먼저 보고, 탭에서 검증과 원자료를 이어서 확인하세요."
+      : "후보 기준을 통과한 종목이 없어서 관찰 대상과 검증 지표를 함께 표시합니다.";
   document.querySelector("#candidateCount").textContent = candidates.length;
   document.querySelector("#watchCount").textContent = formatPct(metrics.win_rate);
   document.querySelector("#universeCount").textContent = summary.total_count.toLocaleString("ko-KR");
   document.querySelector("#asOfDate").textContent = state.report.generated_at.slice(0, 10);
 
   renderFinalCallout(period, candidates);
+  renderCandidateCards(displayRows, candidates.length);
   renderFinalRows(displayRows);
   renderFunnel(period);
   renderRawRows();
@@ -185,9 +232,14 @@ function renderPlannedAsset(assetInfo, asset) {
   document.querySelector("#watchCount").textContent = "-";
   document.querySelector("#universeCount").textContent = "-";
   document.querySelector("#asOfDate").textContent = "-";
+  document.querySelector("#decisionPeriod").textContent = assetInfo.label;
+  document.querySelector("#decisionTitle").textContent = "데이터 모듈 준비 중";
+  document.querySelector("#decisionCopy").textContent = asset.summary;
   document.querySelector("#finalCallout").className = "final-callout empty";
   document.querySelector("#finalCallout").innerHTML =
     `<strong>${assetInfo.label}은 세분화 구조만 먼저 열어두었습니다.</strong><span>${asset.summary}</span>`;
+  document.querySelector("#topCandidateCards").innerHTML =
+    `<article class="candidate-card empty">아직 연결된 후보 데이터가 없습니다.</article>`;
   document.querySelector("#finalRows").innerHTML = `<tr><td colspan="8">아직 연결된 데이터가 없습니다.</td></tr>`;
   document.querySelector("#funnelGrid").innerHTML = "";
   document.querySelector("#rawRows").innerHTML = `<tr><td colspan="11">아직 연결된 데이터가 없습니다.</td></tr>`;
@@ -201,15 +253,42 @@ function updateSwitches() {
   document.querySelectorAll("[data-period]").forEach((button) => {
     button.classList.toggle("active", button.dataset.period === state.period);
   });
+  const periodSelect = document.querySelector("#periodSelect");
+  if (periodSelect) periodSelect.value = state.period;
+}
+
+function updateAlgorithmSelect(periodBase) {
+  const select = document.querySelector("#algorithmSelect");
+  const description = document.querySelector("#algorithmDescription");
+  if (!select || !description) return;
+
+  const options = periodBase?.algorithm_options || [];
+  if (!options.length) {
+    select.innerHTML = `<option>준비 중</option>`;
+    select.disabled = true;
+    description.textContent = "이 자산군은 아직 알고리즘 데이터가 연결되지 않았습니다.";
+    return;
+  }
+
+  const selected = activeAlgorithm(periodBase);
+  state.algorithm = selected;
+  select.disabled = false;
+  select.innerHTML = options
+    .map((option) => `<option value="${option.key}">${option.label}</option>`)
+    .join("");
+  select.value = selected;
+  const option = options.find((item) => item.key === selected);
+  description.textContent = option?.description || "선택한 알고리즘 기준으로 후보를 다시 정렬합니다.";
 }
 
 function renderFinalCallout(period, candidates) {
   const callout = document.querySelector("#finalCallout");
   const validation = period.backtest.validation;
+  const algorithmLabel = period.algorithm_label || "기본 알고리즘";
   if (!candidates.length) {
     callout.className = "final-callout empty";
     callout.innerHTML = `
-      <strong>${period.label} 기준 최종 후보는 없습니다.</strong>
+      <strong>${period.label} · ${algorithmLabel} 기준 최종 후보는 없습니다.</strong>
       <span>관찰 대상과 검증 지표를 확인하세요. 검증 상태: ${validation.reasons.join(", ")}</span>
     `;
     return;
@@ -218,9 +297,34 @@ function renderFinalCallout(period, candidates) {
   const names = candidates.slice(0, 3).map((row) => `${row.symbol} ${row.name || ""}`.trim()).join(", ");
   callout.className = "final-callout";
   callout.innerHTML = `
-    <strong>${period.label} 최종 후보: ${names}</strong>
+    <strong>${period.label} · ${algorithmLabel} 최종 후보: ${names}</strong>
     <span>과거 동일 규칙 검증: ${validation.passed ? "통과" : validation.reasons.join(", ")}</span>
   `;
+}
+
+function renderCandidateCards(rows, candidateCount) {
+  const wrap = document.querySelector("#topCandidateCards");
+  const topRows = rows.slice(0, 3);
+  if (!topRows.length) {
+    wrap.innerHTML = `<article class="candidate-card empty">표시할 후보 또는 관찰 종목이 없습니다.</article>`;
+    return;
+  }
+
+  wrap.innerHTML = topRows.map((row, index) => `
+    <article class="candidate-card ${row.final_action || ""}">
+      <div class="candidate-card-top">
+        <span>${candidateCount ? "후보" : "관찰"} ${index + 1}</span>
+        ${badge(row.final_action)}
+      </div>
+      <strong>${row.name || row.symbol}</strong>
+      <p>${row.symbol} · 점수 ${formatScore(row.score)}</p>
+      <dl>
+        <div><dt>1일</dt><dd>${formatPct(row.ret_1d)}</dd></div>
+        <div><dt>1주</dt><dd>${formatPct(row.ret_5d)}</dd></div>
+        <div><dt>거래대금</dt><dd>${formatNum(row.amount_surge, 2)}x</dd></div>
+      </dl>
+    </article>
+  `).join("");
 }
 
 function renderFinalRows(rows) {

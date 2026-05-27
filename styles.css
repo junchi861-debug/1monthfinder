@@ -112,7 +112,7 @@ code {
 .hero {
   position: relative;
   display: grid;
-  min-height: 92vh;
+  min-height: 58vh;
   overflow: hidden;
   color: var(--white);
 }
@@ -126,7 +126,7 @@ code {
 .hero-image {
   width: 100%;
   height: 100%;
-  min-height: 92vh;
+  min-height: 58vh;
   object-fit: cover;
 }
 
@@ -259,6 +259,7 @@ h3 {
 }
 
 .workspace {
+  padding-top: clamp(2.5rem, 5vw, 4.5rem);
   padding-bottom: clamp(4.5rem, 8vw, 7rem);
 }
 
@@ -284,6 +285,68 @@ h3 {
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--white);
+}
+
+.top-options {
+  position: sticky;
+  top: 4.1rem;
+  z-index: 12;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(118px, 160px);
+  gap: 0.7rem;
+  align-items: stretch;
+  margin: 1.1rem 0 0.7rem;
+  padding: 0.45rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow: 0 10px 24px rgba(21, 31, 44, 0.08);
+  backdrop-filter: blur(14px);
+}
+
+.asset-tabs {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.35rem;
+}
+
+.selector-field {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.selector-field span {
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 900;
+}
+
+.period-field {
+  min-width: 0;
+}
+
+.period-field select,
+.algorithm-field select {
+  min-height: 2.65rem;
+  padding-right: 2rem;
+  font-weight: 900;
+}
+
+.algorithm-row {
+  display: grid;
+  grid-template-columns: minmax(180px, 260px) minmax(0, 1fr);
+  gap: 0.85rem;
+  align-items: end;
+  margin-bottom: 0.85rem;
+}
+
+.algorithm-row p {
+  margin-bottom: 0;
+  padding: 0.8rem 0.95rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--white);
+  color: var(--muted);
 }
 
 .period-switcher {
@@ -369,6 +432,148 @@ h3 {
 .summary-notes p {
   margin-bottom: 0;
   color: var(--muted);
+}
+
+.result-board {
+  display: grid;
+  grid-template-columns: minmax(0, 0.85fr) minmax(280px, 1fr);
+  gap: 1rem;
+  align-items: stretch;
+  margin-bottom: 1rem;
+}
+
+.result-headline,
+.compact-stats,
+.candidate-card {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--white);
+  box-shadow: 0 10px 30px rgba(21, 31, 44, 0.06);
+}
+
+.result-headline {
+  display: grid;
+  gap: 0.45rem;
+  align-content: center;
+  padding: 1.15rem;
+  border-left: 6px solid var(--teal);
+}
+
+.result-headline span {
+  color: var(--amber);
+  font-size: 0.82rem;
+  font-weight: 900;
+}
+
+.result-headline strong {
+  font-size: clamp(1.45rem, 3vw, 2.35rem);
+  line-height: 1.1;
+}
+
+.result-headline p {
+  margin-bottom: 0;
+  color: var(--muted);
+}
+
+.compact-stats {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0;
+  overflow: hidden;
+}
+
+.compact-stats article {
+  min-height: 86px;
+  padding: 0.85rem;
+  border-right: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+
+.compact-stats article:nth-child(2n) {
+  border-right: 0;
+}
+
+.compact-stats article:nth-last-child(-n + 2) {
+  border-bottom: 0;
+}
+
+.compact-stats span {
+  display: block;
+  color: var(--muted);
+  font-size: 0.84rem;
+}
+
+.compact-stats strong {
+  display: block;
+  margin-top: 0.2rem;
+  font-size: clamp(1.25rem, 4vw, 2rem);
+  line-height: 1;
+}
+
+.candidate-cards {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.8rem;
+}
+
+.candidate-card {
+  display: grid;
+  gap: 0.45rem;
+  min-height: 142px;
+  padding: 0.95rem;
+}
+
+.candidate-card.candidate {
+  border-top: 4px solid var(--green);
+}
+
+.candidate-card.watch {
+  border-top: 4px solid var(--amber);
+}
+
+.candidate-card.empty {
+  grid-column: 1 / -1;
+  min-height: 90px;
+  align-content: center;
+  color: var(--muted);
+}
+
+.candidate-card-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.candidate-card-top > span {
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 900;
+}
+
+.candidate-card strong {
+  font-size: 1.08rem;
+  line-height: 1.2;
+}
+
+.candidate-card p {
+  margin-bottom: 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.candidate-card dl {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.4rem;
+  margin: 0;
+}
+
+.candidate-card dl div {
+  padding: 0.45rem;
+  border-radius: 6px;
+  background: #f2f6f8;
 }
 
 .section-heading {
@@ -754,8 +959,13 @@ canvas {
   .funnel-grid,
   .chart-grid,
   .method-grid,
-  .summary-notes {
+  .summary-notes,
+  .candidate-cards {
     grid-template-columns: repeat(2, 1fr);
+  }
+
+  .result-board {
+    grid-template-columns: 1fr;
   }
 
   .view-tabs {
@@ -765,32 +975,25 @@ canvas {
 
 @media (max-width: 680px) {
   .topbar {
-    position: absolute;
+    position: fixed;
   }
 
   .nav-links {
     display: none;
   }
 
-  .hero,
-  .hero-image {
-    min-height: 850px;
-  }
-
-  .hero-overlay {
-    background:
-      linear-gradient(180deg, rgba(10, 16, 23, 0.9) 0%, rgba(10, 16, 23, 0.78) 54%, rgba(10, 16, 23, 0.96) 100%),
-      linear-gradient(90deg, rgba(10, 16, 23, 0.7), rgba(10, 16, 23, 0.18));
-  }
-
-  .hero-content {
-    align-self: end;
-    margin: 0 auto;
-    padding: 6.5rem 1rem 4.5rem;
+  .hero {
+    display: none;
   }
 
   h1 {
-    font-size: 2.2rem;
+    font-size: 1.45rem;
+  }
+
+  .hero-copy,
+  .hero-actions,
+  .hero-status {
+    display: none;
   }
 
   .hero-actions,
@@ -800,6 +1003,9 @@ canvas {
   .method-grid,
   .summary-notes,
   .workspace-heading,
+  .algorithm-row,
+  .result-board,
+  .candidate-cards,
   .controls,
   .switcher,
   .period-switcher,
@@ -807,9 +1013,57 @@ canvas {
     grid-template-columns: 1fr;
   }
 
+  .workspace {
+    padding-top: 5rem;
+  }
+
+  .workspace-heading {
+    margin-bottom: 0.65rem;
+  }
+
+  .workspace-heading h2 {
+    font-size: 1.45rem;
+    margin-bottom: 0;
+  }
+
+  .workspace-heading p:not(.eyebrow) {
+    display: none;
+  }
+
+  .workspace-heading .eyebrow,
+  .download-link {
+    display: none;
+  }
+
+  .top-options {
+    top: 0.6rem;
+    grid-template-columns: minmax(0, 1fr) 96px;
+    gap: 0.45rem;
+    margin: 0.45rem 0 0.45rem;
+    padding: 0.35rem;
+  }
+
+  .period-field span {
+    display: none;
+  }
+
+  .asset-tabs {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .switch-button {
+    min-height: 2.35rem;
+    font-size: 0.9rem;
+  }
+
+  .algorithm-row p {
+    display: none;
+  }
+
   .view-tabs {
     display: flex;
     gap: 0.5rem;
+    margin: 0.55rem 0 0.65rem;
     overflow-x: auto;
     padding-bottom: 0.6rem;
     scroll-snap-type: x proximity;
@@ -817,8 +1071,78 @@ canvas {
 
   .view-tab {
     flex: 0 0 auto;
-    min-width: 7.25rem;
+    min-width: 6.25rem;
+    min-height: 2.65rem;
     scroll-snap-align: start;
+  }
+
+  .view-panel {
+    padding-top: 0.3rem;
+  }
+
+  .view-panel[data-panel="overview"] .section-heading {
+    display: none;
+  }
+
+  .section-heading {
+    margin-bottom: 0.85rem;
+  }
+
+  .section-heading h2 {
+    font-size: 1.35rem;
+  }
+
+  .result-headline {
+    gap: 0.25rem;
+    padding: 0.75rem;
+  }
+
+  .result-headline strong {
+    font-size: 1.18rem;
+  }
+
+  .result-headline p {
+    font-size: 0.88rem;
+  }
+
+  .compact-stats article {
+    min-height: 58px;
+    padding: 0.55rem;
+  }
+
+  .compact-stats strong {
+    font-size: 1.15rem;
+  }
+
+  .candidate-card {
+    flex: 0 0 228px;
+    min-height: auto;
+    padding: 0.65rem;
+  }
+
+  .candidate-card dl div {
+    padding: 0.34rem;
+  }
+
+  .candidate-card dt,
+  .candidate-card dd {
+    font-size: 0.78rem;
+  }
+
+  .candidate-cards {
+    display: flex;
+    gap: 0.65rem;
+    overflow-x: auto;
+    padding-bottom: 0.15rem;
+    scroll-snap-type: x proximity;
+  }
+
+  .candidate-card {
+    scroll-snap-align: start;
+  }
+
+  .candidate-card dl {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
   .button,
