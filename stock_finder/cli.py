@@ -7,6 +7,7 @@ import pandas as pd
 
 from stock_finder.backtest import walk_forward_scores
 from stock_finder.data import fetch_history, load_watchlist
+from stock_finder.daily_report import build_daily_site_data
 from stock_finder.scoring import score_history
 
 
@@ -58,6 +59,20 @@ def build_backtest(args: argparse.Namespace) -> None:
     print(f"saved {len(result)} rows to {args.out}")
 
 
+def build_daily(args: argparse.Namespace) -> None:
+    report = build_daily_site_data(
+        watchlist_path=args.watchlist,
+        out_dir=args.out_dir,
+        period=args.period,
+    )
+    summary = report.latest["summary"]
+    print(
+        "saved daily site data to "
+        f"{args.out_dir} "
+        f"(candidates={summary['candidate_count']}, watch={summary['watch_count']})"
+    )
+
+
 def make_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Find one-month stock trade candidates.")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -76,6 +91,12 @@ def make_parser() -> argparse.ArgumentParser:
     backtest.add_argument("--step-days", type=int, default=21)
     backtest.add_argument("--out", default="reports/backtest.csv")
     backtest.set_defaults(func=build_backtest)
+
+    daily = subparsers.add_parser("daily", help="build nightly GitHub Pages data files")
+    daily.add_argument("--watchlist", default="config/watchlist.csv")
+    daily.add_argument("--period", default="18mo")
+    daily.add_argument("--out-dir", default="site/data")
+    daily.set_defaults(func=build_daily)
 
     return parser
 

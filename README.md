@@ -64,6 +64,18 @@ python -m stock_finder.cli backtest --watchlist config/watchlist.csv --out repor
 
 설명 웹사이트는 `site/` 폴더에 있습니다.
 
-로컬에서는 `site/index.html`을 브라우저로 열면 됩니다. GitHub에 push하면 `.github/workflows/pages.yml` 워크플로가 `site/` 폴더를 GitHub Pages로 배포합니다.
+웹사이트는 `site/data/latest.json`, `site/data/history.json`, `site/data/prices.json`을 읽어 오늘의 최종 후보, 원자료, 후보군 축소 과정, 최근 1년치 점수/가격 이력을 보여줍니다.
+
+데이터 파일은 다음 명령으로 만들 수 있습니다.
+
+```powershell
+.\.venv\Scripts\python.exe -m stock_finder.cli daily --watchlist config/watchlist.csv --out-dir site/data
+```
+
+GitHub Pages 배포는 `.github/workflows/pages.yml`이 담당합니다. 이 워크플로는 다음 경우 실행됩니다.
+
+- `main` 브랜치에 push
+- 매일 23:30 KST
+- GitHub Actions에서 수동 실행
 
 GitHub 저장소에서 Pages를 처음 켤 때는 **Settings > Pages > Build and deployment > Source**를 **GitHub Actions**로 설정하세요.
