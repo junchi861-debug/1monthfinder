@@ -2,11 +2,14 @@ const state = {
   report: null,
   asset: "kr",
   period: "1m",
+  view: "overview",
 };
 
+const validViews = new Set(["overview", "candidates", "funnel", "validation", "raw", "method"]);
 const topbar = document.querySelector(".topbar");
 const formatPct = (value) => (value == null ? "-" : `${(Number(value) * 100).toFixed(1)}%`);
-const formatNum = (value, digits = 2) => (value == null ? "-" : Number(value).toLocaleString("ko-KR", { maximumFractionDigits: digits }));
+const formatNum = (value, digits = 2) =>
+  value == null ? "-" : Number(value).toLocaleString("ko-KR", { maximumFractionDigits: digits });
 const formatScore = (value) => (value == null ? "-" : Number(value).toFixed(2));
 
 function updateTopbar() {
@@ -20,6 +23,7 @@ function actionLabel(action) {
     watch: "관찰",
     avoid: "제외",
     error: "오류",
+    unscored: "미분석",
   }[action] || "-";
 }
 
@@ -35,20 +39,40 @@ async function loadJson(path) {
 
 async function init() {
   window.addEventListener("scroll", updateTopbar, { passive: true });
+  window.addEventListener("hashchange", () => {
+    const hashView = viewFromHash();
+    if (hashView) setActiveView(hashView, true);
+  });
   updateTopbar();
+
+  state.view = viewFromHash() || state.view;
 
   document.querySelector("#searchInput")?.addEventListener("input", renderRawRows);
   document.querySelector("#actionFilter")?.addEventListener("change", renderRawRows);
+
   document.querySelectorAll("[data-asset]").forEach((button) => {
     button.addEventListener("click", () => {
       state.asset = button.dataset.asset;
       renderDashboard();
     });
   });
+
   document.querySelectorAll("[data-period]").forEach((button) => {
     button.addEventListener("click", () => {
       state.period = button.dataset.period;
       renderDashboard();
+    });
+  });
+
+  document.querySelectorAll("[data-view]").forEach((button) => {
+    button.addEventListener("click", () => setActiveView(button.dataset.view, true, true));
+  });
+
+  document.querySelectorAll("[data-view-link]").forEach((link) => {
+    link.addEventListener("click", (event) => {
+      event.preventDefault();
+      setActiveView(link.dataset.viewLink, false, true);
+      document.querySelector("#workspace")?.scrollIntoView({ behavior: "smooth", block: "start" });
     });
   });
 
@@ -71,16 +95,54 @@ function currentPeriod() {
   return asset?.periods?.[state.period] || null;
 }
 
+function viewFromHash() {
+  const key = window.location.hash.replace("#", "");
+  return validViews.has(key) ? key : null;
+}
+
+function setActiveView(view, scrollToTabs = false, updateHash = false) {
+  if (!validViews.has(view)) view = "overview";
+  state.view = view;
+  document.querySelectorAll("[data-view]").forEach((button) => {
+    button.classList.toggle("active", button.dataset.view === view);
+  });
+  document.querySelectorAll("[data-view-link]").forEach((link) => {
+    link.classList.toggle("active", link.dataset.viewLink === view);
+  });
+  document.querySelectorAll("[data-panel]").forEach((panel) => {
+    const active = panel.dataset.panel === view;
+    panel.classList.toggle("active", active);
+    panel.hidden = !active;
+  });
+
+  if (updateHash && window.location.hash !== `#${view}`) {
+    window.history.replaceState(null, "", `#${view}`);
+  }
+
+  if (view === "validation") {
+    const period = currentPeriod();
+    if (period) window.requestAnimationFrame(() => renderBacktest(period));
+  }
+
+  if (scrollToTabs) {
+    document.querySelector(".view-tabs")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+}
+
 function renderOffline(error) {
   const message = "시장 리포트가 아직 없습니다. GitHub Actions가 한 번 실행되면 자동으로 표시됩니다.";
-  document.querySelector("#heroStatus").innerHTML = `<span class="status-label">대기</span><strong>데이터 준비 전</strong><span>${message}</span>`;
-  document.querySelector("#finalCallout").innerHTML = `<strong>데이터 파일을 불러오지 못했습니다.</strong><span>${error.message}</span>`;
+  document.querySelector("#heroStatus").innerHTML =
+    `<span class="status-label">대기</span><strong>데이터 준비 전</strong><span>${message}</span>`;
+  document.querySelector("#finalCallout").innerHTML =
+    `<strong>데이터 파일을 불러오지 못했습니다.</strong><span>${error.message}</span>`;
   document.querySelector("#finalRows").innerHTML = `<tr><td colspan="8">${message}</td></tr>`;
   document.querySelector("#rawRows").innerHTML = `<tr><td colspan="11">${message}</td></tr>`;
 }
 
 function renderDashboard() {
   updateSwitches();
+  setActiveView(state.view, false);
+
   const asset = currentAsset();
   const period = currentPeriod();
   const assetInfo = state.report.asset_classes[state.asset];
@@ -124,7 +186,8 @@ function renderPlannedAsset(assetInfo, asset) {
   document.querySelector("#universeCount").textContent = "-";
   document.querySelector("#asOfDate").textContent = "-";
   document.querySelector("#finalCallout").className = "final-callout empty";
-  document.querySelector("#finalCallout").innerHTML = `<strong>${assetInfo.label}은 세분화 구조만 먼저 열어두었습니다.</strong><span>${asset.summary}</span>`;
+  document.querySelector("#finalCallout").innerHTML =
+    `<strong>${assetInfo.label}은 세분화 구조만 먼저 열어두었습니다.</strong><span>${asset.summary}</span>`;
   document.querySelector("#finalRows").innerHTML = `<tr><td colspan="8">아직 연결된 데이터가 없습니다.</td></tr>`;
   document.querySelector("#funnelGrid").innerHTML = "";
   document.querySelector("#rawRows").innerHTML = `<tr><td colspan="11">아직 연결된 데이터가 없습니다.</td></tr>`;
@@ -227,11 +290,12 @@ function renderRawRows() {
 
   body.innerHTML = rows.map((row) => {
     const scored = analyzed.get(row.symbol);
+    const finalAction = scored?.final_action || "unscored";
     return `
       <tr>
         <td><strong>${row.symbol}</strong></td>
         <td>${row.name || "-"}</td>
-        <td>${scored ? badge(scored.final_action) : "<span class=\"badge avoid\">미분석</span>"}</td>
+        <td>${badge(finalAction)}</td>
         <td>${formatScore(scored?.score)}</td>
         <td>${formatNum(row.close, 0)}</td>
         <td>${formatPct(scored?.ret_21d ?? row.change_pct)}</td>
@@ -251,7 +315,8 @@ function renderBacktest(period) {
   document.querySelector("#winRate").textContent = formatPct(metrics.win_rate);
   document.querySelector("#avgReturn").textContent = formatPct(metrics.average_return);
   document.querySelector("#maxDrawdown").textContent = formatPct(metrics.max_drawdown);
-  document.querySelector("#validationStatus").textContent = period.backtest.validation.passed ? "검증 기준 통과" : period.backtest.validation.reasons.join(", ");
+  document.querySelector("#validationStatus").textContent =
+    period.backtest.validation.passed ? "검증 기준 통과" : period.backtest.validation.reasons.join(", ");
   drawLineChart(document.querySelector("#historyChart"), period.backtest.equity_curve || [], "equity", "#008c8c");
   renderTradeCases("#bestTrades", period.backtest.best_trades || []);
   renderTradeCases("#worstTrades", period.backtest.worst_trades || []);
@@ -299,7 +364,7 @@ function setupCanvas(canvas) {
 function drawLineChart(canvas, points, key, color) {
   const { context, width, height } = setupCanvas(canvas);
   context.clearRect(0, 0, width, height);
-  if (!points.length) {
+  if (!points.length || width <= 1) {
     drawEmpty(context, width, height, "검증 자료가 없습니다.");
     return;
   }
@@ -333,7 +398,7 @@ function drawEmpty(context, width, height, message) {
   context.fillStyle = "#5b6776";
   context.font = "14px Segoe UI, sans-serif";
   context.textAlign = "center";
-  context.fillText(message, width / 2, height / 2);
+  context.fillText(message, Math.max(width / 2, 120), height / 2);
 }
 
 function drawChartLabel(context, x, y, label) {
@@ -344,7 +409,7 @@ function drawChartLabel(context, x, y, label) {
 
 window.addEventListener("resize", () => {
   const period = currentPeriod();
-  if (period) renderBacktest(period);
+  if (period && state.view === "validation") renderBacktest(period);
 });
 
 init();

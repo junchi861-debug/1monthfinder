@@ -6,7 +6,7 @@
     <title>1MonthFinder | 매일 밤 주식 후보 대시보드</title>
     <meta
       name="description"
-      content="매일 밤 가격 데이터를 기준으로 1개월 보유 주식 후보를 자동 선별하고, 원자료부터 최종 후보까지 웹에서 보여주는 대시보드"
+      content="국내 주식 모데이터, 기간별 후보, 백테스트 검증, 원자료를 탭으로 확인하는 1MonthFinder 대시보드"
     />
     <link rel="stylesheet" href="styles.css" />
   </head>
@@ -16,11 +16,11 @@
         <span class="brand-mark" aria-hidden="true">1M</span>
         <span>1MonthFinder</span>
       </a>
-      <nav class="nav-links" aria-label="페이지 탐색">
-        <a href="#final">최종 결과</a>
-        <a href="#funnel">축소 과정</a>
-        <a href="#raw">원자료</a>
-        <a href="#history">1년 이력</a>
+      <nav class="nav-links" aria-label="주요 탭 이동">
+        <a href="#workspace" data-view-link="overview">요약</a>
+        <a href="#workspace" data-view-link="candidates">후보</a>
+        <a href="#workspace" data-view-link="validation">검증</a>
+        <a href="#workspace" data-view-link="raw">원자료</a>
       </nav>
     </header>
 
@@ -30,31 +30,34 @@
         <div class="hero-overlay" aria-hidden="true"></div>
         <div class="hero-content">
           <p class="eyebrow">Nightly stock candidate system</p>
-          <h1 id="hero-title">매일 밤 기준 자료로 1개월 보유 후보를 자동 선별합니다</h1>
+          <h1 id="hero-title">매일 밤 기준 자료로 후보를 다시 고르고, 과거 검증까지 함께 봅니다</h1>
           <p class="hero-copy">
-            관심 종목 전체에서 시작해 데이터 확보, 유동성, 리스크, 모멘텀, 최종 점수 순서로
-            후보군을 좁힙니다. 결과는 GitHub Pages에서 원자료와 함께 바로 확인합니다.
+            국내 주식 전체 모데이터에서 시작해 기간별 알고리즘, 후보군 축소 과정, 백테스트,
+            원자료를 탭으로 나누어 읽기 쉽게 정리했습니다.
           </p>
           <div class="hero-status" id="heroStatus" aria-live="polite">
             <span class="status-label">데이터</span>
             <strong>불러오는 중</strong>
-            <span>GitHub Actions가 매일 23:30 KST에 갱신합니다.</span>
+            <span>GitHub Pages 데이터 파일을 읽고 있습니다.</span>
           </div>
           <div class="hero-actions">
-            <a class="button primary" href="#final">오늘 후보 보기</a>
-            <a class="button secondary" href="#raw">원자료 확인</a>
+            <a class="button primary" href="#workspace" data-view-link="candidates">오늘 후보 보기</a>
+            <a class="button secondary" href="#workspace" data-view-link="validation">검증 결과 보기</a>
           </div>
         </div>
       </section>
 
-      <section class="dashboard" id="final" aria-labelledby="final-title">
-        <div class="section-heading">
-          <p class="eyebrow">Final result</p>
-          <h2 id="final-title">오늘 최종 결과</h2>
-          <p>
-            자산군과 보유 기간을 나눠서 봅니다. 국내 주식은 KOSPI/KOSDAQ 전체를 모데이터로 삼고,
-            점수와 과거 동일 규칙 검증을 함께 통과한 종목만 최종 후보로 표시합니다.
-          </p>
+      <section class="workspace" id="workspace" aria-labelledby="workspace-title">
+        <div class="workspace-heading">
+          <div>
+            <p class="eyebrow">Dashboard</p>
+            <h2 id="workspace-title">탭으로 읽는 후보 탐색 결과</h2>
+            <p>
+              먼저 자산군과 기간을 고른 뒤, 아래 탭에서 필요한 자료만 펼쳐보세요.
+              현재 자동 계산은 국내 주식에 연결되어 있고 미국 주식과 코인은 확장 슬롯입니다.
+            </p>
+          </div>
+          <a class="download-link" href="data/market_report.json">JSON 다운로드</a>
         </div>
 
         <div class="switcher" aria-label="자산군 선택">
@@ -70,227 +73,211 @@
           <button class="switch-button" data-period="1y" type="button">1년</button>
         </div>
 
-        <div class="stat-grid" aria-label="오늘 요약">
-          <article class="stat">
-            <span>최종 후보</span>
-            <strong id="candidateCount">-</strong>
-          </article>
-          <article class="stat">
-            <span>과거 승률</span>
-            <strong id="watchCount">-</strong>
-          </article>
-          <article class="stat">
-            <span>모데이터</span>
-            <strong id="universeCount">-</strong>
-          </article>
-          <article class="stat">
-            <span>기준일</span>
-            <strong id="asOfDate">-</strong>
-          </article>
-        </div>
+        <nav class="view-tabs" aria-label="자료 탭">
+          <button class="view-tab active" data-view="overview" type="button">요약</button>
+          <button class="view-tab" data-view="candidates" type="button">최종 후보</button>
+          <button class="view-tab" data-view="funnel" type="button">축소 과정</button>
+          <button class="view-tab" data-view="validation" type="button">과거 검증</button>
+          <button class="view-tab" data-view="raw" type="button">원자료</button>
+          <button class="view-tab" data-view="method" type="button">전략 기준</button>
+        </nav>
 
-        <div class="final-callout" id="finalCallout">
-          <strong>데이터를 불러오고 있습니다.</strong>
-          <span>잠시 후 오늘의 최종 후보가 표시됩니다.</span>
-        </div>
-
-        <div class="table-toolbar">
-          <div>
-            <h3>최종 후보 목록</h3>
-            <p>점수순으로 정렬되며, 후보가 없으면 관찰 대상이 대신 표시됩니다.</p>
+        <section class="view-panel active" data-panel="overview" aria-labelledby="overview-title">
+          <div class="section-heading">
+            <p class="eyebrow">Summary</p>
+            <h2 id="overview-title">한눈에 보는 오늘의 상태</h2>
           </div>
-          <a class="download-link" href="data/market_report.json">JSON 다운로드</a>
-        </div>
-        <div class="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>순위</th>
-                <th>종목</th>
-                <th>판정</th>
-                <th>점수</th>
-                <th>1개월</th>
-                <th>3개월</th>
-                <th>리스크</th>
-                <th>근거</th>
-              </tr>
-            </thead>
-            <tbody id="finalRows">
-              <tr>
-                <td colspan="8">데이터를 불러오는 중입니다.</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </section>
+          <div class="stat-grid" aria-label="오늘 요약">
+            <article class="stat">
+              <span>최종 후보</span>
+              <strong id="candidateCount">-</strong>
+            </article>
+            <article class="stat">
+              <span>과거 승률</span>
+              <strong id="watchCount">-</strong>
+            </article>
+            <article class="stat">
+              <span>모데이터</span>
+              <strong id="universeCount">-</strong>
+            </article>
+            <article class="stat">
+              <span>기준일</span>
+              <strong id="asOfDate">-</strong>
+            </article>
+          </div>
+          <div class="final-callout" id="finalCallout">
+            <strong>데이터를 불러오고 있습니다.</strong>
+            <span>잠시 후 요약이 표시됩니다.</span>
+          </div>
+          <div class="summary-notes">
+            <article>
+              <h3>읽는 순서</h3>
+              <p>후보 탭에서 종목을 확인하고, 검증 탭에서 과거 성과를 본 뒤, 원자료 탭에서 전체 맥락을 확인합니다.</p>
+            </article>
+            <article>
+              <h3>주의</h3>
+              <p>후보는 투자 조언이 아니라 리서치 자동화 결과입니다. 뉴스, 공시, 수급, 손절 기준은 별도로 확인해야 합니다.</p>
+            </article>
+          </div>
+        </section>
 
-      <section class="section" id="funnel" aria-labelledby="funnel-title">
-        <div class="section-heading">
-          <p class="eyebrow">Narrowing process</p>
-          <h2 id="funnel-title">모데이터부터 후보군이 좁혀지는 과정</h2>
-          <p>
-            각 단계는 이전 단계를 통과한 종목만 평가합니다. 어느 단계에서 빠졌는지까지 남겨
-            최종 후보가 왜 나왔는지 추적할 수 있습니다.
-          </p>
-        </div>
-        <div class="funnel-grid" id="funnelGrid" aria-live="polite"></div>
-      </section>
+        <section class="view-panel" data-panel="candidates" aria-labelledby="candidate-title" hidden>
+          <div class="table-toolbar">
+            <div>
+              <p class="eyebrow">Final candidates</p>
+              <h2 id="candidate-title">최종 후보 목록</h2>
+              <p>점수순으로 정렬됩니다. 최종 후보가 없으면 관찰 대상이 대신 표시됩니다.</p>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>순위</th>
+                  <th>종목</th>
+                  <th>판정</th>
+                  <th>점수</th>
+                  <th>단기</th>
+                  <th>중기</th>
+                  <th>리스크</th>
+                  <th>근거</th>
+                </tr>
+              </thead>
+              <tbody id="finalRows">
+                <tr>
+                  <td colspan="8">데이터를 불러오는 중입니다.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
 
-      <section class="section backtest-section" id="backtest" aria-labelledby="backtest-title">
-        <div class="section-heading">
-          <p class="eyebrow">Validation</p>
-          <h2 id="backtest-title">과거 같은 방법으로 거래했을 때</h2>
-          <p>
-            과거 각 시점에서 현재와 같은 필터와 점수식을 적용하고, 정해진 보유 기간 뒤 매도한
-            결과입니다. 수익률에는 기본 거래비용을 차감합니다.
-          </p>
-        </div>
-        <div class="stat-grid validation-grid">
-          <article class="stat">
-            <span>검증 거래</span>
-            <strong id="tradeCount">-</strong>
-          </article>
-          <article class="stat">
-            <span>승률</span>
-            <strong id="winRate">-</strong>
-          </article>
-          <article class="stat">
-            <span>평균 수익률</span>
-            <strong id="avgReturn">-</strong>
-          </article>
-          <article class="stat">
-            <span>최대 낙폭</span>
-            <strong id="maxDrawdown">-</strong>
-          </article>
-        </div>
-        <div class="chart-grid">
-          <article class="chart-panel">
-            <div class="panel-heading">
-              <h3>전략 누적 성과</h3>
-              <span id="validationStatus">-</span>
-            </div>
-            <canvas id="historyChart" height="260" aria-label="전략 누적 성과 차트"></canvas>
-          </article>
-          <article class="chart-panel">
-            <div class="panel-heading">
-              <h3>성공/실패 사례</h3>
-              <span id="caseMeta">상위 5개</span>
-            </div>
-            <div class="case-grid">
-              <div>
-                <h4>성공</h4>
-                <ul id="bestTrades"></ul>
+        <section class="view-panel" data-panel="funnel" aria-labelledby="funnel-title" hidden>
+          <div class="section-heading">
+            <p class="eyebrow">Narrowing process</p>
+            <h2 id="funnel-title">모데이터부터 후보군이 좁혀지는 과정</h2>
+            <p>각 단계는 이전 단계를 통과한 종목만 평가합니다. 어디에서 빠졌는지까지 추적할 수 있습니다.</p>
+          </div>
+          <div class="funnel-grid" id="funnelGrid" aria-live="polite"></div>
+        </section>
+
+        <section class="view-panel" data-panel="validation" aria-labelledby="backtest-title" hidden>
+          <div class="section-heading">
+            <p class="eyebrow">Validation</p>
+            <h2 id="backtest-title">과거 같은 방법으로 거래했을 때</h2>
+            <p>과거 각 시점에서 같은 필터와 점수식을 적용하고, 정해진 보유 기간 뒤 매도한 결과입니다.</p>
+          </div>
+          <div class="stat-grid validation-grid">
+            <article class="stat">
+              <span>검증 거래</span>
+              <strong id="tradeCount">-</strong>
+            </article>
+            <article class="stat">
+              <span>승률</span>
+              <strong id="winRate">-</strong>
+            </article>
+            <article class="stat">
+              <span>평균 수익률</span>
+              <strong id="avgReturn">-</strong>
+            </article>
+            <article class="stat">
+              <span>최대 낙폭</span>
+              <strong id="maxDrawdown">-</strong>
+            </article>
+          </div>
+          <div class="chart-grid">
+            <article class="chart-panel">
+              <div class="panel-heading">
+                <h3>전략 누적 성과</h3>
+                <span id="validationStatus">-</span>
               </div>
-              <div>
-                <h4>실패</h4>
-                <ul id="worstTrades"></ul>
+              <canvas id="historyChart" height="260" aria-label="전략 누적 성과 차트"></canvas>
+            </article>
+            <article class="chart-panel">
+              <div class="panel-heading">
+                <h3>성공/실패 사례</h3>
+                <span id="caseMeta">상위 5개</span>
               </div>
-            </div>
-          </article>
-        </div>
-      </section>
+              <div class="case-grid">
+                <div>
+                  <h4>성공</h4>
+                  <ul id="bestTrades"></ul>
+                </div>
+                <div>
+                  <h4>실패</h4>
+                  <ul id="worstTrades"></ul>
+                </div>
+              </div>
+            </article>
+          </div>
+        </section>
 
-      <section class="section" id="raw" aria-labelledby="raw-title">
-        <div class="section-heading">
-          <p class="eyebrow">Raw data</p>
-          <h2 id="raw-title">웹에서 보는 전체 원자료</h2>
-          <p>
-            관심 종목 전체의 최신 지표입니다. 검색과 판정 필터로 원자료에서 최종 후보까지의
-            흐름을 직접 확인할 수 있습니다.
-          </p>
-        </div>
-        <div class="controls" aria-label="원자료 필터">
-          <input id="searchInput" type="search" placeholder="종목명 또는 티커 검색" />
-          <select id="actionFilter">
-            <option value="all">전체 판정</option>
-            <option value="candidate">최종 후보</option>
-            <option value="watch">관찰 대상</option>
-            <option value="avoid">제외</option>
-            <option value="error">데이터 오류</option>
-          </select>
-        </div>
-        <div class="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>티커</th>
-                <th>종목명</th>
-                <th>판정</th>
-                <th>점수</th>
-                <th>종가</th>
-                <th>1개월</th>
-                <th>3개월</th>
-                <th>변동성</th>
-                <th>최대 낙폭</th>
-                <th>RSI</th>
-                <th>탈락 단계</th>
-              </tr>
-            </thead>
-            <tbody id="rawRows">
-              <tr>
-                <td colspan="11">데이터를 불러오는 중입니다.</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </section>
+        <section class="view-panel" data-panel="raw" aria-labelledby="raw-title" hidden>
+          <div class="section-heading">
+            <p class="eyebrow">Raw data</p>
+            <h2 id="raw-title">전체 원자료</h2>
+            <p>국내 주식 모데이터와 현재 기간의 분석 여부를 함께 봅니다. 최대 500행까지 표시합니다.</p>
+          </div>
+          <div class="controls" aria-label="원자료 필터">
+            <input id="searchInput" type="search" placeholder="종목명 또는 티커 검색" />
+            <select id="actionFilter">
+              <option value="all">전체 판정</option>
+              <option value="candidate">최종 후보</option>
+              <option value="watch">관찰 대상</option>
+              <option value="avoid">제외</option>
+              <option value="unscored">미분석</option>
+            </select>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>티커</th>
+                  <th>종목명</th>
+                  <th>판정</th>
+                  <th>점수</th>
+                  <th>종가</th>
+                  <th>단기</th>
+                  <th>중기</th>
+                  <th>변동성</th>
+                  <th>최대 낙폭</th>
+                  <th>이슈 점수</th>
+                  <th>분류</th>
+                </tr>
+              </thead>
+              <tbody id="rawRows">
+                <tr>
+                  <td colspan="11">데이터를 불러오는 중입니다.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
 
-      <section class="section history-section" id="history" aria-labelledby="history-title">
-        <div class="section-heading">
-          <p class="eyebrow">One-year view</p>
-          <h2 id="history-title">최근 1년치 자료를 보는 기준</h2>
-          <p>
-            국내 주식은 최근 3년 가격을 내려받아 과거 검증을 만들고, 웹에는 최근 1년 내
-            전략 성과와 오늘의 전체 원자료를 중심으로 보여줍니다.
-          </p>
-        </div>
-        <div class="method-grid">
-          <article>
-            <span>검증된 필터</span>
-            <p id="validatedFilters">-</p>
-          </article>
-          <article>
-            <span>이슈 필터</span>
-            <p id="issueFilters">-</p>
-          </article>
-          <article>
-            <span>미국 주식</span>
-            <p>SEC/Nasdaq 종목 목록, 옵션, 실적, 소셜 언급을 별도 모듈로 연결 예정입니다.</p>
-          </article>
-          <article>
-            <span>코인</span>
-            <p>Upbit KRW 마켓, CoinGecko 카테고리, 펀딩비와 언락 일정을 별도 모듈로 연결 예정입니다.</p>
-          </article>
-        </div>
-      </section>
-
-      <section class="section method-section" aria-labelledby="method-title">
-        <div class="section-heading">
-          <p class="eyebrow">Automation</p>
-          <h2 id="method-title">자동 갱신 방식</h2>
-        </div>
-        <div class="method-grid">
-          <article>
-            <span>01</span>
-            <h3>매일 밤 실행</h3>
-            <p>GitHub Actions가 매일 23:30 KST에 실행되어 최신 데이터를 만듭니다.</p>
-          </article>
-          <article>
-            <span>02</span>
-            <h3>1년 자료 생성</h3>
-            <p>각 종목의 최근 약 260거래일 가격과 과거 기준 점수 이력을 생성합니다.</p>
-          </article>
-          <article>
-            <span>03</span>
-            <h3>정적 웹 배포</h3>
-            <p>생성된 JSON과 CSV를 포함한 <code>site/</code> 폴더를 GitHub Pages로 배포합니다.</p>
-          </article>
-          <article>
-            <span>04</span>
-            <h3>명확한 최종 판정</h3>
-            <p>최종 후보, 관찰 대상, 제외, 데이터 오류를 분리해서 표시합니다.</p>
-          </article>
-        </div>
+        <section class="view-panel" data-panel="method" aria-labelledby="method-title" hidden>
+          <div class="section-heading">
+            <p class="eyebrow">Method</p>
+            <h2 id="method-title">전략 기준과 확장 계획</h2>
+          </div>
+          <div class="method-grid">
+            <article>
+              <span>검증된 필터</span>
+              <p id="validatedFilters">-</p>
+            </article>
+            <article>
+              <span>이슈 필터</span>
+              <p id="issueFilters">-</p>
+            </article>
+            <article>
+              <span>미국 주식</span>
+              <p>SEC/Nasdaq 종목 목록, 실적, 옵션, 소셜 언급을 별도 모듈로 연결할 예정입니다.</p>
+            </article>
+            <article>
+              <span>코인</span>
+              <p>Upbit KRW 마켓, CoinGecko 카테고리, 펀딩비와 언락 일정을 별도 모듈로 연결할 예정입니다.</p>
+            </article>
+          </div>
+        </section>
       </section>
     </main>
 
