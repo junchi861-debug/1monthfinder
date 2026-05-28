@@ -2,70 +2,45 @@
 <html lang="ko">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>1MonthFinder | 매일 밤 주식 후보 대시보드</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>1MonthFinder | 위클리 옵션 전략</title>
     <meta
       name="description"
-      content="국내 주식 모데이터, 기간별 후보, 백테스트 검증, 원자료를 탭으로 확인하는 1MonthFinder 대시보드"
+      content="KOSPI200 위클리 옵션 전략과 지수 매매 조건을 모바일에서 빠르게 확인하는 1MonthFinder 신호 화면"
     />
-    <link rel="stylesheet" href="styles.css?v=20260528-mobile-algos" />
+    <link rel="stylesheet" href="styles.css?v=20260528-weekly-options" />
   </head>
   <body>
-    <header class="topbar">
-      <a class="brand" href="#top" aria-label="대시보드 첫 화면으로 이동">
-        <span class="brand-mark" aria-hidden="true">1M</span>
-        <span>1MonthFinder</span>
-      </a>
-      <nav class="nav-links" aria-label="주요 탭 이동">
-        <a href="#workspace" data-view-link="overview">요약</a>
-        <a href="#workspace" data-view-link="candidates">후보</a>
-        <a href="#workspace" data-view-link="validation">검증</a>
-        <a href="#workspace" data-view-link="raw">원자료</a>
-      </nav>
-    </header>
-
-    <main id="top">
-      <section class="hero" aria-labelledby="hero-title">
-        <img class="hero-image" src="assets/hero-dashboard.png" alt="주식 후보 탐색 대시보드 일러스트" />
-        <div class="hero-overlay" aria-hidden="true"></div>
-        <div class="hero-content">
-          <p class="eyebrow">Nightly stock candidate system</p>
-          <h1 id="hero-title">1일 후보부터 먼저 보고, 기간과 알고리즘을 바로 바꿉니다</h1>
-          <p class="hero-copy">
-            모바일 첫 화면에서 오늘의 결론과 요약을 확인하고, 탭과 셀렉터로 후보군 축소 과정,
-            백테스트, 원자료를 이어서 볼 수 있게 정리했습니다.
-          </p>
-          <div class="hero-status" id="heroStatus" aria-live="polite">
-            <span class="status-label">데이터</span>
-            <strong>불러오는 중</strong>
-            <span>GitHub Pages 데이터 파일을 읽고 있습니다.</span>
-          </div>
-          <div class="hero-actions">
-            <a class="button primary" href="#workspace" data-view-link="overview">오늘 요약 보기</a>
-            <a class="button secondary" href="#workspace" data-view-link="validation">검증 결과 보기</a>
-          </div>
+    <main class="app-shell" aria-live="polite">
+      <section class="signal-hero" aria-labelledby="appTitle">
+        <div class="app-meta">
+          <span id="assetLabel">KOSPI200 위클리 옵션</span>
+          <span id="asOfDate">-</span>
+        </div>
+        <h1 id="appTitle">위클리 옵션</h1>
+        <p id="marketSummary">옵션 전략 데이터를 불러오고 있습니다.</p>
+        <div class="signal-card" id="topSignalCard">
+          <span class="signal-badge neutral">대기</span>
+          <strong>옵션 전략 계산 중</strong>
+          <small>지수 매매와 위클리 옵션 기준을 읽고 있습니다.</small>
         </div>
       </section>
 
-      <section class="workspace" id="workspace" aria-labelledby="workspace-title">
-        <div class="workspace-heading">
-          <div>
-            <p class="eyebrow">Dashboard</p>
-            <h2 id="workspace-title">오늘의 후보와 요약</h2>
-            <p>
-              1일 단기 후보를 기본으로 열고, 기간과 알고리즘을 바꾸면서 같은 기준의 결과를 비교합니다.
-            </p>
-          </div>
-          <a class="download-link" href="data/market_report.json">JSON 다운로드</a>
-        </div>
+      <nav class="mode-tabs" aria-label="화면 선택">
+        <button class="mode-tab active" type="button" data-mode-tab="weekly" aria-selected="true">
+          위클리 옵션
+        </button>
+        <button class="mode-tab" type="button" data-mode-tab="index" aria-selected="false">
+          지수 매매
+        </button>
+        <button class="mode-tab" type="button" data-mode-tab="stocks" aria-selected="false">
+          종목 신호
+        </button>
+      </nav>
 
-        <div class="top-options" aria-label="상단 옵션">
-          <div class="asset-tabs" aria-label="자산군 선택">
-            <button class="switch-button active" data-asset="kr" type="button">국내 주식</button>
-            <button class="switch-button" data-asset="us" type="button">미국 주식</button>
-            <button class="switch-button" data-asset="crypto" type="button">코인</button>
-          </div>
-          <label class="selector-field period-field" for="periodSelect">
+      <div class="mode-panel" id="stocksPanel" data-mode-panel="stocks" hidden>
+        <section class="control-card" aria-label="조회 조건">
+          <label class="field">
             <span>기간</span>
             <select id="periodSelect">
               <option value="1d">1일</option>
@@ -74,239 +49,245 @@
               <option value="1y">1년</option>
             </select>
           </label>
-        </div>
-
-        <div class="algorithm-row">
-          <label class="selector-field algorithm-field" for="algorithmSelect">
+          <label class="field">
             <span>알고리즘</span>
             <select id="algorithmSelect"></select>
           </label>
           <p id="algorithmDescription">알고리즘 정보를 불러오는 중입니다.</p>
-        </div>
-
-        <nav class="view-tabs" aria-label="자료 탭">
-          <button class="view-tab active" data-view="overview" type="button">요약</button>
-          <button class="view-tab" data-view="candidates" type="button">최종 후보</button>
-          <button class="view-tab" data-view="funnel" type="button">축소 과정</button>
-          <button class="view-tab" data-view="validation" type="button">과거 검증</button>
-          <button class="view-tab" data-view="raw" type="button">원자료</button>
-          <button class="view-tab" data-view="method" type="button">전략 기준</button>
-        </nav>
-
-        <section class="view-panel active" data-panel="overview" aria-labelledby="overview-title">
-          <div class="section-heading">
-            <p class="eyebrow">Summary</p>
-            <h2 id="overview-title">한눈에 보는 오늘의 상태</h2>
-          </div>
-          <div class="result-board" aria-live="polite">
-            <div class="result-headline">
-              <span id="decisionPeriod">국내 주식 · 1일</span>
-              <strong id="decisionTitle">후보를 계산하고 있습니다.</strong>
-              <p id="decisionCopy">데이터를 불러오면 최종 후보와 요약 지표가 표시됩니다.</p>
-            </div>
-            <div class="compact-stats" aria-label="오늘 요약">
-              <article>
-                <span>최종 후보</span>
-                <strong id="candidateCount">-</strong>
-              </article>
-              <article>
-                <span>과거 승률</span>
-                <strong id="watchCount">-</strong>
-              </article>
-              <article>
-                <span>모데이터</span>
-                <strong id="universeCount">-</strong>
-              </article>
-              <article>
-                <span>기준일</span>
-                <strong id="asOfDate">-</strong>
-              </article>
-            </div>
-            <div class="candidate-cards" id="topCandidateCards">
-              <article class="candidate-card empty">데이터를 불러오는 중입니다.</article>
-            </div>
-          </div>
-          <div class="final-callout" id="finalCallout">
-            <strong>데이터를 불러오고 있습니다.</strong>
-            <span>잠시 후 요약이 표시됩니다.</span>
-          </div>
-          <div class="summary-notes">
-            <article>
-              <h3>읽는 순서</h3>
-              <p>후보 탭에서 종목을 확인하고, 검증 탭에서 과거 성과를 본 뒤, 원자료 탭에서 전체 맥락을 확인합니다.</p>
-            </article>
-            <article>
-              <h3>주의</h3>
-              <p>후보는 투자 조언이 아니라 리서치 자동화 결과입니다. 뉴스, 공시, 수급, 손절 기준은 별도로 확인해야 합니다.</p>
-            </article>
-          </div>
         </section>
 
-        <section class="view-panel" data-panel="candidates" aria-labelledby="candidate-title" hidden>
-          <div class="table-toolbar">
+        <section class="chart-card" aria-labelledby="chartTitle">
+          <div class="section-head compact">
             <div>
-              <p class="eyebrow">Final candidates</p>
-              <h2 id="candidate-title">최종 후보 목록</h2>
-              <p>점수순으로 정렬됩니다. 최종 후보가 없으면 관찰 대상이 대신 표시됩니다.</p>
+              <span id="selectedSymbol">-</span>
+              <h2 id="chartTitle">종목 차트</h2>
+            </div>
+            <span class="signal-badge neutral" id="chartSignalBadge">대기</span>
+          </div>
+          <canvas id="stockChart" height="260" aria-label="선택 종목 가격과 공식선 차트"></canvas>
+          <div class="legend-row" id="chartLegend"></div>
+          <p class="signal-copy" id="chartSignalText">
+            추천 또는 보유 종목을 선택하면 공식선과 신호 설명을 표시합니다.
+          </p>
+        </section>
+
+        <section class="list-card" aria-labelledby="candidateTitle">
+          <div class="section-head">
+            <div>
+              <span>추천</span>
+              <h2 id="candidateTitle">알고리즘 후보</h2>
+            </div>
+            <strong id="candidateCount">-</strong>
+          </div>
+          <div class="stock-list" id="candidateList">
+            <button class="stock-row empty" type="button">데이터를 불러오는 중입니다.</button>
+          </div>
+        </section>
+
+        <section class="list-card" aria-labelledby="holdingTitle">
+          <div class="section-head">
+            <div>
+              <span>보유</span>
+              <h2 id="holdingTitle">내 종목</h2>
             </div>
           </div>
-          <div class="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>순위</th>
-                  <th>종목</th>
-                  <th>판정</th>
-                  <th>점수</th>
-                  <th>단기</th>
-                  <th>중기</th>
-                  <th>리스크</th>
-                  <th>근거</th>
-                </tr>
-              </thead>
-              <tbody id="finalRows">
-                <tr>
-                  <td colspan="8">데이터를 불러오는 중입니다.</td>
-                </tr>
-              </tbody>
-            </table>
+          <form class="holding-form" id="holdingForm">
+            <input id="holdingInput" type="text" inputmode="text" placeholder="종목코드 입력 예: 005930" />
+            <button type="submit">추가</button>
+          </form>
+          <div class="stock-list compact-list" id="holdingList">
+            <button class="stock-row empty" type="button">
+              보유 종목을 추가하면 여기서 바로 차트를 볼 수 있습니다.
+            </button>
           </div>
         </section>
 
-        <section class="view-panel" data-panel="funnel" aria-labelledby="funnel-title" hidden>
-          <div class="section-heading">
-            <p class="eyebrow">Narrowing process</p>
-            <h2 id="funnel-title">모데이터부터 후보군이 좁혀지는 과정</h2>
-            <p>각 단계는 이전 단계를 통과한 종목만 평가합니다. 어디에서 빠졌는지까지 추적할 수 있습니다.</p>
+        <section class="metrics-card" aria-labelledby="metricTitle">
+          <div class="section-head">
+            <div>
+              <span>검증</span>
+              <h2 id="metricTitle">현재 조건 성과</h2>
+            </div>
           </div>
-          <div class="funnel-grid" id="funnelGrid" aria-live="polite"></div>
-        </section>
-
-        <section class="view-panel" data-panel="validation" aria-labelledby="backtest-title" hidden>
-          <div class="section-heading">
-            <p class="eyebrow">Validation</p>
-            <h2 id="backtest-title">과거 같은 방법으로 거래했을 때</h2>
-            <p>과거 각 시점에서 같은 필터와 점수식을 적용하고, 정해진 보유 기간 뒤 매도한 결과입니다.</p>
-          </div>
-          <div class="stat-grid validation-grid">
-            <article class="stat">
-              <span>검증 거래</span>
-              <strong id="tradeCount">-</strong>
-            </article>
-            <article class="stat">
+          <div class="metric-grid">
+            <article>
               <span>승률</span>
               <strong id="winRate">-</strong>
             </article>
-            <article class="stat">
+            <article>
               <span>평균 수익률</span>
               <strong id="avgReturn">-</strong>
             </article>
-            <article class="stat">
+            <article>
+              <span>거래 표본</span>
+              <strong id="tradeCount">-</strong>
+            </article>
+            <article>
               <span>최대 낙폭</span>
               <strong id="maxDrawdown">-</strong>
             </article>
           </div>
-          <div class="chart-grid">
-            <article class="chart-panel">
-              <div class="panel-heading">
-                <h3>전략 누적 성과</h3>
-                <span id="validationStatus">-</span>
-              </div>
-              <canvas id="historyChart" height="260" aria-label="전략 누적 성과 차트"></canvas>
+        </section>
+      </div>
+
+      <div class="mode-panel index-panel" id="indexPanel" data-mode-panel="index" hidden>
+        <section class="chart-card index-chart-card" aria-labelledby="indexChartTitle">
+          <div class="section-head compact">
+            <div>
+              <span id="indexScope">KOSPI200 지수/선물</span>
+              <h2 id="indexChartTitle">지수 매매 공식선</h2>
+            </div>
+            <span class="signal-badge neutral" id="indexStatusBadge">설계중</span>
+          </div>
+          <canvas id="indexChart" height="280" aria-label="지수 매매 피보나치와 기준선 공식 미리보기"></canvas>
+          <div class="legend-row" id="indexChartLegend"></div>
+          <p class="signal-copy" id="indexChartSignalText">
+            실시간 5분봉 데이터 연결 전에는 공식과 상태 흐름을 먼저 고정합니다.
+          </p>
+        </section>
+
+        <section class="list-card" aria-labelledby="indexSummaryTitle">
+          <div class="section-head">
+            <div>
+              <span>구분</span>
+              <h2 id="indexSummaryTitle">옵션 전략과 분리</h2>
+            </div>
+          </div>
+          <div class="index-summary-grid">
+            <article>
+              <span>현재 탭</span>
+              <strong>지수 매매</strong>
+              <small>피보나치, 기하이평, 일목선 기준으로 지수 방향 신호를 계산합니다.</small>
             </article>
-            <article class="chart-panel">
-              <div class="panel-heading">
-                <h3>성공/실패 사례</h3>
-                <span id="caseMeta">상위 5개</span>
-              </div>
-              <div class="case-grid">
-                <div>
-                  <h4>성공</h4>
-                  <ul id="bestTrades"></ul>
-                </div>
-                <div>
-                  <h4>실패</h4>
-                  <ul id="worstTrades"></ul>
-                </div>
-              </div>
+            <article>
+              <span>별도 정리</span>
+              <strong>위클리 옵션</strong>
+              <small>행사가, 만기, 프리미엄, 미결제약정 기준은 별도 탭/문서에서 확정합니다.</small>
             </article>
           </div>
         </section>
 
-        <section class="view-panel" data-panel="raw" aria-labelledby="raw-title" hidden>
-          <div class="section-heading">
-            <p class="eyebrow">Raw data</p>
-            <h2 id="raw-title">전체 원자료</h2>
-            <p>국내 주식 모데이터와 현재 기간의 분석 여부를 함께 봅니다. 최대 500행까지 표시합니다.</p>
+        <section class="list-card" aria-labelledby="indexFormulaTitle">
+          <div class="section-head">
+            <div>
+              <span>공식</span>
+              <h2 id="indexFormulaTitle">수정 가능한 선</h2>
+            </div>
           </div>
-          <div class="controls" aria-label="원자료 필터">
-            <input id="searchInput" type="search" placeholder="종목명 또는 티커 검색" />
-            <select id="actionFilter">
-              <option value="all">전체 판정</option>
-              <option value="candidate">최종 후보</option>
-              <option value="watch">관찰 대상</option>
-              <option value="avoid">제외</option>
-              <option value="unscored">미분석</option>
-            </select>
-          </div>
-          <div class="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>티커</th>
-                  <th>종목명</th>
-                  <th>판정</th>
-                  <th>점수</th>
-                  <th>종가</th>
-                  <th>단기</th>
-                  <th>중기</th>
-                  <th>변동성</th>
-                  <th>최대 낙폭</th>
-                  <th>이슈 점수</th>
-                  <th>분류</th>
-                </tr>
-              </thead>
-              <tbody id="rawRows">
-                <tr>
-                  <td colspan="11">데이터를 불러오는 중입니다.</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
+          <div class="formula-list" id="indexFormulaList"></div>
         </section>
 
-        <section class="view-panel" data-panel="method" aria-labelledby="method-title" hidden>
-          <div class="section-heading">
-            <p class="eyebrow">Method</p>
-            <h2 id="method-title">전략 기준과 확장 계획</h2>
+        <section class="list-card" aria-labelledby="indexLevelTitle">
+          <div class="section-head">
+            <div>
+              <span>라인</span>
+              <h2 id="indexLevelTitle">진입·손절 구간</h2>
+            </div>
           </div>
-          <div class="method-grid">
-            <article>
-              <span>검증된 필터</span>
-              <p id="validatedFilters">-</p>
-            </article>
-            <article>
-              <span>이슈 필터</span>
-              <p id="issueFilters">-</p>
-            </article>
-            <article>
-              <span>미국 주식</span>
-              <p>SEC/Nasdaq 종목 목록, 실적, 옵션, 소셜 언급을 별도 모듈로 연결할 예정입니다.</p>
-            </article>
-            <article>
-              <span>코인</span>
-              <p>Upbit KRW 마켓, CoinGecko 카테고리, 펀딩비와 언락 일정을 별도 모듈로 연결할 예정입니다.</p>
-            </article>
-          </div>
+          <div class="level-list" id="indexLevelList"></div>
         </section>
-      </section>
+
+        <section class="list-card" aria-labelledby="indexStateTitle">
+          <div class="section-head">
+            <div>
+              <span>흐름</span>
+              <h2 id="indexStateTitle">상태 머신</h2>
+            </div>
+          </div>
+          <div class="state-flow" id="indexStateFlow"></div>
+        </section>
+
+        <section class="list-card" aria-labelledby="indexRuleTitle">
+          <div class="section-head">
+            <div>
+              <span>신호</span>
+              <h2 id="indexRuleTitle">매수·청산 조건</h2>
+            </div>
+          </div>
+          <div class="rule-list" id="indexSignalRules"></div>
+        </section>
+
+        <section class="list-card" aria-labelledby="indexQuestionTitle">
+          <div class="section-head">
+            <div>
+              <span>확인</span>
+              <h2 id="indexQuestionTitle">추가 문의 포인트</h2>
+            </div>
+          </div>
+          <ol class="question-list" id="indexQuestions"></ol>
+        </section>
+      </div>
+
+      <div class="mode-panel weekly-panel" id="weeklyPanel" data-mode-panel="weekly">
+        <section class="chart-card weekly-chart-card" aria-labelledby="weeklyChartTitle">
+          <div class="section-head compact">
+            <div>
+              <span>프리미엄</span>
+              <h2 id="weeklyChartTitle">옵션 전략선</h2>
+            </div>
+            <span class="signal-badge warning" id="weeklyChartBadge">설계선</span>
+          </div>
+          <canvas id="weeklyChart" height="300" aria-label="위클리 옵션 평균 진입, 손실, 자리이동, 청산 전략선 차트"></canvas>
+          <div class="legend-row" id="weeklyChartLegend"></div>
+          <p class="signal-copy" id="weeklyChartSignalText">
+            평균 진입가 기준으로 손실선, 자리이동선, 청산선을 먼저 그립니다.
+          </p>
+        </section>
+
+        <section class="list-card" aria-labelledby="weeklyRiskTitle">
+          <div class="section-head">
+            <div>
+              <span>대원칙</span>
+              <h2 id="weeklyRiskTitle">당일 손실 한도</h2>
+            </div>
+            <span class="signal-badge sell" id="weeklyStopBadge">300만원</span>
+          </div>
+          <div class="option-plan-grid" id="weeklyRiskGrid"></div>
+        </section>
+
+        <section class="list-card" aria-labelledby="weeklyEntryTitle">
+          <div class="section-head">
+            <div>
+              <span>진입</span>
+              <h2 id="weeklyEntryTitle">행사가와 3분할 주문</h2>
+            </div>
+          </div>
+          <div class="option-summary" id="weeklyEntrySummary"></div>
+          <div class="order-ladder" id="weeklyOrderLadder"></div>
+        </section>
+
+        <section class="list-card" aria-labelledby="weeklyExitTitle">
+          <div class="section-head">
+            <div>
+              <span>청산</span>
+              <h2 id="weeklyExitTitle">부분 청산과 잔량 운용</h2>
+            </div>
+          </div>
+          <div class="target-list" id="weeklyTargetList"></div>
+        </section>
+
+        <section class="list-card" aria-labelledby="weeklyStateTitle">
+          <div class="section-head">
+            <div>
+              <span>흐름</span>
+              <h2 id="weeklyStateTitle">옵션 상태 머신</h2>
+            </div>
+          </div>
+          <div class="state-flow" id="weeklyStateFlow"></div>
+        </section>
+
+        <section class="list-card" aria-labelledby="weeklyQuestionTitle">
+          <div class="section-head">
+            <div>
+              <span>확인</span>
+              <h2 id="weeklyQuestionTitle">추가 문의 포인트</h2>
+            </div>
+          </div>
+          <ol class="question-list" id="weeklyQuestions"></ol>
+        </section>
+      </div>
     </main>
 
-    <footer class="footer">
-      <p>1MonthFinder는 투자 조언이 아닌 데이터 기반 후보 선별 도구입니다.</p>
-      <a href="https://github.com/junchi861-debug/1monthfinder">GitHub 저장소</a>
-    </footer>
-
-    <script src="script.js?v=20260528-mobile-algos"></script>
+    <script src="script.js?v=20260528-weekly-options-default-weekly"></script>
   </body>
 </html>

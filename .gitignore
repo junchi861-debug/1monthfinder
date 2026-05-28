@@ -6,3 +6,7 @@ reports/*.csv
 site/data/*.csv
 site/data/*.json
 !site/data/market_report.json
+!site/data/chart_config.json
+!site/data/strategy_config.json
+!site/data/index_trading.json
+!site/data/weekly_options.json

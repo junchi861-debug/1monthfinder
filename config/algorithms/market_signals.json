@@ -1,0 +1,446 @@
+{
+  "schema_version": 1,
+  "timezone": "Asia/Seoul",
+  "trading_days_per_year": 252,
+  "asset_classes": {
+    "kr": {
+      "label": "국내 주식",
+      "status": "active",
+      "source": "FinanceDataReader KRX listing and daily prices"
+    },
+    "us": {
+      "label": "미국 주식",
+      "status": "planned",
+      "source": "SEC/Nasdaq universe, earnings, options, social attention"
+    },
+    "crypto": {
+      "label": "코인",
+      "status": "planned",
+      "source": "Upbit KRW markets, CoinGecko categories, funding/open-interest feeds"
+    }
+  },
+  "periods": {
+    "1d": {
+      "label": "1일",
+      "holding_days": 1,
+      "min_lookback": 40,
+      "step": 5,
+      "description": "하루 단위 단기 관심도, 거래대금 급증, 짧은 모멘텀을 봅니다."
+    },
+    "1w": {
+      "label": "1주",
+      "holding_days": 5,
+      "min_lookback": 60,
+      "step": 5,
+      "description": "1주 보유를 전제로 5일/20일 흐름과 거래량 확산을 봅니다."
+    },
+    "1m": {
+      "label": "1달",
+      "holding_days": 21,
+      "min_lookback": 90,
+      "step": 10,
+      "description": "21거래일 보유를 전제로 1개월/3개월 모멘텀과 낙폭을 봅니다."
+    },
+    "1y": {
+      "label": "1년",
+      "holding_days": 252,
+      "min_lookback": 280,
+      "step": 21,
+      "description": "1년 보유를 전제로 장기 추세, 저변동성, 유동성을 봅니다."
+    }
+  },
+  "default_algorithm_by_period": {
+    "1d": "pulse",
+    "1w": "balanced",
+    "1m": "balanced",
+    "1y": "defensive"
+  },
+  "signals": {
+    "candidate": {
+      "trade_signal": "buy",
+      "label": "매수 후보"
+    },
+    "watch": {
+      "trade_signal": "warning",
+      "label": "경고/관찰"
+    },
+    "avoid": {
+      "trade_signal": "sell",
+      "label": "매도/제외"
+    },
+    "error": {
+      "trade_signal": "error",
+      "label": "오류"
+    },
+    "unscored": {
+      "trade_signal": "unscored",
+      "label": "미분석"
+    }
+  },
+  "algorithms": {
+    "pulse": {
+      "label": "단기 탄력",
+      "short_label": "탄력",
+      "description": "1일/1주 움직임, 거래대금 급증, 거래량 급증을 우선해 짧은 기회를 찾습니다.",
+      "score_weights_by_period": {
+        "1d": {
+          "attention": 0.42,
+          "momentum": 0.34,
+          "liquidity": 0.12,
+          "trend": 0.07,
+          "risk": 0.05
+        },
+        "default": {
+          "momentum": 0.35,
+          "attention": 0.25,
+          "liquidity": 0.15,
+          "risk": 0.15,
+          "trend": 0.1
+        }
+      }
+    },
+    "balanced": {
+      "label": "균형 검증",
+      "short_label": "균형",
+      "description": "모멘텀, 리스크, 유동성, 관심도, 추세를 균형 있게 반영합니다.",
+      "score_weights_by_period": {
+        "1d": {
+          "attention": 0.35,
+          "momentum": 0.25,
+          "liquidity": 0.2,
+          "risk": 0.1,
+          "trend": 0.1
+        },
+        "1w": {
+          "momentum": 0.4,
+          "attention": 0.2,
+          "liquidity": 0.15,
+          "risk": 0.15,
+          "trend": 0.1
+        },
+        "1m": {
+          "momentum": 0.45,
+          "risk": 0.25,
+          "liquidity": 0.15,
+          "attention": 0.1,
+          "trend": 0.05
+        },
+        "1y": {
+          "momentum": 0.35,
+          "risk": 0.25,
+          "liquidity": 0.15,
+          "trend": 0.15,
+          "attention": 0.1
+        }
+      }
+    },
+    "issue": {
+      "label": "이슈 포착",
+      "short_label": "이슈",
+      "description": "거래대금 확산, 신고가 근접, 커뮤니티성 관심도 대리변수를 더 크게 봅니다.",
+      "score_weights_by_period": {
+        "default": {
+          "attention": 0.45,
+          "momentum": 0.2,
+          "liquidity": 0.15,
+          "trend": 0.1,
+          "risk": 0.1
+        }
+      }
+    },
+    "defensive": {
+      "label": "리스크 관리",
+      "short_label": "방어",
+      "description": "변동성, 최대 낙폭, 이동평균 추세를 더 엄격하게 반영합니다.",
+      "score_weights_by_period": {
+        "default": {
+          "risk": 0.35,
+          "trend": 0.25,
+          "liquidity": 0.2,
+          "momentum": 0.15,
+          "attention": 0.05
+        }
+      }
+    }
+  },
+  "components": {
+    "shared": {
+      "liquidity": {
+        "type": "clip_log10",
+        "feature": "amount_20d",
+        "low": 9.0,
+        "high": 11.5
+      },
+      "attention": {
+        "type": "weighted_sum",
+        "items": [
+          {
+            "feature": "amount_surge",
+            "weight": 0.45,
+            "method": "clip",
+            "low": 0.8,
+            "high": 3.0
+          },
+          {
+            "feature": "volume_surge",
+            "weight": 0.35,
+            "method": "clip",
+            "low": 0.8,
+            "high": 2.8
+          },
+          {
+            "feature": "high_proximity",
+            "weight": 0.2,
+            "method": "clip",
+            "low": 0.8,
+            "high": 1.02
+          }
+        ]
+      },
+      "trend": {
+        "type": "weighted_sum",
+        "items": [
+          {
+            "feature": "above_ma20",
+            "weight": 0.35,
+            "method": "boolean"
+          },
+          {
+            "feature": "above_ma60",
+            "weight": 0.3,
+            "method": "boolean"
+          },
+          {
+            "feature": "above_ma120",
+            "weight": 0.35,
+            "method": "boolean"
+          }
+        ]
+      }
+    },
+    "periods": {
+      "1d": {
+        "momentum": {
+          "type": "weighted_sum",
+          "items": [
+            {
+              "feature": "ret_1d",
+              "weight": 0.65,
+              "method": "clip",
+              "low": -0.02,
+              "high": 0.08
+            },
+            {
+              "feature": "ret_5d",
+              "weight": 0.35,
+              "method": "clip",
+              "low": -0.04,
+              "high": 0.12
+            }
+          ]
+        },
+        "risk": {
+          "type": "inverse_clip",
+          "feature": "vol_5d",
+          "low": 0.2,
+          "high": 1.6
+        }
+      },
+      "1w": {
+        "momentum": {
+          "type": "weighted_sum",
+          "items": [
+            {
+              "feature": "ret_5d",
+              "weight": 0.65,
+              "method": "clip",
+              "low": -0.03,
+              "high": 0.14
+            },
+            {
+              "feature": "ret_21d",
+              "weight": 0.35,
+              "method": "clip",
+              "low": -0.06,
+              "high": 0.22
+            }
+          ]
+        },
+        "risk": {
+          "type": "weighted_sum",
+          "items": [
+            {
+              "feature": "vol_21d",
+              "weight": 0.6,
+              "method": "inverse_clip",
+              "low": 0.2,
+              "high": 1.1
+            },
+            {
+              "feature": "max_drawdown_63d",
+              "weight": 0.4,
+              "method": "clip",
+              "low": -0.35,
+              "high": -0.03
+            }
+          ]
+        }
+      },
+      "1m": {
+        "momentum": {
+          "type": "weighted_sum",
+          "items": [
+            {
+              "feature": "ret_21d",
+              "weight": 0.6,
+              "method": "clip",
+              "low": -0.03,
+              "high": 0.12
+            },
+            {
+              "feature": "ret_63d",
+              "weight": 0.4,
+              "method": "clip",
+              "low": -0.08,
+              "high": 0.25
+            }
+          ]
+        },
+        "risk": {
+          "type": "weighted_sum",
+          "items": [
+            {
+              "feature": "vol_21d",
+              "weight": 0.55,
+              "method": "inverse_clip",
+              "low": 0.18,
+              "high": 0.75
+            },
+            {
+              "feature": "max_drawdown_63d",
+              "weight": 0.45,
+              "method": "clip",
+              "low": -0.3,
+              "high": -0.03
+            }
+          ]
+        }
+      },
+      "1y": {
+        "momentum": {
+          "type": "weighted_sum",
+          "items": [
+            {
+              "feature": "ret_126d",
+              "weight": 0.55,
+              "method": "clip",
+              "low": -0.1,
+              "high": 0.35
+            },
+            {
+              "feature": "ret_252d",
+              "weight": 0.45,
+              "method": "clip",
+              "low": -0.2,
+              "high": 0.6
+            }
+          ]
+        },
+        "risk": {
+          "type": "weighted_sum",
+          "items": [
+            {
+              "feature": "vol_63d",
+              "weight": 0.5,
+              "method": "inverse_clip",
+              "low": 0.15,
+              "high": 0.65
+            },
+            {
+              "feature": "max_drawdown_252d",
+              "weight": 0.5,
+              "method": "clip",
+              "low": -0.45,
+              "high": -0.08
+            }
+          ]
+        }
+      }
+    }
+  },
+  "thresholds": {
+    "candidate_score": {
+      "default": 70,
+      "algorithm_overrides": {
+        "defensive": 68
+      },
+      "period_algorithm_overrides": {
+        "1d:pulse": 58,
+        "1d:issue": 58
+      }
+    },
+    "watch_score": {
+      "default": 55,
+      "period_algorithm_overrides": {
+        "1d:pulse": 48,
+        "1d:issue": 48
+      }
+    },
+    "signal_score": {
+      "default": null,
+      "period_algorithm_overrides": {
+        "1d:pulse": 55,
+        "1d:issue": 55
+      }
+    }
+  },
+  "target_candidates": {
+    "period_algorithm_overrides": {
+      "1d:pulse": 3,
+      "1d:issue": 3
+    }
+  },
+  "short_term_candidate_algorithms": {
+    "1d": [
+      "pulse",
+      "issue"
+    ]
+  },
+  "short_term_guardrail": {
+    "min_score": 50,
+    "min_liquidity_score": 0.35,
+    "min_issue_score": 0.3,
+    "min_risk_score": 0.1
+  },
+  "funnel_thresholds": {
+    "min_liquidity_score": 0.35,
+    "min_momentum_score": 0.35,
+    "min_risk_score": 0.25,
+    "issue_score_min_by_period": {
+      "1d": 0.45,
+      "1w": 0.35,
+      "1m": 0.2,
+      "1y": 0.15
+    }
+  },
+  "validation": {
+    "min_trades": 20,
+    "min_win_rate": 0.48,
+    "min_average_return": -0.005,
+    "max_drawdown_floor": -0.45
+  },
+  "validated_filters": [
+    "유동성: 거래대금과 거래량이 충분한 종목만 우선 분석",
+    "모멘텀: 최근 수익률과 상대강도 기반 점수",
+    "추세: 이동평균과 52주 고점 근접도",
+    "저변동성: 단기 급등락과 최대 낙폭 페널티",
+    "거래비용 반영: 백테스트 수익률에서 비용 차감",
+    "동일 규칙 검증: 과거 시점에서도 같은 필터와 점수로 거래 성과 산출"
+  ],
+  "issue_filters": [
+    "커뮤니티형 관심도 대리변수: 거래대금 급증, 거래량 급증, 신고가 근접",
+    "급등 이슈 감지: 1일/1주 수익률과 거래량 동반 상승",
+    "테마 확산 후보: 관심도 점수가 높은 종목을 별도 표시",
+    "추후 확장: 네이버 데이터랩, Reddit, Stocktwits, 뉴스 키워드 API 연결"
+  ]
+}

@@ -1,0 +1,87 @@
+{
+  "schema_version": 1,
+  "palette": {
+    "equity": "#008c8c",
+    "grid": "#dfe5ea",
+    "text": "#5b6776",
+    "candidate": "#2d8f64",
+    "warning": "#d89216",
+    "sell": "#b6504a"
+  },
+  "charts": {
+    "stock_price": {
+      "height": 260,
+      "padding": 22,
+      "empty_message": "차트 자료가 없습니다.",
+      "lines": [
+        {
+          "key": "close",
+          "label": "가격",
+          "formula": "close",
+          "color": "#17202a",
+          "width": 2.6
+        },
+        {
+          "key": "ma5",
+          "label": "단기선",
+          "formula": "sma(close, 5)",
+          "color": "#008c8c",
+          "width": 1.8
+        },
+        {
+          "key": "ma20",
+          "label": "기준선",
+          "formula": "sma(close, 20)",
+          "color": "#d89216",
+          "width": 1.8
+        },
+        {
+          "key": "risk_floor",
+          "label": "경고선",
+          "formula": "last_close * 0.94",
+          "color": "#b6504a",
+          "width": 1.4,
+          "dash": [
+            5,
+            5
+          ]
+        }
+      ],
+      "signal_rules": [
+        {
+          "condition": "close > ma5 && ma5 > ma20 && score >= 58",
+          "signal": "buy",
+          "label": "매수 후보",
+          "text": "가격이 단기선 위에 있고 단기선이 기준선보다 높습니다. 알고리즘 점수도 후보 기준을 넘어서 매수 후보로 볼 수 있습니다."
+        },
+        {
+          "condition": "close < risk_floor || risk_score < 0.25",
+          "signal": "sell",
+          "label": "매도/제외",
+          "text": "가격이 경고선 아래로 내려왔거나 리스크 점수가 낮습니다. 신규 매수보다 제외 또는 축소 관점이 우선입니다."
+        },
+        {
+          "condition": "close < ma5 || issue_score >= 0.45",
+          "signal": "warning",
+          "label": "경고/관찰",
+          "text": "단기선 이탈 또는 이슈성 급등 신호가 있어 추격 매수보다 확인이 필요합니다."
+        }
+      ]
+    },
+    "history_equity": {
+      "height": 260,
+      "series_key": "equity",
+      "stroke_color": "#008c8c",
+      "padding": 34,
+      "empty_message": "검증 자료가 없습니다."
+    },
+    "funnel": {
+      "min_bar_width_pct": 5
+    }
+  },
+  "display": {
+    "top_candidate_cards": 8,
+    "raw_table_limit": 500,
+    "trade_case_limit": 5
+  }
+}

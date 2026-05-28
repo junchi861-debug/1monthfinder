@@ -8,6 +8,7 @@ import pandas as pd
 from stock_finder.backtest import walk_forward_scores
 from stock_finder.data import fetch_history, load_watchlist
 from stock_finder.daily_report import build_daily_site_data
+from stock_finder.local_server import serve_local_app
 from stock_finder.market_report import build_market_site_data
 from stock_finder.scoring import score_history
 
@@ -80,6 +81,8 @@ def build_market(args: argparse.Namespace) -> None:
         domestic_limit=args.domestic_limit,
         years=args.years,
         transaction_cost=args.transaction_cost,
+        strategy_config_path=args.strategy_config,
+        chart_config_path=args.chart_config,
     )
     summary = report["domestic"]["universe_summary"]
     print(
@@ -108,7 +111,7 @@ def make_parser() -> argparse.ArgumentParser:
     backtest.add_argument("--out", default="reports/backtest.csv")
     backtest.set_defaults(func=build_backtest)
 
-    daily = subparsers.add_parser("daily", help="build nightly GitHub Pages data files")
+    daily = subparsers.add_parser("daily", help="build watchlist-based static data files")
     daily.add_argument("--watchlist", default="config/watchlist.csv")
     daily.add_argument("--period", default="18mo")
     daily.add_argument("--out-dir", default="site/data")
@@ -119,7 +122,21 @@ def make_parser() -> argparse.ArgumentParser:
     market.add_argument("--domestic-limit", type=int, default=250)
     market.add_argument("--years", type=int, default=3)
     market.add_argument("--transaction-cost", type=float, default=0.0015)
+    market.add_argument("--strategy-config", default=None)
+    market.add_argument("--chart-config", default=None)
     market.set_defaults(func=build_market)
+
+    serve = subparsers.add_parser("serve", help="run the local web server on this computer or phone")
+    serve.add_argument("--host", default="0.0.0.0")
+    serve.add_argument("--port", type=int, default=8000)
+    serve.add_argument("--refresh-minutes", type=float, default=0)
+    serve.add_argument("--build-on-start", action="store_true")
+    serve.add_argument("--domestic-limit", type=int, default=250)
+    serve.add_argument("--years", type=int, default=3)
+    serve.add_argument("--transaction-cost", type=float, default=0.0015)
+    serve.add_argument("--strategy-config", default=None)
+    serve.add_argument("--chart-config", default=None)
+    serve.set_defaults(func=serve_local_app)
 
     return parser
 
