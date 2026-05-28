@@ -53,7 +53,20 @@
         "example_cost_krw": 250000,
         "example_target_premium": 4.0,
         "example_profit_krw": 1000000,
-        "description": "주요 포지션을 올청한 뒤에도 초강세 흐름이 이어질 때는 당일 수익을 담보로 다른 1.0 근처 옵션 1계약을 버린다는 마음으로 남겨두는 추가 수익 전략을 고려한다. 손실나도 당일 수익 안에서 감당 가능한 소액이어야 한다."
+        "description": "주요 포지션을 올청한 뒤에도 초강세 흐름이 이어질 때는 당일 수익을 담보로 다른 1.0 근처 옵션 1계약을 버린다는 마음으로 남겨두는 추가 수익 전략을 고려한다. 손실나도 당일 수익 안에서 감당 가능한 소액이어야 한다.",
+        "final_20_minutes": {
+          "status": "active_rule",
+          "minutes_before_expiry": 20,
+          "theta_decay_speed": "extreme",
+          "max_budget_profit_pct": 10,
+          "budget_formula": "daily_realized_profit * 0.10",
+          "example_daily_profit_krw": 1000000,
+          "example_max_budget_krw": 100000,
+          "estimated_hit_probability_max_pct": 10,
+          "allowed_only_when_profit_surplus": true,
+          "action": "LOTTERY_PLAY_ONLY_UNDER_CAP_OR_SKIP",
+          "description": "위클리 만기 20분 전부터는 프리미엄이 빛의 속도로 급감하므로 복권 플레이는 오늘 수익금의 10% 이하만 허용한다. 예를 들어 100만원 수익이면 10만원 이하만 가능하며, 수익이 넉넉할 때만 시도한다. 맞출 확률은 10% 이내로 낮게 본다."
+        }
       }
     },
     "downside_pressure_filter": {
@@ -625,6 +638,11 @@
       "description": "올청 이후에도 강한 장이면 다른 1.0 근처 옵션 1계약을 당일 수익담보 안에서 버려두는 추가 수익 후보로 본다."
     },
     {
+      "key": "EXPIRY_FINAL_20M_LOTTERY_CAP",
+      "label": "만기 20분 전 복권 제한",
+      "description": "만기 20분 전부터는 프리미엄 급감이 극단적이므로 복권 플레이는 오늘 수익금의 10% 이하, 수익이 넉넉할 때만 허용한다. 적중 확률은 10% 이내로 낮게 본다."
+    },
+    {
       "key": "ETF_SEPARATE_RULESET",
       "label": "KODEX200 별도 규칙",
       "description": "KODEX200 ETF는 옵션과 달리 프리미엄 폭발 구조가 아니므로 손절과 재진입 대응을 분리된 규칙으로 설계한다."
@@ -742,6 +760,8 @@
     "만기일 줄먹 병행 비율을 20~30%, 50%, 100% 중 어떤 단계에 얼마씩 둘지 확인이 필요하다.",
     "10배 러너 후보에서 트레일링 스탑을 옵션 고점 대비 몇 퍼센트 또는 지수 어떤 선 이탈로 볼지 확인이 필요하다.",
     "올청 후 수익담보 1.0 옵션을 허용할 때 최대 금액과 손절 여부를 확정해야 한다.",
+    "만기 20분 전 복권 플레이의 오늘 수익금 10% 한도를 실현손익 기준으로 볼지, 수수료 차감 후 순수익 기준으로 볼지 확인이 필요하다.",
+    "복권 플레이 적중 확률 10% 이내를 앱에서 경고 점수로 표시할지, 단순 안내 문구로만 둘지 정해야 한다.",
     "KODEX200 ETF 전략은 옵션 전략과 별도 탭으로 분리할지, 지수 매매 탭 안에 ETF 모드로 둘지 확인이 필요하다."
   ]
 }

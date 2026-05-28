@@ -1180,6 +1180,7 @@ function renderWeeklyHero() {
   const afterLock = money.after_lock || {};
   const profitScalp = afterLock.profit_collateral_scalp || {};
   const profitLottery = afterLock.profit_collateral_lottery || {};
+  const lotteryFinalRule = profitLottery.final_20_minutes || {};
   const pressureFilter = money.downside_pressure_filter || {};
   const entry = strategy.entry || {};
   const date = (state.report?.generated_at || "").slice(0, 10) || "공식 정리";
@@ -1206,6 +1207,7 @@ function renderWeeklyPanel() {
   const afterLock = money.after_lock || {};
   const profitScalp = afterLock.profit_collateral_scalp || {};
   const profitLottery = afterLock.profit_collateral_lottery || {};
+  const lotteryFinalRule = profitLottery.final_20_minutes || {};
   const pressureFilter = money.downside_pressure_filter || {};
   const entry = strategy.entry || {};
   const rolePlan = strategy.position_roles || {};
@@ -1268,6 +1270,8 @@ function renderWeeklyPanel() {
     { label: "이후 진입", value: `${afterLock.max_contracts || 1}계약만`, text: afterLock.description || "급소자리 외에는 진입하지 않고 수익담보 내에서만 운용합니다." },
     { label: "수익담보 눌림", value: `${profitScalp.max_contracts || 1}계약`, text: profitScalp.description || "전환선 눌림에서 1계약만 진입하고 30이평 터치 시 청산합니다." },
     { label: profitLottery.label || "수익담보 소액 옵션", value: `${formatNum(profitLottery.target_entry_premium || 1, 1)} → ${formatNum(profitLottery.example_target_premium || 4, 1)}`, text: profitLottery.description || "올청 후에도 강한 장이면 당일 수익담보 안에서 소액 옵션을 버려두는 후보로 봅니다." },
+    { label: "만기 20분 전", value: `수익금 ${formatNum(lotteryFinalRule.max_budget_profit_pct || 10, 0)}% 이하`, text: lotteryFinalRule.description || "만기 20분 전부터는 프리미엄 급감이 극단적이므로 복권 플레이는 수익담보 안에서도 더 작게 제한합니다." },
+    { label: "복권 적중률", value: `${formatNum(lotteryFinalRule.estimated_hit_probability_max_pct || 10, 0)}% 이내`, text: lotteryFinalRule.allowed_only_when_profit_surplus ? "수익이 넉넉할 때만 허용하고, 아니면 스킵합니다." : "적중 확률을 낮게 보고 소액만 허용합니다." },
     { label: "하락 압력", value: `${pressureFilter.max_contracts || 1}계약`, text: pressureFilter.description || "5분봉이 30이평, 전환선, 기준선 아래이면 최소 물량만 시도합니다." },
     { label: "100% 앞선 자리", value: "최소 물량", text: entryTiming.description || "우측 바닥이 더 높게 돌 수 있어 100%를 딱 기다리지 않고 앞선 자리도 봅니다." },
     { label: "만기 12시 후", value: `${formatNum(afterNoonPlan.strike_offset_pct || 1.5, 1)}% / ${afterNoonPremiumRange}`, text: afterNoonPlan.description || "프리미엄 급감 구간에서는 더 가까운 행사가와 낮은 프리미엄으로 재선정합니다." },
@@ -1340,6 +1344,11 @@ function renderWeeklyPanel() {
       <span>수익담보 소액</span>
       <strong>${formatNum(profitLottery.target_entry_premium || 1, 1)}짜리 1계약</strong>
       <small>${escapeHtml(profitLottery.description || "올청 후 당일 수익담보 안에서 버려두는 추가 수익 후보입니다.")}</small>
+    </article>
+    <article class="option-summary-card">
+      <span>만기 20분전</span>
+      <strong>수익금 ${formatNum(lotteryFinalRule.max_budget_profit_pct || 10, 0)}% 이하</strong>
+      <small>100만원 수익이면 10만원 이하 · 적중확률 ${formatNum(lotteryFinalRule.estimated_hit_probability_max_pct || 10, 0)}% 이내</small>
     </article>
     <article class="option-summary-card">
       <span>쌍바닥 타이밍</span>
@@ -1436,6 +1445,11 @@ function renderWeeklyPanel() {
       <span>수익담보 소액 옵션</span>
       <strong>${formatNum(profitLottery.target_entry_premium || 1, 1)} → ${formatNum(profitLottery.example_target_premium || 4, 1)}</strong>
       <small>${escapeHtml(profitLottery.description || "주요 포지션 올청 후 당일 수익담보 안에서 소액 옵션을 버려두는 후보입니다.")}</small>
+    </article>
+    <article class="target-item stop">
+      <span>만기 20분 전 제한</span>
+      <strong>오늘 수익금 ${formatNum(lotteryFinalRule.max_budget_profit_pct || 10, 0)}% 이하</strong>
+      <small>${escapeHtml(lotteryFinalRule.description || "복권 플레이는 수익이 넉넉할 때만 허용하고 예산을 넘으면 스킵합니다.")}</small>
     </article>
     <article class="target-item switch">
       <span>KODEX200 ETF 분리</span>
