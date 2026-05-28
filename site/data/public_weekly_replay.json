@@ -1,0 +1,1447 @@
+{
+  "status": "public_data",
+  "label": "최근 1주 공개 차트 복기",
+  "date_range": "2026-05-21~2026-05-28",
+  "data_basis": "public_kospi200_5m_index_only",
+  "active_session_id": "2026-05-28",
+  "notice": "REST API 연결 전 임시 화면이다. Yahoo Finance의 공개 KOSPI200 5분봉으로 지수 자리와 신호를 복기하며, 옵션 프리미엄/체결가/계좌 손익은 표시하지 않는다.",
+  "source": {
+    "provider": "Yahoo Finance chart API",
+    "symbol": "^KS200",
+    "interval": "5m",
+    "timezone": "Asia/Seoul",
+    "url": "https://query1.finance.yahoo.com/v8/finance/chart/%5EKS200?period1=1779202800&period2=1779980400&interval=5m&includePrePost=false"
+  },
+  "sessions": [
+    {
+      "id": "2026-05-21",
+      "label": "05/21 목",
+      "date": "2026-05-21",
+      "weekday": "THU",
+      "weekday_label": "목",
+      "status": "public_reviewed",
+      "action": "PUBLIC_REPLAY_READY",
+      "summary": "목요일 만기 · 저점 콜 트라이 후 잔량 청산 후보",
+      "profile": {
+        "key": "expiry",
+        "label": "목요일 만기",
+        "note": "목요일은 만기일로 보고 시간대별 프리미엄 급감과 줄먹 규칙을 강하게 적용한다."
+      },
+      "signal_count": 6,
+      "source": "Yahoo Finance ^KS200 5m",
+      "day_open": 1171.1,
+      "day_close": 1224.48,
+      "day_change": 53.38,
+      "day_change_pct": 4.56,
+      "levels": {
+        "day_high": 1225.56,
+        "day_low": 1170.63,
+        "fib_382": 1204.58,
+        "fib_50": 1198.1,
+        "fib_618": 1191.61,
+        "fib_100": 1170.63,
+        "reset_mid_618_100": 1181.12
+      },
+      "series": [
+        {
+          "time": "09:00",
+          "index": 1180.72,
+          "gma30": null,
+          "gma50": null,
+          "tenkan": null,
+          "kijun": null,
+          "volume": 0
+        },
+        {
+          "time": "09:20",
+          "index": 1180.56,
+          "gma30": null,
+          "gma50": null,
+          "tenkan": null,
+          "kijun": null,
+          "volume": 3906
+        },
+        {
+          "time": "09:40",
+          "index": 1190.41,
+          "gma30": null,
+          "gma50": null,
+          "tenkan": 1182.34,
+          "kijun": null,
+          "volume": 3889
+        },
+        {
+          "time": "10:00",
+          "index": 1195.97,
+          "gma30": null,
+          "gma50": null,
+          "tenkan": 1187.05,
+          "kijun": null,
+          "volume": 3560
+        },
+        {
+          "time": "10:20",
+          "index": 1202.48,
+          "gma30": null,
+          "gma50": null,
+          "tenkan": 1196.35,
+          "kijun": null,
+          "volume": 2485
+        },
+        {
+          "time": "10:40",
+          "index": 1204.2,
+          "gma30": null,
+          "gma50": null,
+          "tenkan": 1200.25,
+          "kijun": null,
+          "volume": 3201
+        },
+        {
+          "time": "11:00",
+          "index": 1200.95,
+          "gma30": null,
+          "gma50": null,
+          "tenkan": 1202.48,
+          "kijun": null,
+          "volume": 2430
+        },
+        {
+          "time": "11:20",
+          "index": 1207.35,
+          "gma30": null,
+          "gma50": null,
+          "tenkan": 1202.48,
+          "kijun": 1192.48,
+          "volume": 2036
+        },
+        {
+          "time": "11:40",
+          "index": 1211.01,
+          "gma30": 1199.08,
+          "gma50": null,
+          "tenkan": 1206.55,
+          "kijun": 1200.92,
+          "volume": 2334
+        },
+        {
+          "time": "12:00",
+          "index": 1210.89,
+          "gma30": 1202.47,
+          "gma50": null,
+          "tenkan": 1208.9,
+          "kijun": 1202.9,
+          "volume": 2133
+        },
+        {
+          "time": "12:20",
+          "index": 1215.75,
+          "gma30": 1205.3,
+          "gma50": null,
+          "tenkan": 1212.57,
+          "kijun": 1206.39,
+          "volume": 1534
+        },
+        {
+          "time": "12:40",
+          "index": 1217.5,
+          "gma30": 1207.99,
+          "gma50": null,
+          "tenkan": 1213.89,
+          "kijun": 1207.37,
+          "volume": 1766
+        },
+        {
+          "time": "13:00",
+          "index": 1218.83,
+          "gma30": 1209.93,
+          "gma50": null,
+          "tenkan": 1216.06,
+          "kijun": 1207.83,
+          "volume": 1345
+        },
+        {
+          "time": "13:20",
+          "index": 1218.02,
+          "gma30": 1211.97,
+          "gma50": 1205.39,
+          "tenkan": 1216.57,
+          "kijun": 1211.41,
+          "volume": 1609
+        },
+        {
+          "time": "13:40",
+          "index": 1220.61,
+          "gma30": 1214.12,
+          "gma50": 1208.05,
+          "tenkan": 1217.89,
+          "kijun": 1214.71,
+          "volume": 2054
+        },
+        {
+          "time": "14:00",
+          "index": 1220.99,
+          "gma30": 1215.89,
+          "gma50": 1210.34,
+          "tenkan": 1218.55,
+          "kijun": 1215.71,
+          "volume": 2895
+        },
+        {
+          "time": "14:20",
+          "index": 1224.74,
+          "gma30": 1217.41,
+          "gma50": 1212.39,
+          "tenkan": 1221.15,
+          "kijun": 1217.2,
+          "volume": 2255
+        },
+        {
+          "time": "14:40",
+          "index": 1222.79,
+          "gma30": 1218.89,
+          "gma50": 1214.05,
+          "tenkan": 1222.34,
+          "kijun": 1219.25,
+          "volume": 2288
+        },
+        {
+          "time": "14:55",
+          "index": 1224.48,
+          "gma30": 1219.71,
+          "gma50": 1215.18,
+          "tenkan": 1222.21,
+          "kijun": 1219.49,
+          "volume": 2441
+        }
+      ],
+      "signals": [
+        {
+          "time": "09:00",
+          "point_index": 0,
+          "type": "watch",
+          "label": "장 시작 관찰",
+          "action": "WAIT",
+          "index_value": 1180.72,
+          "message": "공개 KOSPI200 5분봉으로 당일 고저와 이평을 계산한다. 옵션 프리미엄은 아직 추정하지 않는다.",
+          "alert": "지수 자리 계산 시작"
+        },
+        {
+          "time": "09:05",
+          "point_index": 1,
+          "type": "buy",
+          "label": "밑꼬리 트라이",
+          "action": "CALL_RETRY",
+          "index_value": 1170.63,
+          "message": "저점에서 6p 밑꼬리 회복이 나와 즉시 콜 재진입/자리이동 후보로 본다.",
+          "alert": "2~3계약 재시작 후보"
+        },
+        {
+          "time": "09:35",
+          "point_index": 2,
+          "type": "sell",
+          "label": "61.8% 도달",
+          "action": "TAKE_PARTIAL",
+          "index_value": 1191.61,
+          "message": "바닥 바운딩 뒤 61.8% 라인에 닿으면 안전마진 물량 청산 후보로 본다.",
+          "alert": "부분청산 후보"
+        },
+        {
+          "time": "10:05",
+          "point_index": 4,
+          "type": "runner",
+          "label": "50% 도전",
+          "action": "RUNNER_OR_EXIT",
+          "index_value": 1198.1,
+          "message": "61.8% 이후 전환선 위 흐름이 유지되면 50% 라인 또는 50이평 근처까지 잔량을 끌고 갈 수 있다.",
+          "alert": "잔량 청산/러너 판단"
+        },
+        {
+          "time": "14:55",
+          "point_index": 18,
+          "type": "watch",
+          "label": "당일 고점 기준",
+          "action": "ANCHOR_HIGH",
+          "index_value": 1225.56,
+          "message": "당일 고점 1225.56 기준으로 61.8%, 50%, 38.2% 목표선을 계산한다.",
+          "alert": "전구간 피보나치 준비"
+        },
+        {
+          "time": "14:55",
+          "point_index": 18,
+          "type": "stop",
+          "label": "복권 제한",
+          "action": "LOTTERY_LIMIT",
+          "index_value": 1224.48,
+          "message": "만기 20분 전 이후 복권 플레이는 수수료 차감 후 순수익 10% 이하만 허용한다.",
+          "alert": "수익이 충분하지 않으면 종료"
+        }
+      ],
+      "trade_plan": {
+        "result": "runner_exit_ready",
+        "label": "저점 콜 트라이 후 잔량 청산 후보",
+        "text": "저점 09:05 이후 61.8%와 50% 목표를 모두 확인했다. 안전마진 청산 뒤 잔량은 50%/50이평 터치 올청 후보로 표시한다."
+      },
+      "stats": {
+        "high_time": "14:55",
+        "low_time": "09:05",
+        "low_wick_points": 6,
+        "bounce_pct": 100,
+        "reached_618": true,
+        "reached_50": true
+      }
+    },
+    {
+      "id": "2026-05-22",
+      "label": "05/22 금",
+      "date": "2026-05-22",
+      "weekday": "FRI",
+      "weekday_label": "금",
+      "status": "public_reviewed",
+      "action": "PUBLIC_REPLAY_READY",
+      "summary": "금요일 관찰 · 저점 콜 트라이 후 잔량 청산 후보",
+      "profile": {
+        "key": "next_cycle_watch",
+        "label": "금요일 관찰",
+        "note": "금요일은 다음 위클리 사이클 기준이 아직 미확정이라 지수 자리만 복기한다."
+      },
+      "signal_count": 7,
+      "source": "Yahoo Finance ^KS200 5m",
+      "day_open": 1232.73,
+      "day_close": 1224.28,
+      "day_change": -8.45,
+      "day_change_pct": -0.69,
+      "levels": {
+        "day_high": 1235.4,
+        "day_low": 1214.77,
+        "fib_382": 1227.52,
+        "fib_50": 1225.09,
+        "fib_618": 1222.65,
+        "fib_100": 1214.77,
+        "reset_mid_618_100": 1218.71
+      },
+      "series": [
+        {
+          "time": "09:00",
+          "index": 1225.99,
+          "gma30": 1220.02,
+          "gma50": 1215.76,
+          "tenkan": 1227.13,
+          "kijun": 1225,
+          "volume": 13584
+        },
+        {
+          "time": "09:20",
+          "index": 1229.44,
+          "gma30": 1221.31,
+          "gma50": 1217.7,
+          "tenkan": 1226.89,
+          "kijun": 1225.29,
+          "volume": 5743
+        },
+        {
+          "time": "09:40",
+          "index": 1229.17,
+          "gma30": 1222.64,
+          "gma50": 1219.31,
+          "tenkan": 1226.89,
+          "kijun": 1225.29,
+          "volume": 2938
+        },
+        {
+          "time": "10:00",
+          "index": 1218.69,
+          "gma30": 1223.2,
+          "gma50": 1220.15,
+          "tenkan": 1222.85,
+          "kijun": 1225.09,
+          "volume": 3007
+        },
+        {
+          "time": "10:20",
+          "index": 1223.82,
+          "gma30": 1223.67,
+          "gma50": 1221.1,
+          "tenkan": 1222.74,
+          "kijun": 1225.09,
+          "volume": 2219
+        },
+        {
+          "time": "10:40",
+          "index": 1228.28,
+          "gma30": 1224.28,
+          "gma50": 1221.93,
+          "tenkan": 1221.96,
+          "kijun": 1225.09,
+          "volume": 1636
+        },
+        {
+          "time": "11:00",
+          "index": 1226.73,
+          "gma30": 1224.89,
+          "gma50": 1222.83,
+          "tenkan": 1225.47,
+          "kijun": 1225.09,
+          "volume": 1236
+        },
+        {
+          "time": "11:20",
+          "index": 1222.76,
+          "gma30": 1225.25,
+          "gma50": 1223.42,
+          "tenkan": 1226.38,
+          "kijun": 1222.85,
+          "volume": 1238
+        },
+        {
+          "time": "11:40",
+          "index": 1226.26,
+          "gma30": 1225.13,
+          "gma50": 1224.02,
+          "tenkan": 1224.89,
+          "kijun": 1222.85,
+          "volume": 1277
+        },
+        {
+          "time": "12:00",
+          "index": 1225.42,
+          "gma30": 1224.99,
+          "gma50": 1224.43,
+          "tenkan": 1224.89,
+          "kijun": 1222.56,
+          "volume": 981
+        },
+        {
+          "time": "12:20",
+          "index": 1221.91,
+          "gma30": 1224.43,
+          "gma50": 1224.55,
+          "tenkan": 1224.68,
+          "kijun": 1225.47,
+          "volume": 902
+        },
+        {
+          "time": "12:40",
+          "index": 1224.38,
+          "gma30": 1224.73,
+          "gma50": 1224.53,
+          "tenkan": 1223.68,
+          "kijun": 1225.59,
+          "volume": 1091
+        },
+        {
+          "time": "13:00",
+          "index": 1226.03,
+          "gma30": 1224.83,
+          "gma50": 1224.71,
+          "tenkan": 1223.5,
+          "kijun": 1224.46,
+          "volume": 1440
+        },
+        {
+          "time": "13:20",
+          "index": 1227.68,
+          "gma30": 1224.75,
+          "gma50": 1224.89,
+          "tenkan": 1225.5,
+          "kijun": 1224.83,
+          "volume": 1358
+        },
+        {
+          "time": "13:40",
+          "index": 1225.86,
+          "gma30": 1224.86,
+          "gma50": 1224.97,
+          "tenkan": 1226.66,
+          "kijun": 1224.84,
+          "volume": 1186
+        },
+        {
+          "time": "14:00",
+          "index": 1228.46,
+          "gma30": 1225.28,
+          "gma50": 1225,
+          "tenkan": 1227.49,
+          "kijun": 1225.31,
+          "volume": 1591
+        },
+        {
+          "time": "14:20",
+          "index": 1228.72,
+          "gma30": 1225.67,
+          "gma50": 1225.62,
+          "tenkan": 1227.64,
+          "kijun": 1225.46,
+          "volume": 1579
+        },
+        {
+          "time": "14:40",
+          "index": 1229.99,
+          "gma30": 1226.49,
+          "gma50": 1226.08,
+          "tenkan": 1229.24,
+          "kijun": 1226.61,
+          "volume": 1955
+        },
+        {
+          "time": "14:55",
+          "index": 1224.28,
+          "gma30": 1227.04,
+          "gma50": 1226.03,
+          "tenkan": 1227.44,
+          "kijun": 1226.61,
+          "volume": 2707
+        }
+      ],
+      "signals": [
+        {
+          "time": "09:00",
+          "point_index": 0,
+          "type": "watch",
+          "label": "장 시작 관찰",
+          "action": "WAIT",
+          "index_value": 1225.99,
+          "message": "공개 KOSPI200 5분봉으로 당일 고저와 이평을 계산한다. 옵션 프리미엄은 아직 추정하지 않는다.",
+          "alert": "지수 자리 계산 시작"
+        },
+        {
+          "time": "09:00",
+          "point_index": 0,
+          "type": "watch",
+          "label": "당일 고점 기준",
+          "action": "ANCHOR_HIGH",
+          "index_value": 1235.4,
+          "message": "당일 고점 1235.4 기준으로 61.8%, 50%, 38.2% 목표선을 계산한다.",
+          "alert": "전구간 피보나치 준비"
+        },
+        {
+          "time": "09:50",
+          "point_index": 3,
+          "type": "warning",
+          "label": "하락 압력",
+          "action": "NO_FULL_SIZE",
+          "index_value": 1221.02,
+          "message": "가격이 30이평과 전환선 아래로 밀려 풀 3계약 진입을 금지하고 최소 물량만 허용한다.",
+          "alert": "쌍바닥/밑꼬리만 감시"
+        },
+        {
+          "time": "10:00",
+          "point_index": 3,
+          "type": "buy",
+          "label": "밑꼬리 트라이",
+          "action": "CALL_RETRY",
+          "index_value": 1214.77,
+          "message": "저점에서 3.9p 밑꼬리 회복이 나와 즉시 콜 재진입/자리이동 후보로 본다.",
+          "alert": "2~3계약 재시작 후보"
+        },
+        {
+          "time": "10:10",
+          "point_index": 4,
+          "type": "sell",
+          "label": "61.8% 도달",
+          "action": "TAKE_PARTIAL",
+          "index_value": 1222.65,
+          "message": "바닥 바운딩 뒤 61.8% 라인에 닿으면 안전마진 물량 청산 후보로 본다.",
+          "alert": "부분청산 후보"
+        },
+        {
+          "time": "10:10",
+          "point_index": 4,
+          "type": "runner",
+          "label": "50% 도전",
+          "action": "RUNNER_OR_EXIT",
+          "index_value": 1225.09,
+          "message": "61.8% 이후 전환선 위 흐름이 유지되면 50% 라인 또는 50이평 근처까지 잔량을 끌고 갈 수 있다.",
+          "alert": "잔량 청산/러너 판단"
+        },
+        {
+          "time": "14:55",
+          "point_index": 18,
+          "type": "stop",
+          "label": "복권 제한",
+          "action": "LOTTERY_LIMIT",
+          "index_value": 1224.28,
+          "message": "만기 20분 전 이후 복권 플레이는 수수료 차감 후 순수익 10% 이하만 허용한다.",
+          "alert": "수익이 충분하지 않으면 종료"
+        }
+      ],
+      "trade_plan": {
+        "result": "runner_exit_ready",
+        "label": "저점 콜 트라이 후 잔량 청산 후보",
+        "text": "저점 10:00 이후 61.8%와 50% 목표를 모두 확인했다. 안전마진 청산 뒤 잔량은 50%/50이평 터치 올청 후보로 표시한다."
+      },
+      "stats": {
+        "high_time": "09:00",
+        "low_time": "10:00",
+        "low_wick_points": 3.9,
+        "bounce_pct": 78.8,
+        "reached_618": true,
+        "reached_50": true
+      }
+    },
+    {
+      "id": "2026-05-26",
+      "label": "05/26 화",
+      "date": "2026-05-26",
+      "weekday": "TUE",
+      "weekday_label": "화",
+      "status": "public_reviewed",
+      "action": "PUBLIC_REPLAY_READY",
+      "summary": "화·수 보정 · 저점 콜 트라이 후 잔량 청산 후보",
+      "profile": {
+        "key": "d_minus_adjusted",
+        "label": "화·수 보정",
+        "note": "큰 지수 자리는 같게 보되 프리미엄과 행사가 거리는 D-1/D-2 보정값으로 다르게 잡는다."
+      },
+      "signal_count": 7,
+      "source": "Yahoo Finance ^KS200 5m",
+      "day_open": 1262.2,
+      "day_close": 1267.55,
+      "day_change": 5.35,
+      "day_change_pct": 0.42,
+      "levels": {
+        "day_high": 1274.96,
+        "day_low": 1252.13,
+        "fib_382": 1266.24,
+        "fib_50": 1263.55,
+        "fib_618": 1260.85,
+        "fib_100": 1252.13,
+        "reset_mid_618_100": 1256.49
+      },
+      "series": [
+        {
+          "time": "09:00",
+          "index": 1260.83,
+          "gma30": 1228.29,
+          "gma50": 1226.68,
+          "tenkan": 1245.18,
+          "kijun": 1245.02,
+          "volume": 0
+        },
+        {
+          "time": "09:20",
+          "index": 1259.38,
+          "gma30": 1232.48,
+          "gma50": 1229.01,
+          "tenkan": 1245.18,
+          "kijun": 1245.18,
+          "volume": 4709
+        },
+        {
+          "time": "09:40",
+          "index": 1270.87,
+          "gma30": 1238.23,
+          "gma50": 1232.67,
+          "tenkan": 1263.55,
+          "kijun": 1249.41,
+          "volume": 4122
+        },
+        {
+          "time": "10:00",
+          "index": 1268.34,
+          "gma30": 1243.95,
+          "gma50": 1236.26,
+          "tenkan": 1264.43,
+          "kijun": 1249.41,
+          "volume": 2660
+        },
+        {
+          "time": "10:20",
+          "index": 1270.54,
+          "gma30": 1249.6,
+          "gma50": 1239.82,
+          "tenkan": 1267.44,
+          "kijun": 1249.41,
+          "volume": 2516
+        },
+        {
+          "time": "10:40",
+          "index": 1260.71,
+          "gma30": 1254.43,
+          "gma50": 1243.18,
+          "tenkan": 1264.91,
+          "kijun": 1249.41,
+          "volume": 3261
+        },
+        {
+          "time": "11:00",
+          "index": 1267.18,
+          "gma30": 1259.55,
+          "gma50": 1246.65,
+          "tenkan": 1264.37,
+          "kijun": 1249.41,
+          "volume": 1864
+        },
+        {
+          "time": "11:20",
+          "index": 1267.67,
+          "gma30": 1264.84,
+          "gma50": 1250,
+          "tenkan": 1263.63,
+          "kijun": 1264.26,
+          "volume": 1285
+        },
+        {
+          "time": "11:40",
+          "index": 1267.94,
+          "gma30": 1267.48,
+          "gma50": 1253.26,
+          "tenkan": 1268.15,
+          "kijun": 1265.87,
+          "volume": 1315
+        },
+        {
+          "time": "12:00",
+          "index": 1264.45,
+          "gma30": 1267.91,
+          "gma50": 1256.45,
+          "tenkan": 1267.24,
+          "kijun": 1265.13,
+          "volume": 2170
+        },
+        {
+          "time": "12:20",
+          "index": 1269.2,
+          "gma30": 1267.32,
+          "gma50": 1259.61,
+          "tenkan": 1267.09,
+          "kijun": 1264.37,
+          "volume": 1933
+        },
+        {
+          "time": "12:40",
+          "index": 1270.63,
+          "gma30": 1267.61,
+          "gma50": 1262.93,
+          "tenkan": 1267.91,
+          "kijun": 1264.21,
+          "volume": 1197
+        },
+        {
+          "time": "13:00",
+          "index": 1269.5,
+          "gma30": 1267.72,
+          "gma50": 1266.22,
+          "tenkan": 1269.14,
+          "kijun": 1267.91,
+          "volume": 1230
+        },
+        {
+          "time": "13:20",
+          "index": 1269.97,
+          "gma30": 1268.65,
+          "gma50": 1268.04,
+          "tenkan": 1270.72,
+          "kijun": 1268.37,
+          "volume": 1459
+        },
+        {
+          "time": "13:40",
+          "index": 1268.05,
+          "gma30": 1268.73,
+          "gma50": 1268.57,
+          "tenkan": 1270.08,
+          "kijun": 1268.37,
+          "volume": 1393
+        },
+        {
+          "time": "14:00",
+          "index": 1261.08,
+          "gma30": 1268.32,
+          "gma50": 1268,
+          "tenkan": 1266.22,
+          "kijun": 1266.49,
+          "volume": 2250
+        },
+        {
+          "time": "14:20",
+          "index": 1264.63,
+          "gma30": 1267.94,
+          "gma50": 1267.71,
+          "tenkan": 1264.72,
+          "kijun": 1266.24,
+          "volume": 1473
+        },
+        {
+          "time": "14:40",
+          "index": 1265.76,
+          "gma30": 1267.81,
+          "gma50": 1267.37,
+          "tenkan": 1263.16,
+          "kijun": 1266.24,
+          "volume": 1559
+        },
+        {
+          "time": "14:55",
+          "index": 1267.55,
+          "gma30": 1267.67,
+          "gma50": 1267.64,
+          "tenkan": 1265.28,
+          "kijun": 1266.24,
+          "volume": 2059
+        }
+      ],
+      "signals": [
+        {
+          "time": "09:00",
+          "point_index": 0,
+          "type": "watch",
+          "label": "장 시작 관찰",
+          "action": "WAIT",
+          "index_value": 1260.83,
+          "message": "공개 KOSPI200 5분봉으로 당일 고저와 이평을 계산한다. 옵션 프리미엄은 아직 추정하지 않는다.",
+          "alert": "지수 자리 계산 시작"
+        },
+        {
+          "time": "09:10",
+          "point_index": 1,
+          "type": "buy",
+          "label": "밑꼬리 트라이",
+          "action": "CALL_RETRY",
+          "index_value": 1252.13,
+          "message": "저점에서 4.5p 밑꼬리 회복이 나와 즉시 콜 재진입/자리이동 후보로 본다.",
+          "alert": "2~3계약 재시작 후보"
+        },
+        {
+          "time": "09:25",
+          "point_index": 2,
+          "type": "sell",
+          "label": "61.8% 도달",
+          "action": "TAKE_PARTIAL",
+          "index_value": 1260.85,
+          "message": "바닥 바운딩 뒤 61.8% 라인에 닿으면 안전마진 물량 청산 후보로 본다.",
+          "alert": "부분청산 후보"
+        },
+        {
+          "time": "09:25",
+          "point_index": 2,
+          "type": "runner",
+          "label": "50% 도전",
+          "action": "RUNNER_OR_EXIT",
+          "index_value": 1263.55,
+          "message": "61.8% 이후 전환선 위 흐름이 유지되면 50% 라인 또는 50이평 근처까지 잔량을 끌고 갈 수 있다.",
+          "alert": "잔량 청산/러너 판단"
+        },
+        {
+          "time": "09:35",
+          "point_index": 2,
+          "type": "watch",
+          "label": "당일 고점 기준",
+          "action": "ANCHOR_HIGH",
+          "index_value": 1274.96,
+          "message": "당일 고점 1274.96 기준으로 61.8%, 50%, 38.2% 목표선을 계산한다.",
+          "alert": "전구간 피보나치 준비"
+        },
+        {
+          "time": "11:45",
+          "point_index": 9,
+          "type": "warning",
+          "label": "하락 압력",
+          "action": "NO_FULL_SIZE",
+          "index_value": 1265.98,
+          "message": "가격이 30이평과 전환선 아래로 밀려 풀 3계약 진입을 금지하고 최소 물량만 허용한다.",
+          "alert": "쌍바닥/밑꼬리만 감시"
+        },
+        {
+          "time": "14:55",
+          "point_index": 18,
+          "type": "stop",
+          "label": "복권 제한",
+          "action": "LOTTERY_LIMIT",
+          "index_value": 1267.55,
+          "message": "만기 20분 전 이후 복권 플레이는 수수료 차감 후 순수익 10% 이하만 허용한다.",
+          "alert": "수익이 충분하지 않으면 종료"
+        }
+      ],
+      "trade_plan": {
+        "result": "runner_exit_ready",
+        "label": "저점 콜 트라이 후 잔량 청산 후보",
+        "text": "저점 09:10 이후 61.8%와 50% 목표를 모두 확인했다. 안전마진 청산 뒤 잔량은 50%/50이평 터치 올청 후보로 표시한다."
+      },
+      "stats": {
+        "high_time": "09:35",
+        "low_time": "09:10",
+        "low_wick_points": 4.5,
+        "bounce_pct": 100,
+        "reached_618": true,
+        "reached_50": true
+      }
+    },
+    {
+      "id": "2026-05-27",
+      "label": "05/27 수",
+      "date": "2026-05-27",
+      "weekday": "WED",
+      "weekday_label": "수",
+      "status": "public_reviewed",
+      "action": "PUBLIC_REPLAY_READY",
+      "summary": "화·수 보정 · 저점 콜 트라이 후 잔량 청산 후보",
+      "profile": {
+        "key": "d_minus_adjusted",
+        "label": "화·수 보정",
+        "note": "큰 지수 자리는 같게 보되 프리미엄과 행사가 거리는 D-1/D-2 보정값으로 다르게 잡는다."
+      },
+      "signal_count": 7,
+      "source": "Yahoo Finance ^KS200 5m",
+      "day_open": 1296.31,
+      "day_close": 1308.81,
+      "day_change": 12.5,
+      "day_change_pct": 0.96,
+      "levels": {
+        "day_high": 1340.85,
+        "day_low": 1291.71,
+        "fib_382": 1322.08,
+        "fib_50": 1316.28,
+        "fib_618": 1310.48,
+        "fib_100": 1291.71,
+        "reset_mid_618_100": 1301.1
+      },
+      "series": [
+        {
+          "time": "09:00",
+          "index": 1329.22,
+          "gma30": 1269.58,
+          "gma50": 1268.82,
+          "tenkan": 1298.74,
+          "kijun": 1297.51,
+          "volume": 16440
+        },
+        {
+          "time": "09:20",
+          "index": 1311.22,
+          "gma30": 1276.37,
+          "gma50": 1273.05,
+          "tenkan": 1298.9,
+          "kijun": 1297.51,
+          "volume": 9049
+        },
+        {
+          "time": "09:40",
+          "index": 1325.34,
+          "gma30": 1283.28,
+          "gma50": 1277.4,
+          "tenkan": 1313.41,
+          "kijun": 1297.51,
+          "volume": 9960
+        },
+        {
+          "time": "10:00",
+          "index": 1318.19,
+          "gma30": 1290.1,
+          "gma50": 1281.71,
+          "tenkan": 1316.07,
+          "kijun": 1297.51,
+          "volume": 4387
+        },
+        {
+          "time": "10:20",
+          "index": 1326.03,
+          "gma30": 1297.07,
+          "gma50": 1285.97,
+          "tenkan": 1320,
+          "kijun": 1298.74,
+          "volume": 2806
+        },
+        {
+          "time": "10:40",
+          "index": 1323.97,
+          "gma30": 1305.22,
+          "gma50": 1290.4,
+          "tenkan": 1319.81,
+          "kijun": 1298.74,
+          "volume": 3300
+        },
+        {
+          "time": "11:00",
+          "index": 1327.41,
+          "gma30": 1313.58,
+          "gma50": 1294.88,
+          "tenkan": 1323.59,
+          "kijun": 1300.68,
+          "volume": 2187
+        },
+        {
+          "time": "11:20",
+          "index": 1334.29,
+          "gma30": 1322.23,
+          "gma50": 1299.61,
+          "tenkan": 1328.75,
+          "kijun": 1319.55,
+          "volume": 2577
+        },
+        {
+          "time": "11:40",
+          "index": 1338.5,
+          "gma30": 1325.47,
+          "gma50": 1304.97,
+          "tenkan": 1332.33,
+          "kijun": 1326.39,
+          "volume": 2205
+        },
+        {
+          "time": "12:00",
+          "index": 1337.15,
+          "gma30": 1327.94,
+          "gma50": 1310.66,
+          "tenkan": 1335.43,
+          "kijun": 1326.39,
+          "volume": 1674
+        },
+        {
+          "time": "12:20",
+          "index": 1336.6,
+          "gma30": 1329.56,
+          "gma50": 1316.49,
+          "tenkan": 1336.41,
+          "kijun": 1327.42,
+          "volume": 1310
+        },
+        {
+          "time": "12:40",
+          "index": 1336.91,
+          "gma30": 1332.19,
+          "gma50": 1322.41,
+          "tenkan": 1335.97,
+          "kijun": 1331.67,
+          "volume": 1508
+        },
+        {
+          "time": "13:00",
+          "index": 1331.53,
+          "gma30": 1333.34,
+          "gma50": 1327.84,
+          "tenkan": 1333.89,
+          "kijun": 1332.33,
+          "volume": 2771
+        },
+        {
+          "time": "13:20",
+          "index": 1324.12,
+          "gma30": 1333.93,
+          "gma50": 1329.14,
+          "tenkan": 1331.33,
+          "kijun": 1332.44,
+          "volume": 3084
+        },
+        {
+          "time": "13:40",
+          "index": 1321.79,
+          "gma30": 1332.72,
+          "gma50": 1329.06,
+          "tenkan": 1323.29,
+          "kijun": 1326.8,
+          "volume": 2199
+        },
+        {
+          "time": "14:00",
+          "index": 1318.12,
+          "gma30": 1331.1,
+          "gma50": 1328.91,
+          "tenkan": 1321.17,
+          "kijun": 1326.38,
+          "volume": 2037
+        },
+        {
+          "time": "14:20",
+          "index": 1317.21,
+          "gma30": 1327.92,
+          "gma50": 1328.63,
+          "tenkan": 1316.66,
+          "kijun": 1322.93,
+          "volume": 2596
+        },
+        {
+          "time": "14:40",
+          "index": 1319.73,
+          "gma30": 1325.2,
+          "gma50": 1328.06,
+          "tenkan": 1315.09,
+          "kijun": 1322.77,
+          "volume": 2900
+        },
+        {
+          "time": "14:55",
+          "index": 1308.81,
+          "gma30": 1322.25,
+          "gma50": 1327.03,
+          "tenkan": 1312.25,
+          "kijun": 1319.62,
+          "volume": 2795
+        }
+      ],
+      "signals": [
+        {
+          "time": "09:00",
+          "point_index": 0,
+          "type": "watch",
+          "label": "장 시작 관찰",
+          "action": "WAIT",
+          "index_value": 1329.22,
+          "message": "공개 KOSPI200 5분봉으로 당일 고저와 이평을 계산한다. 옵션 프리미엄은 아직 추정하지 않는다.",
+          "alert": "지수 자리 계산 시작"
+        },
+        {
+          "time": "09:00",
+          "point_index": 0,
+          "type": "buy",
+          "label": "밑꼬리 트라이",
+          "action": "CALL_RETRY",
+          "index_value": 1291.71,
+          "message": "저점에서 37.5p 밑꼬리 회복이 나와 즉시 콜 재진입/자리이동 후보로 본다.",
+          "alert": "2~3계약 재시작 후보"
+        },
+        {
+          "time": "09:05",
+          "point_index": 1,
+          "type": "sell",
+          "label": "61.8% 도달",
+          "action": "TAKE_PARTIAL",
+          "index_value": 1310.48,
+          "message": "바닥 바운딩 뒤 61.8% 라인에 닿으면 안전마진 물량 청산 후보로 본다.",
+          "alert": "부분청산 후보"
+        },
+        {
+          "time": "09:05",
+          "point_index": 1,
+          "type": "runner",
+          "label": "50% 도전",
+          "action": "RUNNER_OR_EXIT",
+          "index_value": 1316.28,
+          "message": "61.8% 이후 전환선 위 흐름이 유지되면 50% 라인 또는 50이평 근처까지 잔량을 끌고 갈 수 있다.",
+          "alert": "잔량 청산/러너 판단"
+        },
+        {
+          "time": "11:35",
+          "point_index": 8,
+          "type": "watch",
+          "label": "당일 고점 기준",
+          "action": "ANCHOR_HIGH",
+          "index_value": 1340.85,
+          "message": "당일 고점 1340.85 기준으로 61.8%, 50%, 38.2% 목표선을 계산한다.",
+          "alert": "전구간 피보나치 준비"
+        },
+        {
+          "time": "12:55",
+          "point_index": 12,
+          "type": "warning",
+          "label": "하락 압력",
+          "action": "NO_FULL_SIZE",
+          "index_value": 1329.68,
+          "message": "가격이 30이평과 전환선 아래로 밀려 풀 3계약 진입을 금지하고 최소 물량만 허용한다.",
+          "alert": "쌍바닥/밑꼬리만 감시"
+        },
+        {
+          "time": "14:55",
+          "point_index": 18,
+          "type": "stop",
+          "label": "복권 제한",
+          "action": "LOTTERY_LIMIT",
+          "index_value": 1308.81,
+          "message": "만기 20분 전 이후 복권 플레이는 수수료 차감 후 순수익 10% 이하만 허용한다.",
+          "alert": "수익이 충분하지 않으면 종료"
+        }
+      ],
+      "trade_plan": {
+        "result": "runner_exit_ready",
+        "label": "저점 콜 트라이 후 잔량 청산 후보",
+        "text": "저점 09:00 이후 61.8%와 50% 목표를 모두 확인했다. 안전마진 청산 뒤 잔량은 50%/50이평 터치 올청 후보로 표시한다."
+      },
+      "stats": {
+        "high_time": "11:35",
+        "low_time": "09:00",
+        "low_wick_points": 37.5,
+        "bounce_pct": 100,
+        "reached_618": true,
+        "reached_50": true
+      }
+    },
+    {
+      "id": "2026-05-28",
+      "label": "05/28 목",
+      "date": "2026-05-28",
+      "weekday": "THU",
+      "weekday_label": "목",
+      "status": "public_reviewed",
+      "action": "PUBLIC_REPLAY_READY",
+      "summary": "목요일 만기 · 저점 콜 트라이 후 잔량 청산 후보",
+      "profile": {
+        "key": "expiry",
+        "label": "목요일 만기",
+        "note": "목요일은 만기일로 보고 시간대별 프리미엄 급감과 줄먹 규칙을 강하게 적용한다."
+      },
+      "signal_count": 7,
+      "source": "Yahoo Finance ^KS200 5m",
+      "day_open": 1287.18,
+      "day_close": 1292.57,
+      "day_change": 5.39,
+      "day_change_pct": 0.42,
+      "levels": {
+        "day_high": 1305.67,
+        "day_low": 1235.32,
+        "fib_382": 1278.8,
+        "fib_50": 1270.49,
+        "fib_618": 1262.19,
+        "fib_100": 1235.32,
+        "reset_mid_618_100": 1248.76
+      },
+      "series": [
+        {
+          "time": "09:00",
+          "index": 1292.18,
+          "gma30": 1320.72,
+          "gma50": 1326.35,
+          "tenkan": 1302.05,
+          "kijun": 1307.96,
+          "volume": 13663
+        },
+        {
+          "time": "09:20",
+          "index": 1294.33,
+          "gma30": 1313.93,
+          "gma50": 1322.92,
+          "tenkan": 1296.62,
+          "kijun": 1302.61,
+          "volume": 5519
+        },
+        {
+          "time": "09:40",
+          "index": 1299.29,
+          "gma30": 1308.57,
+          "gma50": 1319.47,
+          "tenkan": 1286.18,
+          "kijun": 1299.26,
+          "volume": 3710
+        },
+        {
+          "time": "10:00",
+          "index": 1296.89,
+          "gma30": 1305.77,
+          "gma50": 1316.38,
+          "tenkan": 1293.64,
+          "kijun": 1299.26,
+          "volume": 3779
+        },
+        {
+          "time": "10:20",
+          "index": 1296.87,
+          "gma30": 1302.57,
+          "gma50": 1313.31,
+          "tenkan": 1298.67,
+          "kijun": 1297.07,
+          "volume": 2839
+        },
+        {
+          "time": "10:40",
+          "index": 1286.82,
+          "gma30": 1298.8,
+          "gma50": 1309.49,
+          "tenkan": 1294.94,
+          "kijun": 1296.62,
+          "volume": 2389
+        },
+        {
+          "time": "11:00",
+          "index": 1294.26,
+          "gma30": 1295.7,
+          "gma50": 1306.03,
+          "tenkan": 1291.24,
+          "kijun": 1292.43,
+          "volume": 2221
+        },
+        {
+          "time": "11:20",
+          "index": 1286.22,
+          "gma30": 1292.54,
+          "gma50": 1302.52,
+          "tenkan": 1290.49,
+          "kijun": 1291.67,
+          "volume": 2132
+        },
+        {
+          "time": "11:40",
+          "index": 1283.49,
+          "gma30": 1292.14,
+          "gma50": 1299.81,
+          "tenkan": 1290.85,
+          "kijun": 1294.04,
+          "volume": 1952
+        },
+        {
+          "time": "12:00",
+          "index": 1278.99,
+          "gma30": 1291.33,
+          "gma50": 1296.62,
+          "tenkan": 1284.13,
+          "kijun": 1292.24,
+          "volume": 1546
+        },
+        {
+          "time": "12:20",
+          "index": 1274.55,
+          "gma30": 1288.82,
+          "gma50": 1293.51,
+          "tenkan": 1280.81,
+          "kijun": 1287.55,
+          "volume": 2659
+        },
+        {
+          "time": "12:40",
+          "index": 1257.02,
+          "gma30": 1283.84,
+          "gma50": 1289.27,
+          "tenkan": 1269.05,
+          "kijun": 1276.4,
+          "volume": 3740
+        },
+        {
+          "time": "13:00",
+          "index": 1247.04,
+          "gma30": 1278.91,
+          "gma50": 1284.97,
+          "tenkan": 1262.9,
+          "kijun": 1272.81,
+          "volume": 3263
+        },
+        {
+          "time": "13:20",
+          "index": 1240.86,
+          "gma30": 1272.89,
+          "gma50": 1281.19,
+          "tenkan": 1250.68,
+          "kijun": 1262.38,
+          "volume": 3564
+        },
+        {
+          "time": "13:40",
+          "index": 1252.83,
+          "gma30": 1267.42,
+          "gma50": 1278.18,
+          "tenkan": 1246.86,
+          "kijun": 1262.39,
+          "volume": 2029
+        },
+        {
+          "time": "14:00",
+          "index": 1248.31,
+          "gma30": 1262.51,
+          "gma50": 1274.36,
+          "tenkan": 1246.86,
+          "kijun": 1260.55,
+          "volume": 2040
+        },
+        {
+          "time": "14:20",
+          "index": 1269.65,
+          "gma30": 1259.48,
+          "gma50": 1271.41,
+          "tenkan": 1258.14,
+          "kijun": 1258.57,
+          "volume": 1878
+        },
+        {
+          "time": "14:40",
+          "index": 1274.44,
+          "gma30": 1258.64,
+          "gma50": 1269.81,
+          "tenkan": 1262.55,
+          "kijun": 1256.94,
+          "volume": 2392
+        },
+        {
+          "time": "15:00",
+          "index": 1292.57,
+          "gma30": 1260.17,
+          "gma50": 1269.49,
+          "tenkan": 1276.85,
+          "kijun": 1263.94,
+          "volume": 0
+        }
+      ],
+      "signals": [
+        {
+          "time": "09:00",
+          "point_index": 0,
+          "type": "watch",
+          "label": "장 시작 관찰",
+          "action": "WAIT",
+          "index_value": 1292.18,
+          "message": "공개 KOSPI200 5분봉으로 당일 고저와 이평을 계산한다. 옵션 프리미엄은 아직 추정하지 않는다.",
+          "alert": "지수 자리 계산 시작"
+        },
+        {
+          "time": "09:55",
+          "point_index": 3,
+          "type": "watch",
+          "label": "당일 고점 기준",
+          "action": "ANCHOR_HIGH",
+          "index_value": 1305.67,
+          "message": "당일 고점 1305.67 기준으로 61.8%, 50%, 38.2% 목표선을 계산한다.",
+          "alert": "전구간 피보나치 준비"
+        },
+        {
+          "time": "10:20",
+          "point_index": 4,
+          "type": "warning",
+          "label": "하락 압력",
+          "action": "NO_FULL_SIZE",
+          "index_value": 1296.87,
+          "message": "가격이 30이평과 전환선 아래로 밀려 풀 3계약 진입을 금지하고 최소 물량만 허용한다.",
+          "alert": "쌍바닥/밑꼬리만 감시"
+        },
+        {
+          "time": "13:20",
+          "point_index": 13,
+          "type": "buy",
+          "label": "밑꼬리 트라이",
+          "action": "CALL_RETRY",
+          "index_value": 1235.32,
+          "message": "저점에서 5.5p 밑꼬리 회복이 나와 즉시 콜 재진입/자리이동 후보로 본다.",
+          "alert": "2~3계약 재시작 후보"
+        },
+        {
+          "time": "14:10",
+          "point_index": 16,
+          "type": "sell",
+          "label": "61.8% 도달",
+          "action": "TAKE_PARTIAL",
+          "index_value": 1262.19,
+          "message": "바닥 바운딩 뒤 61.8% 라인에 닿으면 안전마진 물량 청산 후보로 본다.",
+          "alert": "부분청산 후보"
+        },
+        {
+          "time": "14:25",
+          "point_index": 17,
+          "type": "runner",
+          "label": "50% 도전",
+          "action": "RUNNER_OR_EXIT",
+          "index_value": 1270.49,
+          "message": "61.8% 이후 전환선 위 흐름이 유지되면 50% 라인 또는 50이평 근처까지 잔량을 끌고 갈 수 있다.",
+          "alert": "잔량 청산/러너 판단"
+        },
+        {
+          "time": "15:00",
+          "point_index": 18,
+          "type": "stop",
+          "label": "복권 제한",
+          "action": "LOTTERY_LIMIT",
+          "index_value": 1292.57,
+          "message": "만기 20분 전 이후 복권 플레이는 수수료 차감 후 순수익 10% 이하만 허용한다.",
+          "alert": "수익이 충분하지 않으면 종료"
+        }
+      ],
+      "trade_plan": {
+        "result": "runner_exit_ready",
+        "label": "저점 콜 트라이 후 잔량 청산 후보",
+        "text": "저점 13:20 이후 61.8%와 50% 목표를 모두 확인했다. 안전마진 청산 뒤 잔량은 50%/50이평 터치 올청 후보로 표시한다."
+      },
+      "stats": {
+        "high_time": "09:55",
+        "low_time": "13:20",
+        "low_wick_points": 5.5,
+        "bounce_pct": 81.4,
+        "reached_618": true,
+        "reached_50": true
+      }
+    }
+  ]
+}

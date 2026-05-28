@@ -7,6 +7,7 @@ const state = {
   algorithm: null,
   selectedSymbol: null,
   holdings: [],
+  weeklyReplaySessionId: null,
   mode: initialMode(),
 };
 
@@ -715,6 +716,12 @@ const defaultWeeklyOptions = {
 const formatPct = (value) => (value == null ? "-" : `${(Number(value) * 100).toFixed(1)}%`);
 const formatNum = (value, digits = 2) =>
   value == null ? "-" : Number(value).toLocaleString("ko-KR", { maximumFractionDigits: digits });
+const formatSigned = (value, digits = 2) => {
+  if (value == null) return "-";
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return "-";
+  return `${numeric > 0 ? "+" : ""}${numeric.toLocaleString("ko-KR", { maximumFractionDigits: digits })}`;
+};
 const formatWon = (value) => (value == null ? "-" : `${Number(value).toLocaleString("ko-KR")}원`);
 const formatScore = (value) => (value == null ? "-" : Number(value).toFixed(1));
 
@@ -755,25 +762,107 @@ async function init() {
   state.holdings = loadHoldings();
 
   try {
-    const [report, chartConfig, indexStrategy, weeklyOptions] = await Promise.all([
+    const [report, chartConfig, indexStrategy, weeklyOptions, publicWeeklyReplay] = await Promise.all([
       loadJson("data/market_report.json"),
       loadOptionalJson("data/chart_config.json"),
       loadOptionalJson("data/index_trading.json"),
       loadOptionalJson("data/weekly_options.json"),
+      loadOptionalJson("data/public_weekly_replay.json"),
     ]);
     state.report = report;
     state.chartConfig = mergeChartConfig(chartConfig || report.chart_config || {});
     state.indexStrategy = indexStrategy || defaultIndexStrategy;
-    state.weeklyOptions = weeklyOptions || defaultWeeklyOptions;
+    state.weeklyOptions = mergeWeeklyPublicReplay(weeklyOptions || defaultWeeklyOptions, publicWeeklyReplay);
+    state.weeklyReplaySessionId = state.weeklyOptions.signal_replay?.active_session_id || null;
     renderDashboard();
+    setupSectionAccordions();
   } catch (error) {
     state.chartConfig = defaultChartConfig;
     state.indexStrategy = defaultIndexStrategy;
     state.weeklyOptions = defaultWeeklyOptions;
     renderError(error);
+    setupSectionAccordions();
   }
 
   setMode(state.mode, false);
+}
+
+function mergeWeeklyPublicReplay(strategy, publicReplay) {
+  if (!publicReplay?.sessions?.length) return strategy;
+  return {
+    ...strategy,
+    signal_replay: {
+      ...(strategy.signal_replay || {}),
+      ...publicReplay,
+      sessions: publicReplay.sessions,
+    },
+  };
+}
+
+function setupSectionAccordions() {
+  document.querySelectorAll(".mode-panel .chart-card, .mode-panel .list-card, .mode-panel .metrics-card").forEach((section, index) => {
+    if (section.dataset.accordionReady === "true") return;
+    const head = section.querySelector(":scope > .section-head");
+    if (!head) return;
+
+    const content = document.createElement("div");
+    content.className = "accordion-content";
+    content.id = section.id ? `${section.id}-content` : `accordion-section-${index}-content`;
+    while (head.nextSibling) content.appendChild(head.nextSibling);
+    section.appendChild(content);
+
+    const toggle = document.createElement("button");
+    toggle.type = "button";
+    toggle.className = "accordion-toggle";
+    toggle.setAttribute("aria-controls", content.id);
+    toggle.setAttribute("aria-expanded", "false");
+    toggle.setAttribute("aria-label", "섹션 열기");
+    toggle.innerHTML = `<span class="visually-hidden">섹션 열기</span>`;
+
+    section.classList.add("section-accordion", "collapsed");
+    content.hidden = true;
+    head.classList.add("accordion-head");
+    head.appendChild(toggle);
+
+    const toggleSection = () => {
+      const shouldOpen = section.classList.contains("collapsed");
+      setAccordionState(section, shouldOpen);
+    };
+    toggle.addEventListener("click", (event) => {
+      event.stopPropagation();
+      toggleSection();
+    });
+    head.addEventListener("click", (event) => {
+      if (event.target.closest("button, a, input, select, textarea")) return;
+      toggleSection();
+    });
+
+    section.dataset.accordionReady = "true";
+  });
+}
+
+function setAccordionState(section, open) {
+  const content = section.querySelector(":scope > .accordion-content");
+  const toggle = section.querySelector(":scope > .section-head .accordion-toggle");
+  section.classList.toggle("collapsed", !open);
+  if (content) content.hidden = !open;
+  if (toggle) {
+    toggle.setAttribute("aria-expanded", String(open));
+    toggle.setAttribute("aria-label", open ? "섹션 접기" : "섹션 열기");
+    const hiddenText = toggle.querySelector(".visually-hidden");
+    if (hiddenText) hiddenText.textContent = open ? "섹션 접기" : "섹션 열기";
+  }
+  if (open) requestAnimationFrame(redrawCurrentModeCharts);
+}
+
+function redrawCurrentModeCharts() {
+  if (state.mode === "index") drawIndexBlueprint();
+  else if (state.mode === "weekly") {
+    drawWeeklyBlueprint();
+    renderWeeklyReplay();
+  } else if (state.mode === "stocks") {
+    renderSelectedChart();
+  }
 }
 
 function bindModeTabs() {
@@ -1278,6 +1367,7 @@ function renderWeeklyPanel() {
     ? "손실한도 전까지"
     : `최대 ${formatNum(switchRetry.max_switch_attempts || 2, 0)}회`;
   const switchLimitDescription = switchRetry.description || "당일 손실 한도를 최상위 제한으로 두고 자리이동 여부를 판단합니다.";
+  const lotteryProfitBasis = lotteryFinalRule.profit_basis_label || "수수료 차감 후 순수익";
 
   document.querySelector("#weeklyStopBadge").textContent = formatWon(risk.daily_max_loss_krw || 3000000);
   document.querySelector("#weeklyRiskGrid").innerHTML = [
@@ -1292,12 +1382,12 @@ function renderWeeklyPanel() {
     { label: "이후 진입", value: `${afterLock.max_contracts || 1}계약만`, text: afterLock.description || "급소자리 외에는 진입하지 않고 수익담보 내에서만 운용합니다." },
     { label: "수익담보 눌림", value: `${profitScalp.max_contracts || 1}계약`, text: profitScalp.description || "전환선 눌림에서 1계약만 진입하고 30이평 터치 시 청산합니다." },
     { label: profitLottery.label || "수익담보 소액 옵션", value: `${formatNum(profitLottery.target_entry_premium || 1, 1)} → ${formatNum(profitLottery.example_target_premium || 4, 1)}`, text: profitLottery.description || "올청 후에도 강한 장이면 당일 수익담보 안에서 소액 옵션을 버려두는 후보로 봅니다." },
-    { label: "만기 20분 전", value: `수익금 ${formatNum(lotteryFinalRule.max_budget_profit_pct || 10, 0)}% 이하`, text: lotteryFinalRule.description || "만기 20분 전부터는 프리미엄 급감이 극단적이므로 복권 플레이는 수익담보 안에서도 더 작게 제한합니다." },
+    { label: "만기 20분 전", value: `${lotteryProfitBasis} ${formatNum(lotteryFinalRule.max_budget_profit_pct || 10, 0)}% 이하`, text: lotteryFinalRule.description || "만기 20분 전부터는 프리미엄 급감이 극단적이므로 복권 플레이는 수익담보 안에서도 더 작게 제한합니다." },
     { label: "복권 적중률", value: `${formatNum(lotteryFinalRule.estimated_hit_probability_max_pct || 10, 0)}% 이내`, text: lotteryFinalRule.allowed_only_when_profit_surplus ? "수익이 넉넉할 때만 허용하고, 아니면 스킵합니다." : "적중 확률을 낮게 보고 소액만 허용합니다." },
     { label: "하락 압력", value: `${pressureFilter.max_contracts || 1}계약`, text: pressureFilter.description || "5분봉이 30이평, 전환선, 기준선 아래이면 최소 물량만 시도합니다." },
     { label: "100% 앞선 자리", value: "최소 물량", text: entryTiming.description || "우측 바닥이 더 높게 돌 수 있어 100%를 딱 기다리지 않고 앞선 자리도 봅니다." },
-    { label: "만기 12시 후", value: `${formatNum(afterNoonPlan.strike_offset_pct || 1.5, 1)}% / ${afterNoonPremiumRange}`, text: afterNoonPlan.description || "프리미엄 급감 구간에서는 더 가까운 행사가와 낮은 프리미엄으로 재선정합니다." },
-    { label: "12시 후 손절", value: `-${formatNum(afterNoonPlan.stop_loss_pct || 40, 0)}%`, text: afterNoonPlan.position_switch_required ? "손절 범위를 40%로 두고 자리이동을 전제로 운용합니다." : "손절 기준 확인이 필요합니다." },
+    { label: afterNoonPlan.label || "중·후반 재선정", value: `${formatNum(afterNoonPlan.strike_offset_pct || 1.5, 1)}% / ${afterNoonPremiumRange}`, text: afterNoonPlan.description || "프리미엄 급감 구간에서는 더 가까운 행사가와 낮은 프리미엄으로 재선정합니다." },
+    { label: `${afterNoonPlan.label || "12시 후"} 손절`, value: `-${formatNum(afterNoonPlan.stop_loss_pct || 40, 0)}%`, text: afterNoonPlan.position_switch_required ? "손절 범위를 40%로 두고 자리이동을 전제로 운용합니다." : "손절 기준 확인이 필요합니다." },
     { label: "자리이동 한도", value: switchLimitValue, text: switchLimitDescription },
     { label: "이후 대기", value: "핵심 이탈 시 수동 판단", text: criticalBreakdown.description || "방어해야 할 자리가 무너지면 추가 하락이 커질 수 있어 수동 대기 후보로 봅니다." },
     { label: "저점 자리이동", value: `${formatNum(lowFloorExit.example_strike || 1270, 0)}콜 ${formatNum(lowFloorExit.example_entry_premium || 2.2, 1)}`, text: lowFloorExit.description || "저점 자리이동 포지션은 빠른 70% 청산 후 잔량만 가져갑니다." },
@@ -1359,7 +1449,7 @@ function renderWeeklyPanel() {
       <small>${escapeHtml(unfilledOrder.description || "일부 체결 뒤 시장이 날아가면 아래 받쳐둔 미체결 주문은 취소합니다.")}</small>
     </article>
     <article class="option-summary-card">
-      <span>12시 이후</span>
+      <span>${escapeHtml(afterNoonPlan.label || "12시 이후")}</span>
       <strong>중심가격 +${formatNum(afterNoonPlan.strike_offset_pct || 1.5, 1)}%</strong>
       <small>프리미엄 ${afterNoonPremiumRange} 구간 · 손절 ${formatNum(afterNoonPlan.stop_loss_pct || 40, 0)}% · 자리이동 전제</small>
     </article>
@@ -1406,8 +1496,8 @@ function renderWeeklyPanel() {
     </article>
     <article class="option-summary-card">
       <span>만기 20분전</span>
-      <strong>수익금 ${formatNum(lotteryFinalRule.max_budget_profit_pct || 10, 0)}% 이하</strong>
-      <small>100만원 수익이면 10만원 이하 · 적중확률 ${formatNum(lotteryFinalRule.estimated_hit_probability_max_pct || 10, 0)}% 이내</small>
+      <strong>${escapeHtml(lotteryProfitBasis)} ${formatNum(lotteryFinalRule.max_budget_profit_pct || 10, 0)}% 이하</strong>
+      <small>100만원 순수익이면 10만원 이하 · 적중확률 ${formatNum(lotteryFinalRule.estimated_hit_probability_max_pct || 10, 0)}% 이내</small>
     </article>
     <article class="option-summary-card">
       <span>쌍바닥 타이밍</span>
@@ -1454,7 +1544,7 @@ function renderWeeklyPanel() {
     <article class="target-item quick">
       <span>무위험 잔량 전환</span>
       <strong>+${formatNum(freeRunner.profit_pct || 30, 0)}%에서 ${formatNum(freeRunner.exit_contracts || 2, 0)}계약 청산</strong>
-      <small>남은 ${formatNum(freeRunner.remaining_contracts || 1, 0)}계약은 무위험 잔량 개념 · 산식 확인 필요</small>
+      <small>${escapeHtml(freeRunner.arithmetic_check || `남은 ${formatNum(freeRunner.remaining_contracts || 1, 0)}계약은 무위험 잔량 개념으로 운용합니다.`)}</small>
     </article>
   ` : "";
 
@@ -1507,7 +1597,7 @@ function renderWeeklyPanel() {
     </article>
     <article class="target-item stop">
       <span>만기 20분 전 제한</span>
-      <strong>오늘 수익금 ${formatNum(lotteryFinalRule.max_budget_profit_pct || 10, 0)}% 이하</strong>
+      <strong>${escapeHtml(lotteryProfitBasis)} ${formatNum(lotteryFinalRule.max_budget_profit_pct || 10, 0)}% 이하</strong>
       <small>${escapeHtml(lotteryFinalRule.description || "복권 플레이는 수익이 넉넉할 때만 허용하고 예산을 넘으면 스킵합니다.")}</small>
     </article>
     <article class="target-item switch">
@@ -1663,8 +1753,24 @@ function renderWeeklyReplay(strategy = state.weeklyOptions || defaultWeeklyOptio
   const replay = strategy.signal_replay || {};
   const availability = strategy.availability || {};
   const sessions = Array.isArray(replay.sessions) ? replay.sessions : [];
-  const signals = Array.isArray(replay.signals) ? replay.signals : [];
-  const series = Array.isArray(replay.series) ? replay.series : [];
+  const activeSession =
+    sessions.find((session) => session.id === state.weeklyReplaySessionId) ||
+    sessions.find((session) => session.id === replay.active_session_id) ||
+    sessions.find((session) => session.status === "public_reviewed" || session.status === "reviewed") ||
+    null;
+  if (activeSession && state.weeklyReplaySessionId !== activeSession.id) {
+    state.weeklyReplaySessionId = activeSession.id;
+  }
+  const signals = Array.isArray(activeSession?.signals)
+    ? activeSession.signals
+    : Array.isArray(replay.signals)
+      ? replay.signals
+      : [];
+  const series = Array.isArray(activeSession?.series)
+    ? activeSession.series
+    : Array.isArray(replay.series)
+      ? replay.series
+      : [];
   const title = document.querySelector("#weeklyReplayTitle");
   const badge = document.querySelector("#weeklyReplayBadge");
   const text = document.querySelector("#weeklyReplayText");
@@ -1672,12 +1778,13 @@ function renderWeeklyReplay(strategy = state.weeklyOptions || defaultWeeklyOptio
   const legend = document.querySelector("#weeklyReplayLegend");
   if (!title || !badge || !text || !list || !legend) return;
 
-  title.textContent = replay.label || "어제 신호 차트";
-  badge.textContent = availability.label || "월/목 전용";
-  text.textContent = replay.notice || "실제 5분봉 데이터 연결 전에는 알고리즘 기준 복기 레이어로 표시합니다.";
+  title.textContent = replay.label || "최근 1주 신호 차트";
+  badge.textContent = activeSession?.profile?.label || availability.label || "공개 복기";
+  text.textContent = activeSession?.trade_plan?.text || replay.notice || "실제 5분봉 데이터 연결 전에는 알고리즘 기준 복기 레이어로 표시합니다.";
   legend.innerHTML = [
     { label: "지수 흐름", color: "#17202a" },
     { label: "30이평", color: "#008c8c" },
+    { label: "50이평", color: "#95a3b7" },
     { label: "전환선", color: "#d89216" },
     { label: "피보나치 목표", color: "#4069b8" },
     { label: "신호 마커", color: "#b6504a" },
@@ -1685,19 +1792,21 @@ function renderWeeklyReplay(strategy = state.weeklyOptions || defaultWeeklyOptio
 
   const sessionCards = sessions.map((session) => {
     const needsData = session.status === "needs_chart_data";
-    const type = needsData ? "warning" : "buy";
+    const isActive = activeSession?.id === session.id;
+    const type = needsData ? "warning" : session.trade_plan?.result === "watch_only" ? "watch" : "buy";
     const details = Array.isArray(session.required_data) && session.required_data.length
       ? `필요자료: ${session.required_data.slice(0, 2).join(", ")}`
-      : `${formatNum(session.signal_count || signals.length, 0)}개 신호 표시`;
+      : `${formatNum(session.signal_count || 0, 0)}개 신호 · ${session.day_change_pct != null ? `${formatSigned(session.day_change_pct, 2)}%` : "공개 복기"}`;
+    const actionText = session.action_label || (session.status === "public_reviewed" ? "공개 차트 복기" : session.action || details);
     return `
-      <article class="replay-signal ${type}">
-        <span>${escapeHtml(session.date || "-")}<br>${escapeHtml(session.weekday || "")}</span>
+      <button class="replay-signal replay-session ${type}${isActive ? " active" : ""}" type="button" data-replay-session="${escapeAttr(session.id || "")}">
+        <span>${escapeHtml(session.date || "-")}<br>${escapeHtml(session.weekday_label || session.weekday || "")}</span>
         <div>
-          <strong>${escapeHtml(session.label || "복기 대상")} · ${needsData ? "자료 필요" : "복기 완료"}</strong>
+          <strong>${escapeHtml(session.label || "복기 대상")} · ${needsData ? "자료 필요" : session.profile?.label || "복기 완료"}</strong>
           <small>${escapeHtml(session.summary || "")}</small>
-          <em>${escapeHtml(session.action || details)}${details ? ` · ${escapeHtml(details)}` : ""}</em>
+          <em>${escapeHtml(actionText)}${details ? ` · ${escapeHtml(details)}` : ""}</em>
         </div>
-      </article>
+      </button>
     `;
   }).join("");
 
@@ -1720,11 +1829,17 @@ function renderWeeklyReplay(strategy = state.weeklyOptions || defaultWeeklyOptio
     </article>
   `;
   list.innerHTML = sessionCards + signalCards;
+  list.querySelectorAll("[data-replay-session]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.weeklyReplaySessionId = button.dataset.replaySession;
+      renderWeeklyReplay(strategy);
+    });
+  });
 
-  requestAnimationFrame(() => drawWeeklyReplayChart(replay, series, signals));
+  requestAnimationFrame(() => drawWeeklyReplayChart(replay, series, signals, activeSession));
 }
 
-function drawWeeklyReplayChart(replay = {}, series = [], signals = []) {
+function drawWeeklyReplayChart(replay = {}, series = [], signals = [], activeSession = null) {
   const canvas = document.querySelector("#weeklyReplayChart");
   if (!canvas) return;
   const { context, width, height } = setupCanvas(canvas, 360);
@@ -1738,7 +1853,7 @@ function drawWeeklyReplayChart(replay = {}, series = [], signals = []) {
     return;
   }
 
-  const levels = replay.levels || {};
+  const levels = activeSession?.levels || replay.levels || {};
   const lineValues = [
     ...points.map((point) => point.value),
     ...points.map((point) => number(point.gma30)).filter(Number.isFinite),
@@ -1765,7 +1880,7 @@ function drawWeeklyReplayChart(replay = {}, series = [], signals = []) {
     if (Number.isFinite(value)) drawHorizontalLevel(context, width, padding, yFor(value), level.label, value, level.color);
   });
 
-  const valuesByKey = (key) => points.map((point) => number(point[key])).filter(Number.isFinite);
+  const valuesByKey = (key) => points.map((point) => number(point[key]));
   drawSeries(context, valuesByKey("gma50"), xFor, yFor, "#95a3b7", 1.8, [6, 4]);
   drawSeries(context, valuesByKey("tenkan"), xFor, yFor, "#d89216", 1.8, [3, 3]);
   drawSeries(context, valuesByKey("gma30"), xFor, yFor, "#008c8c", 2.1, []);
@@ -1775,12 +1890,12 @@ function drawWeeklyReplayChart(replay = {}, series = [], signals = []) {
   context.fillStyle = "#637083";
   context.font = "10px Segoe UI, sans-serif";
   context.textAlign = "left";
-  [0, 3, 6, 9, 12, 14].forEach((index) => {
+  [0, 3, 6, 9, 12, 15, 18].forEach((index) => {
     const point = points[index];
     if (!point) return;
     context.fillText(point.time, xFor(index) - 10, height - 10);
   });
-  context.fillText(replay.date || "어제", padding, 14);
+  context.fillText(activeSession?.date || replay.date || "최근 1주", padding, 14);
   context.restore();
 
   signals.forEach((signal, signalIndex) => {
@@ -2293,11 +2408,17 @@ function drawSeries(context, values, xFor, yFor, color, width, dash) {
   context.lineWidth = width;
   context.setLineDash(dash);
   context.beginPath();
+  let started = false;
   values.forEach((value, index) => {
+    if (!Number.isFinite(value)) {
+      started = false;
+      return;
+    }
     const x = xFor(index);
     const y = yFor(value);
-    if (index === 0) context.moveTo(x, y);
+    if (!started) context.moveTo(x, y);
     else context.lineTo(x, y);
+    started = true;
   });
   context.stroke();
   context.restore();

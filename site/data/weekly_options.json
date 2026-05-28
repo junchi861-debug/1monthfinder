@@ -42,24 +42,37 @@
         1000000
       ],
       "mode": "CONSERVATIVE_AFTER_PROFIT",
-      "description": "3계약 운용으로 당일 50~100만원 수익을 내면 이후는 보수 모드로 전환한다."
+      "description": "3계약 운용으로 당일 실현손익이 50~100만원 구간을 찍으면 일단 확정하고 이후는 보수 모드로 전환한다.",
+      "basis": "realized_profit_after_exit",
+      "basis_label": "실현손익 기준"
     },
     "after_lock": {
       "entry_filter": "only_critical_spot",
       "max_contracts": 1,
       "avoid_full_size_contracts": 3,
       "use_profit_as_safety_margin": true,
-      "description": "수익 잠금 이후에는 아주 급소자리 외에는 진입하지 않고, 하더라도 당일 수익금을 담보로 1계약만 안전하게 운용한다. 가급적 3계약을 한 번에 다시 넣지 않는다.",
+      "description": "수익 잠금 이후에는 급소자리 외에는 진입하지 않고, 진입하더라도 수익담보 내에서 1계약 또는 축소 물량으로만 접근한다.",
       "profit_collateral_scalp": {
         "status": "draft",
         "label": "수익담보 전환선 눌림 1계약",
         "direction": "call",
         "max_contracts": 1,
-        "entry_trigger": "tenkan_pullback_5m",
-        "exit_trigger": "gma_30_5m_touch",
+        "entry_trigger": "tenkan_touch_and_clear_support_5m",
+        "exit_trigger": "KOSPI200_gma_30_5m_touch",
         "example_option": "콜 2605 1275.0 4W",
         "example_profit_pct": 55.4,
-        "description": "당일 수익이 담보된 뒤에는 전환선 눌림 자리에서 1계약만 진입하고, 30이평에 닿으면 청산하는 짧은 보수 플레이를 허용한다."
+        "description": "당일 수익이 담보된 뒤에는 전환선 터치 지지가 명확할 때 1계약만 진입하고, KOSPI200 5분봉 30이평에 닿으면 청산하는 보수 스캘프를 허용한다.",
+        "entry_trigger_label": "전환선 터치 지지 확인",
+        "exit_reference": "KOSPI200 5분봉 30이평",
+        "loss_management": {
+          "method": "trailing_stop_first",
+          "allow_switch_only_for_remaining_contract_on_premium_crash": true,
+          "description": "수익담보 1계약은 가급적 트레일링 스탑으로 안전하게 운영한다. 순간 프리 급락이 있으면 남은 잔량만 더 가까운 옵션으로 자리이동할 수 있다."
+        },
+        "unfilled_order_management": {
+          "cancel_if_unfilled_and_option_runs_profit_pct": 70,
+          "description": "미체결 상태에서 옵션 프리미엄이 70% 이상 급등해버리면 체결되지 않은 물량은 취소한다."
+        }
       },
       "profit_collateral_lottery": {
         "status": "draft",
@@ -76,14 +89,31 @@
           "minutes_before_expiry": 20,
           "theta_decay_speed": "extreme",
           "max_budget_profit_pct": 10,
-          "budget_formula": "daily_realized_profit * 0.10",
+          "budget_formula": "max(realized_profit_after_fees, 0) * 0.10",
           "example_daily_profit_krw": 1000000,
           "example_max_budget_krw": 100000,
           "estimated_hit_probability_max_pct": 10,
           "allowed_only_when_profit_surplus": true,
           "action": "LOTTERY_PLAY_ONLY_UNDER_CAP_OR_SKIP",
-          "description": "위클리 만기 20분 전부터는 프리미엄이 빛의 속도로 급감하므로 복권 플레이는 오늘 수익금의 10% 이하만 허용한다. 예를 들어 100만원 수익이면 10만원 이하만 가능하며, 수익이 넉넉할 때만 시도한다. 맞출 확률은 10% 이내로 낮게 본다."
+          "description": "위클리 만기 20분 전부터는 프리미엄이 빛의 속도로 급감하므로 복권 플레이는 수수료 차감 후 당일 순수익의 10% 이하만 허용한다. 적중 확률은 10% 이내로 낮게 보고, 수익이 충분하지 않으면 경고와 함께 스킵한다.",
+          "profit_basis_label": "수수료 차감 후 순수익",
+          "warning_display": true,
+          "guidance": "수익이 충분히 났을 때만 아주 소액으로 가능하며, 수익이 애매하면 굳이 복권 플레이를 하지 않는다."
+        },
+        "loss_policy": {
+          "allow_full_loss_inside_locked_profit": true,
+          "switch_if_premium_loss_pct": 40,
+          "switch_example": "1.0 옵션이 0.6까지 밀리면 더 가까운 옵션으로 자리이동 후보",
+          "description": "올청 후 수익담보 1.0 옵션은 전량 손실까지 감당 가능한 소액으로 보되, 40% 손실권이면 더 가까운 옵션으로 자리이동을 검토한다."
         }
+      },
+      "critical_spot_definition": {
+        "fibonacci_spots": [
+          "intraday_high_to_low_fib_618",
+          "between_fib_618_and_fib_100"
+        ],
+        "require_turn_confirmation": true,
+        "description": "수익 잠금 이후의 급소자리는 현 시점 당일 고가와 저가를 다시 이어 고점에서 61.8% 내려온 자리, 또는 61.8%~100% 사이의 자리다. 다만 쌍바닥이 깨져 하방이 열리면 벌어둔 수익이 훼손될 수 있어 지수가 다시 돌리는지 확인한 뒤만 재트라이한다."
       }
     },
     "downside_pressure_filter": {
@@ -97,8 +127,14 @@
       "interpretation": "5분봉이 30이평, 전환선, 기준선 아래에 있으면 시장은 아직 눌림이 진행 중인 것으로 본다.",
       "allowed_action": "double_bottom_minimum_try_only",
       "max_contracts": 1,
-      "break_risk": "쌍바닥을 깨면 오늘 고점에서 바닥까지의 하락 길이가 50% 이상 더 길어질 수 있다고 보고 방어한다.",
-      "description": "하락 압력 중에는 더블바텀 후보를 시도하더라도 아주 보수적으로 최소 물량만 사용한다."
+      "break_risk": "쌍바닥을 깨면 당일 고가와 저가의 중심값, 즉 50% 피보나치 기준으로 하락 길이 확장 위험을 경고한다.",
+      "description": "5분봉이 30이평, 전환선, 기준선 아래이면 더블바텀 후보도 1계약 수익담보 수준으로만 접근한다.",
+      "break_confirmation": {
+        "basis": "5m_close_after_low_break",
+        "description": "쌍바닥 이탈은 단순 터치보다 저점 이탈 뒤 5분봉 종가 확정으로 본다. 밑꼬리로 말아올릴 수 있으므로 확정 신호를 확인한다."
+      },
+      "risk_midline_formula": "(day_high + day_low) / 2",
+      "risk_midline_label": "당일 50% 피보나치"
     },
     "rationale": "당일 수익금이 이미 담보되었으므로 그 수익을 안전마진으로 삼고, 수익극대화 물량인 1계약만으로 추가 기회를 본다."
   },
@@ -127,7 +163,18 @@
       "anchor": "fib_100",
       "allow_front_run_before_exact_100": true,
       "position_size": "minimum",
-      "description": "쌍바닥은 100% 자리를 정석적으로 찍을 수도 있지만 우측 바닥이 조금 더 높은 자리에서 돌 수도 있으므로, 100%를 딱 기다리지 않고 조금 앞선 자리에서도 최소 물량 트라이를 허용한다."
+      "description": "쌍바닥은 100% 자리를 정석적으로 찍을 수도 있지만 우측 바닥이 조금 더 높은 자리에서 돌 수도 있다. 원하는 자리에서 3~5p 이상 밑꼬리로 말아올리면 다음 5분봉을 기다리다 프리미엄을 놓치기 쉬우므로 기계적으로 바로 자리이동/진입 후보로 본다.",
+      "lower_wick_reclaim_points_range": [
+        3,
+        5
+      ],
+      "confirmation": "if_desired_spot_wick_reclaims_3_to_5_points_then_execute_without_waiting_next_5m",
+      "front_run_range_status": "not_fixed_numeric_range",
+      "slice_rollup_strategy": {
+        "enabled_after_profit_cushion": true,
+        "example": "2.0 진입 잔량이 5.0 평가일 때 5.0 이상 청산과 동시에 1.5 옵션을 새로 사면 3.5를 확정하고 1.5만 버리는 구조가 된다.",
+        "description": "수익담보가 충분하면 남은 잔량은 버린다는 마음으로 더 끌고 가거나, 고프리 옵션을 정리하고 저프리 옵션으로 갈아타는 슬라이스/롤업 전략을 쓸 수 있다."
+      }
     },
     "expiry_day_time_adjustments": {
       "status": "draft",
@@ -197,7 +244,7 @@
         "description": "만기일 장초에는 중심가격에서 약 2.5% 위치의 옵션 중 프리미엄 1.6~1.7 구간을 트라이한다."
       },
       "after_noon": {
-        "from": "12:00",
+        "from": "10:30~13:00 이후 상황별",
         "strike_offset_pct": 1.5,
         "target_premium_range": [
           0.6,
@@ -205,8 +252,48 @@
         ],
         "stop_loss_pct": 40,
         "position_switch_required": true,
-        "description": "옵션만기일 12시 이후에는 프리미엄이 급감하므로 중심가격에서 약 1.5% 위치의 옵션 중 프리미엄 0.6~1.0 구간을 공략하고, 손절 범위는 40%로 잡으며 자리이동을 전제로 운용한다."
-      }
+        "description": "만기일 중반 이후에는 12시에 얽매이지 않고 프리미엄이 급감하는 구간으로 본다. 콜은 중심가격 약 1.5% 위치의 0.6~1.0 후보를 보고, 풋은 같은 구조를 쓰되 프리미엄을 약 15% 더 비싸게 잡는다. 40% 손절은 터치 기준이다.",
+        "label": "중·후반 재선정",
+        "time_basis": "not_exact_12",
+        "stop_loss_basis": "touch",
+        "put_premium_markup_pct": 15,
+        "applies_to": {
+          "call": true,
+          "put": true,
+          "put_note": "풋은 콜보다 프리가 비싸므로 약 15% 더해서 본다."
+        }
+      },
+      "session_segments": [
+        {
+          "key": "early",
+          "label": "전반부",
+          "from": "08:45",
+          "to": "10:30",
+          "description": "장초 프리미엄 후보를 본다."
+        },
+        {
+          "key": "middle",
+          "label": "중반부",
+          "from": "10:30",
+          "to": "13:00",
+          "description": "시간이 지나며 프리미엄과 행사가 거리를 더 가깝게 조정한다."
+        },
+        {
+          "key": "late",
+          "label": "후반부",
+          "from": "13:00",
+          "to": "14:50",
+          "description": "줄먹과 잔량 극대화를 병행한다."
+        },
+        {
+          "key": "lottery",
+          "label": "복권타임",
+          "from": "14:50",
+          "to": "expiry",
+          "description": "수수료 차감 후 순수익의 10% 이하만 허용한다."
+        }
+      ],
+      "description": "만기일 시간 구분은 정확한 12:00 고정이 아니라 전반부 08:45~10:30, 중반부 10:30~13:00, 후반부 13:00~14:50, 이후 복권타임으로 본다."
     },
     "order_ladder": [
       {
@@ -625,7 +712,7 @@
         "type": "stop",
         "label": "만기 20분 전",
         "action": "LOTTERY_CAP_OR_SKIP",
-        "message": "만기 20분 전부터 복권 플레이는 오늘 수익금 10% 이하만 가능하다. 수익이 넉넉하지 않거나 예산을 넘으면 스킵한다.",
+        "message": "만기 20분 전부터 복권 플레이는 수수료 차감 후 순수익 10% 이하만 가능하다. 수익이 넉넉하지 않거나 예산을 넘으면 스킵한다.",
         "alert": "복권 플레이 제한"
       }
     ]
@@ -647,18 +734,42 @@
         3
       ],
       "restart_mode": "fresh_initial_entry",
-      "description": "리셋 중심라인 접근 시 프리미엄 1.5~1.8 콜옵션을 찾고, 2~3계약으로 다시 초기 진입하듯 접근한다.",
+      "description": "리셋 중심라인 접근 시 프리미엄 1.5~1.8 콜옵션을 찾고, 누적 수익이 있으면 2계약, 수익이 없으면 3계약으로 새 초기 진입처럼 접근한다.",
       "wick_confirmation": {
         "source": "index_trading.signals.reset_mid_wick_confirm",
         "label": "원하는 자리 밑꼬리",
         "effect": "entry_confidence_up",
-        "description": "거의 원하는 자리에서 밑꼬리가 나오면 리셋 중심라인 콜 재시작 후보의 신뢰도를 높이고 2~3계약 준비를 강화한다."
+        "description": "원하는 자리에서 3~5p 이상 밑꼬리로 말아올리면 메이저의 신규 트라이 에너지로 보고 바로 체결/자리이동 후보로 본다. 다음 5분봉을 기다리면 프리미엄이 30% 이상 증가해 타이밍을 놓칠 수 있다.",
+        "lower_wick_reclaim_points_range": [
+          3,
+          5
+        ],
+        "immediate_execution_preferred": true,
+        "next_5m_wait_required": false
+      },
+      "contract_selection_rule": {
+        "if_locked_profit_enough_contracts": 2,
+        "if_no_locked_profit_contracts": 3,
+        "description": "리셋 이후 누적 수익이 적절하게 있으면 2계약으로 줄이고, 아직 수익이 없다면 안전마진 확보를 위해 3계약으로 진입한다."
+      },
+      "target_premium_persistence": {
+        "preferred_range": [
+          1.5,
+          1.8
+        ],
+        "may_rise_after_repeated_switches": true,
+        "examples": [
+          1.5,
+          2,
+          2.7
+        ],
+        "description": "만기일 중반 이후에도 가급적 1.5~1.8 가격대를 안전한 확률구간으로 보지만, 여러 번 자리이동하면 새 옵션 프리미엄은 2.0, 2.7처럼 올라갈 수 있다."
       }
     }
   },
   "position_roles": {
     "status": "draft",
-    "description": "초기 2계약, 즉 약 70% 물량은 최소한의 안전마진을 만들기 위한 물량이고, 남은 1계약은 수익극대화를 위한 잔량이다.",
+    "description": "초기 2계약은 안전마진 물량, 남은 1계약은 수익극대화 물량이다. 계약 수가 늘어나면 +30%에서 약 75%를 청산하는 방식으로 안전마진을 만든다.",
     "safety_margin": {
       "contracts": 2,
       "position_pct": 70,
@@ -670,6 +781,12 @@
       "position_pct": 30,
       "role": "수익극대화",
       "description": "남은 잔량은 손익 부담을 줄인 뒤 추세가 이어질 때 수익을 극대화하기 위한 물량이다."
+    },
+    "scaled_position_rule": {
+      "profit_pct": 30,
+      "exit_position_pct": 75,
+      "runner_position_pct": 25,
+      "description": "3계약을 초과해 계약 수를 늘릴 때는 +30% 수익권에서 약 75% 물량을 청산하면 남은 물량을 거의 공짜 잔량으로 볼 수 있다."
     }
   },
   "exit": {
@@ -692,7 +809,9 @@
         ],
         "min_position_pct": 30,
         "contracts": 1,
-        "description": "순간 반등으로 콜옵션 프리미엄이 20~30% 수익권에 들어오면 최소 30% 물량, 즉 3계약 기준 1계약은 청산한다."
+        "description": "옵션은 봉 완성보다 순간 가격권이 중요하므로 20~30% 수익권이 오면 안전마진 확인용 물량은 바로 청산 주문을 내 체결시킨다.",
+        "execution_basis": "touch_immediate_limit_order",
+        "confirm_candle_close_required": false
       },
       "free_runner_plan": {
         "condition": "no_initial_stop_loss",
@@ -700,8 +819,14 @@
         "exit_position_pct": 70,
         "exit_contracts": 2,
         "remaining_contracts": 1,
-        "concept": "초기 손절을 하지 않은 상태에서 70% 물량을 30% 수익구간에 청산하면 남은 잔량을 사실상 무위험 잔량으로 운용한다.",
-        "arithmetic_check": "TODO: 3계약 중 2계약을 +30%에 청산하는 산식이 잔량 1계약의 전체 원금을 실제로 상쇄하는지 확인 필요"
+        "concept": "3계약에서 2계약을 +30%에 청산하면 손실 부담은 크게 줄지만 산술적으로 완전 무위험은 아니다. 그래서 3계약 전략에서는 손절과 자리이동으로 방어를 보완한다.",
+        "arithmetic_check": "1.0 옵션 3계약 중 2계약을 1.3에 청산하면 0.6만큼 수익이 확정되어 남은 1계약 원금 전체를 완전히 상쇄하지는 못한다. 4계약에서 75%인 3계약을 +30%에 청산하면 잔량이 거의 공짜에 가까워진다.",
+        "scaled_contract_rule": {
+          "profit_pct": 30,
+          "exit_position_pct": 75,
+          "runner_position_pct": 25,
+          "description": "3계약을 초과해 계약 수를 늘릴 때는 +30% 수익권에서 약 75% 물량을 청산하면 남은 물량을 거의 공짜 잔량으로 볼 수 있다."
+        }
       }
     },
     "targets": [
@@ -725,24 +850,45 @@
     "runner": {
       "contracts": 1,
       "management": "trailing_stop_or_index_exit_signal",
-      "description": "남은 1계약은 수익극대화 물량으로 두고, 5분봉 전환선/기준선/30이평과 현재 수익 상황을 기준으로 동적으로 끌고 간다.",
+      "description": "남은 1계약은 고정 퍼센트가 아니라 5분봉 전환선/기준선/30이평과 현재 수익 상황으로 끌고 갈지 확정할지 판단한다.",
       "trailing_stop_formula": "dynamic_5m_lines_and_profit_context",
       "full_exit_on_index_50_confluence": {
         "status": "draft",
         "trigger": "index.current_index_near_intraday_full_fib_50 AND index.current_index_near_gma_50_5m",
         "action": "EXIT_ALL_REMAINING",
         "after_action": "DAILY_DONE_NO_MORE_TRY",
-        "description": "수익극대화 잔량이 남아 있고 지수가 당일 전구간 50% 자리이면서 50이평 자리와 겹치면 잔량은 올청 후보로 본다. 당일 수익을 확보했다면 이후 더 트라이하지 않고 매매를 종료한다."
+        "description": "수익극대화 잔량이 남아 있고 지수가 당일 전구간 50% 자리이면서 KOSPI200 5분봉 50이평 자리와 겹치면 터치 시 옵션 잔량 올청 후보로 본다. 당일 수익이 150만원 이상이면 종료하고, 그보다 작으면 추가 관찰 여지를 둔다.",
+        "execution_basis": "touch_immediate_option_exit",
+        "end_day_profit_threshold_krw": 1500000
       },
       "trailing_stop_method": {
         "fixed_pct": false,
         "management_lines": [
           "tenkan_5m",
           "kijun_5m",
-          "gma_30_5m"
+          "KOSPI200_gma_30_5m"
         ],
-        "description": "트레일링 스탑은 고점 대비 고정 퍼센트가 아니라 5분봉 전환선, 기준선, 30이평 위에서 버티는지와 현재 수익 상황을 함께 보고 더 끌고 갈지 확정할지 판단한다."
-      }
+        "profit_floor_rules_ref": "exit.runner.profit_floor_rules",
+        "description": "기본 트레일링은 5분봉 전환선, 기준선, KOSPI200 30이평과 현재 수익 상황으로 판단한다. 초강세 러너는 최대 수익률에 따라 보호 수익선을 단계적으로 올린다."
+      },
+      "profit_floor_rules": [
+        {
+          "max_profit_pct_reached": 200,
+          "cut_if_profit_falls_to_pct": 70
+        },
+        {
+          "max_profit_pct_reached": 300,
+          "cut_if_profit_falls_to_pct": 120
+        },
+        {
+          "max_profit_pct_reached": 400,
+          "cut_if_profit_falls_to_pct": 150
+        },
+        {
+          "max_profit_pct_reached": 500,
+          "action": "use_slice_rollup_strategy"
+        }
+      ]
     },
     "conflict_resolution": {
       "index_vs_option_exit_priority": "contextual_option_premium_execution",
@@ -760,8 +906,9 @@
         20,
         25
       ],
-      "description": "시장이 피보나치 진입 구간 이후 KOSPI200 지수 기준 5~10포인트 더 밀려 100%~103% 위치로 가고, 기존 옵션이 20~25% 손실권이면 자리이동을 준비한다.",
-      "index_push_unit": "KOSPI200_index_points"
+      "description": "계약을 보유한 상태에서 남은 물량이 약 -20% 손실권이면 기계적으로 현재 계약수 기준 자리이동을 준비한다. 시장이 피보나치 진입 구간 이후 KOSPI200 지수 기준 5~10p 더 밀리면 자리이동 가능성이 높아진다.",
+      "index_push_unit": "KOSPI200_index_points",
+      "mechanical_switch_loss_pct": 20
     },
     "replacement_selection": {
       "direction": "call",
@@ -792,13 +939,19 @@
         7
       ],
       "after_limit_action": "STOP_ONLY_WHEN_DAILY_MAX_LOSS_REACHED_OR_MANUAL_CRITICAL_WAIT",
-      "description": "자리이동과 손절은 고정 2회 제한이 아니라 당일 최대 손실 기준 전까지 연속 허용한다. 경험상 6~7회 연속 손절도 가능하므로, 앱에서는 당일 손실 한도를 최상위 제한으로 둔다."
+      "description": "자리이동은 고정 2회 제한이 아니라 당일 최대 손실 기준 전까지 연속 허용한다. 약손실은 계약당 손실률 약 10~15%로 본다. 다만 핵심 붕괴 구간에서는 수동 대기 판단을 병행한다.",
+      "small_loss_pct_range": [
+        10,
+        15
+      ]
     },
     "critical_breakdown": {
       "trigger": "critical_spot_breakdown",
       "risk": "large_breakdown_possible",
       "action": "manual_wait_if_critical_break_or_daily_loss_limit",
-      "description": "핵심 자리가 무너지면 수동 판단으로 대기할 수 있지만, 기본 기계 제한은 당일 최대 손실 기준을 우선한다."
+      "description": "무너지는 핵심 자리는 쌍바닥 저점, 피보나치 100%보다 조금 더 밀린 103~105% 부근, 그리고 5분봉 종가상 꽉 찬 음봉으로 떨어지는 경우다. 이때는 크게 무너질 수 있어 수동 대기를 우선 검토한다.",
+      "trigger_zone": "double_bottom_low_or_fib_103_to_105",
+      "confirmation": "full_bearish_5m_close_below_zone"
     },
     "low_floor_replacement_exit": {
       "status": "draft",
@@ -814,7 +967,8 @@
       ],
       "exit_position_pct": 70,
       "runner_position_pct": 30,
-      "description": "저점 바닥에서 자리이동해 1270콜을 2.2 근처에서 잡았다면 3.0~3.3에서 약 70% 물량을 청산하고 나머지만 수익극대화로 가져간다."
+      "description": "저점 바닥에서 자리이동해 예시 1270콜을 2.2 근처에서 잡았다면 3.0~3.3 터치 부근에 주문가격을 내 약 70% 물량을 청산하고 나머지만 수익극대화로 가져간다. 1270콜은 예시이며 시장 상황과 프리미엄에 맞춰 자동 선택한다.",
+      "execution_basis": "near_touch_limit_order"
     },
     "final_try": {
       "status": "draft",
@@ -825,7 +979,7 @@
         "gma_400",
         "gma_456"
       ],
-      "description": "다시 자리 바꾸면서 마지막 트라이라고 보고 1260콜을 2.4 근처에서 시도한다. 400/456이평 라인대를 트라이 라인으로 본다.",
+      "description": "마지막 트라이는 예시 1260콜 2.4 근처처럼 변동성이 커진 만기 후반에 현재 지수보다 약 20p 떨어진 콜이 적정 프리미엄으로 올 때 검토한다. 5분봉 400/456이평 3p 이내 접근을 후보로 보고, 수익담보가 넉넉하거나 손실이 -100만원 내외인 깊은 저점 공략 상황이면 2회 제한과 별개로 예외 허용한다.",
       "exit_plan": {
         "avoid_fast_70pct_exit": true,
         "purpose": "recent_loss_recovery",
@@ -850,14 +1004,21 @@
           }
         ],
         "runner_contracts": 1,
-        "description": "마지막 트라이는 빠른 70% 청산보다 단계 청산으로 최근 손절분 일부 회수를 우선한다."
-      }
+        "description": "마지막 트라이는 빠른 70% 청산보다 +40~50%에서 1계약, +100%에서 1계약을 청산한다. 2계약만 진입했다면 +40~100% 사이에서 1계약을 청산하고 남은 1계약은 더 홀딩한다.",
+        "two_contract_policy": "40~100% 사이에서 1계약 청산, 남은 1계약은 끝까지 홀딩 후보"
+      },
+      "example_strike_is_dynamic": true,
+      "support_timeframe": "5m",
+      "moving_average_tolerance_points": 3,
+      "exception_allowed": true,
+      "allow_when_profit_cushion_or_mild_loss_krw": 1000000
     }
   },
   "intraday_full_fibonacci_review": {
     "source": "index_trading.fibonacci.intraday_full_range_check",
     "trigger": "after_final_try_or_profit_extension",
-    "description": "포지션 변화 후 당일 전구간 피보나치를 다시 그려 현재 지수 위치를 체크한다."
+    "description": "당일 전구간 피보나치는 실시간 업데이트 대상이다. 고가나 저가가 바뀌면 피보나치 위치도 다시 리셋해 현재 지수 위치를 재계산한다.",
+    "update_mode": "recalculate_when_day_high_or_day_low_changes"
   },
   "index_bounce_target_reference": {
     "source": "index_trading.fibonacci.intraday_full_range_check.bottom_bounce_targets",
@@ -868,13 +1029,17 @@
       "intraday_full_fib_50"
     ],
     "option_use": "runner_or_partial_exit_reference",
-    "description": "저점권에서 바운딩이 나오면 지수 목표는 먼저 당일 전구간 61.8% 라인, 이후 힘이 이어지면 50% 라인까지 도전으로 본다. 옵션은 해당 지수 목표 도달 구간을 부분 청산 또는 잔량 운용 판단에 참조한다.",
+    "description": "저점권에서 바운딩이 나오면 지수 목표는 먼저 당일 전구간 61.8% 라인, 이후 전환선 위에서 힘이 유지되면 30이평이나 기준선, 더 나아가 50% 라인까지 도전으로 본다. 이미 안전마진 물량을 청산하고 잔량만 남았다면 61.8%에서 바로 정리하기보다 50% 근접을 노린다.",
     "runner_full_exit": {
       "status": "draft",
       "target": "intraday_full_fib_50 + gma_50_5m",
       "action": "EXIT_ALL_REMAINING_AND_END_DAY",
-      "description": "50% 피보나치 목표와 50이평이 겹치는 자리는 수익극대화 잔량 올청 후보로 본다. 당일 매매를 이미 끝낼 수 있는 수익이면 추가 트라이는 하지 않는다."
-    }
+      "description": "50% 피보나치 목표와 50이평이 겹치는 자리는 수익극대화 잔량 터치 즉시 올청 후보다. 수익금이 150만원 이상이면 당일 종료, 아니면 시장을 더 볼 수 있다.",
+      "execution_basis": "touch_immediate_option_exit",
+      "end_day_profit_threshold_krw": 1500000
+    },
+    "exit_policy_at_618": "if_only_runner_after_safety_margin_hold_toward_50_when_energy_alive",
+    "force_condition_to_50": "not_strict; if_above_tenkan_try_gma30_or_kijun"
   },
   "late_session_extension": {
     "status": "draft",
@@ -882,11 +1047,27 @@
     "index_target": {
       "primary_target": "intraday_full_fib_382",
       "confluence": "ichimoku_cloud_nearby",
-      "description": "후반 반등이 강하면 구름대 근접과 당일 전구간 38.2% 라인을 다음 상단 목표로 본다. 보통 이 정도를 목표로 볼 수 있지만, 옵션 만기일에는 프리미엄 감소가 빨라 중간 줄먹을 병행한다."
+      "description": "38.2%+구름대 목표에서는 잔량이 많으면 반청하고, 잔량이 1계약이면 구름대까지 온 에너지가 강하므로 더 끌고 가는 시도를 할 수 있다.",
+      "exit_policy": "if_many_remaining_exit_half; if_one_runner_try_hold_to_cloud"
     },
     "expiry_scalp_reason": {
       "reason": "expiry_day_theta_decay",
-      "description": "만기일 콜옵션은 지수가 목표로 가더라도 시간가치가 빠르게 줄 수 있으므로, 38.2%와 구름대 목표를 보면서도 20~30%, 50%, 100% 구간의 부분 청산을 병행한다."
+      "description": "만기일 하락 추세 구간에서는 +20~30% 수익권에서 반청 또는 70% 물량 청산이 중요하다. 다만 456이평 터치 같은 마지막 저점 트라이에서는 바로 줄먹보다 +100% 일부 청산 후 잔량 극대화 전략을 쓴다.",
+      "scalp_rules": [
+        {
+          "context": "intraday_downtrend",
+          "exit_at_profit_pct_range": [
+            20,
+            30
+          ],
+          "exit_position": "half_or_70pct"
+        },
+        {
+          "context": "456ma_touch_exception",
+          "first_exit_at_profit_pct": 100,
+          "runner": "maximize"
+        }
+      ]
     },
     "moonshot_runner": {
       "status": "draft",
@@ -894,12 +1075,35 @@
       "example_current_premium": 20.5,
       "profit_multiple": 9.3,
       "approx_profit_per_contract_krw": 5000000,
-      "description": "초강세장에서는 2.2 근처에서 잡은 콜옵션 1계약 잔량을 끝까지 끌고 가면 20.5 부근까지 확장되어 약 9~10배 수익이 날 수 있다. 이것이 위클리 옵션 잔량 전략의 핵심 장점이다."
+      "description": "초강세장에서는 2.2 근처에서 잡은 콜옵션 1계약 잔량을 끝까지 끌고 가면 20.5 부근까지 확장되어 약 9~10배 수익이 날 수 있다. 최대 수익률이 커질수록 보호 수익선을 올리고, 500% 이상에서는 슬라이스/롤업 전략을 고려한다.",
+      "trailing_profit_floor_rules": [
+        {
+          "max_profit_pct_reached": 200,
+          "cut_if_profit_falls_to_pct": 70
+        },
+        {
+          "max_profit_pct_reached": 300,
+          "cut_if_profit_falls_to_pct": 120
+        },
+        {
+          "max_profit_pct_reached": 400,
+          "cut_if_profit_falls_to_pct": 150
+        },
+        {
+          "max_profit_pct_reached": 500,
+          "action": "use_slice_rollup_strategy"
+        }
+      ],
+      "slice_rollup_strategy": {
+        "enabled_after_profit_cushion": true,
+        "example": "2.0 진입 잔량이 5.0 평가일 때 5.0 이상 청산과 동시에 1.5 옵션을 새로 사면 3.5를 확정하고 1.5만 버리는 구조가 된다.",
+        "description": "수익담보가 충분하면 남은 잔량은 버린다는 마음으로 더 끌고 가거나, 고프리 옵션을 정리하고 저프리 옵션으로 갈아타는 슬라이스/롤업 전략을 쓸 수 있다."
+      }
     },
     "kodex200_etf_separation": {
-      "status": "separate_ruleset_required",
+      "status": "pending_later_discussion",
       "instrument": "KODEX200 ETF",
-      "description": "KODEX200 ETF는 옵션 프리미엄 폭발 구조와 다르다. 옵션처럼 잔량을 10배 러너로 보는 방식이 아니라, 손절 후 재진입 대응을 더 철저히 병행하는 별도 메커니즘으로 분리해야 한다."
+      "description": "KODEX200 ETF 전략은 옵션과 메커니즘이 달라 추후 별도 논의 대상으로 둔다."
     }
   },
   "states": [
@@ -1016,7 +1220,7 @@
     {
       "key": "EXPIRY_FINAL_20M_LOTTERY_CAP",
       "label": "만기 20분 전 복권 제한",
-      "description": "만기 20분 전부터는 프리미엄 급감이 극단적이므로 복권 플레이는 오늘 수익금의 10% 이하, 수익이 넉넉할 때만 허용한다. 적중 확률은 10% 이내로 낮게 본다."
+      "description": "만기 20분 전부터는 프리미엄 급감이 극단적이므로 복권 플레이는 수수료 차감 후 순수익의 10% 이하, 수익이 넉넉할 때만 허용한다. 적중 확률은 10% 이내로 낮게 본다."
     },
     {
       "key": "ETF_SEPARATE_RULESET",
@@ -1085,43 +1289,11 @@
     }
   ],
   "questions": [
-    "급반등 20~30% 수익권에서 1계약 청산은 터치 즉시인지, 호가 안정 또는 1분/5분봉 확인 후인지 확인이 필요하다.",
-    "2계약을 +30%에 청산하면 남은 1계약이 실제로 무위험이 되는 산식과 수수료/슬리피지 포함 여부 확인이 필요하다.",
-    "3계약이 아닌 계약수로 확장할 때 70% 안전마진 물량과 30% 수익극대화 물량의 반올림 기준 확인이 필요하다.",
-    "당일 50~100만원 수익 잠금 기준은 실현손익 기준인지, 평가손익 포함인지 확인이 필요하다.",
-    "수익 잠금 이후 진입 가능한 '아주 급소자리'의 조건을 명확히 해야 한다.",
-    "수익담보 내 1계약 운용 시 허용 손실 한도를 당일 확보 수익의 몇 퍼센트로 둘지 확인이 필요하다.",
-    "5분봉 30이평, 전환선, 기준선 아래에서 더블바텀 트라이를 허용할 때 최소 물량을 1계약으로 고정할지 확인이 필요하다.",
-    "쌍바닥이 깨졌다고 판단하는 기준이 저점 이탈 터치인지, 5분봉 종가 이탈인지 확인이 필요하다.",
-    "오늘 고점에서 바닥 자리의 50% 이상 길이 확장 경고를 어떤 공식으로 계산할지 확인이 필요하다.",
-    "100% 앞선 트라이를 허용하는 범위를 100% 라인 위 몇 포인트 또는 몇 퍼센트로 둘지 확인이 필요하다.",
-    "옵션만기일 12시 이후 전환 기준이 정확히 12:00인지, 12시 봉 마감 이후인지 확인이 필요하다.",
-    "12시 이후 프리미엄 0.6~1.0, 행사가 1.5% 기준을 콜과 풋에 동일하게 적용할지 확인이 필요하다.",
-    "12시 이후 40% 손절은 터치 기준인지, 체결 평균가 대비 종가/호가 기준인지 확인이 필요하다.",
-    "약손실의 기준을 금액, 프리미엄 퍼센트, 계약당 손실 중 무엇으로 정의할지 확인이 필요하다.",
-    "무너지는 핵심 자리 기준이 쌍바닥 저점, 피보나치 100%, 103%, 105%, 전환선/기준선 중 무엇인지 확인이 필요하다.",
-    "리셋 중심라인에서 2계약과 3계약을 나누는 기준이 하락 압력, 수익 잠금 여부, 전환선 회복 중 무엇인지 확인이 필요하다.",
-    "리셋 중심라인 콜 프리미엄 1.5~1.8 기준이 만기일 12시 이후에도 유지되는지 확인이 필요하다.",
-    "거의 원하는 자리에서 밑꼬리가 나왔을 때 바로 2~3계약 진입으로 볼지, 다음 5분봉 확인 후 들어갈지 확인이 필요하다.",
-    "밑꼬리 길이와 중심라인 근접 허용 범위를 포인트 또는 퍼센트로 정해야 한다.",
-    "1270콜과 1260콜은 예시 행사가인지, 시장 상황에 따라 자동 선택할 행사가 규칙인지 확인이 필요하다.",
-    "저점 자리이동 후 3.0~3.3에서 70% 물량 청산은 터치 즉시인지, 호가 안정 또는 5분봉 확인 후인지 확인이 필요하다.",
-    "마지막 트라이에서 2계약만 진입했을 때 +40~50%와 +100% 청산 물량 배분을 어떻게 할지 확인이 필요하다.",
-    "400/456이평 라인대 접근 허용 폭과 이평 산식, 적용 시간프레임을 확인해야 한다.",
-    "당일 전구간 피보나치의 고가/저가 기준과 현재 지수 위치별 행동 규칙을 더 구체화해야 한다.",
-    "바닥 바운딩 후 지수 61.8% 라인에서는 옵션을 몇 계약 또는 몇 퍼센트 청산할지 확인이 필요하다.",
-    "61.8% 이후 50% 라인 도전은 전환선/30이평/거래량 중 어떤 힘 유지 조건을 필수로 볼지 확인이 필요하다.",
-    "50% 피보나치와 50이평이 겹치는 자리에서 잔량 올청을 터치 즉시 할지, 5분봉 확인 후 할지 확인이 필요하다.",
-    "잔량 올청 후 당일 매매 종료를 자동 상태로 둘지, 사용자가 수동으로 종료 체크할지 확인이 필요하다.",
-    "수익담보 전환선 눌림 진입에서 전환선 터치, 이탈 후 회복, 근접 중 어떤 조건을 진입 기준으로 볼지 확인이 필요하다.",
-    "수익담보 1계약 청산의 30이평 터치 기준이 가격 터치인지, 5분봉 종가 도달인지 확인이 필요하다.",
-    "수익담보 스캘프의 허용 손실선을 별도로 정해야 한다.",
-    "38.2%+구름대 목표에서는 잔량 올청인지, 일부만 청산하고 트레일링을 이어갈지 확인이 필요하다.",
-    "만기일 줄먹 병행 비율을 20~30%, 50%, 100% 중 어떤 단계에 얼마씩 둘지 확인이 필요하다.",
-    "올청 후 수익담보 1.0 옵션을 허용할 때 최대 금액과 손절 여부를 확정해야 한다.",
-    "만기 20분 전 복권 플레이의 오늘 수익금 10% 한도를 실현손익 기준으로 볼지, 수수료 차감 후 순수익 기준으로 볼지 확인이 필요하다.",
-    "복권 플레이 적중 확률 10% 이내를 앱에서 경고 점수로 표시할지, 단순 안내 문구로만 둘지 정해야 한다.",
-    "KODEX200 ETF 전략은 옵션 전략과 별도 탭으로 분리할지, 지수 매매 탭 안에 ETF 모드로 둘지 확인이 필요하다.",
-    "마지막 트라이를 연속 자리이동 허용 구조에서 별도 수동 대기 조건으로 볼지 확인이 필요하다."
+    "만기 D-1의 레인지 +50p와 D-2의 +70p가 당일 박스권 상단 기준인지, 현재 중심가격 기준인지 확인이 필요하다.",
+    "금요일 전략은 다음 만기 위클리 기준인지, 다음 사이클 기준인지 확인이 필요하다.",
+    "D-1/D-2에서도 만기일처럼 전반/중반/후반 프리미엄 보정을 별도로 둘지 확인이 필요하다.",
+    "100% 앞선 트라이를 완전 자동화하려면 100% 라인 위 허용 포인트 또는 퍼센트의 정량값이 추가로 필요하다.",
+    "400/456이평은 현재 기하이평으로 가정했지만, 실제 차트의 단순이평/기하이평 산식 최종 확인이 필요하다.",
+    "KODEX200 ETF 전략은 옵션 전략과 다른 메커니즘이므로 추후 별도 규칙으로 다시 논의한다."
   ]
 }

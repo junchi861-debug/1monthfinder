@@ -10,3 +10,4 @@ site/data/*.json
 !site/data/strategy_config.json
 !site/data/index_trading.json
 !site/data/weekly_options.json
+!site/data/public_weekly_replay.json
