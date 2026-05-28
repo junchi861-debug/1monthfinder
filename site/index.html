@@ -9,7 +9,7 @@
       content="KOSPI200 5분봉 기반 위클리 옵션 신호판과 복기 화면"
     />
     <link rel="manifest" href="manifest.webmanifest" />
-    <link rel="stylesheet" href="styles.css?v=20260529-profit-mobile" />
+    <link rel="stylesheet" href="styles.css?v=20260529-mobile-backend-2" />
   </head>
   <body>
     <main class="app-shell" aria-live="polite">
@@ -126,6 +126,18 @@
           </div>
 
           <div class="modal-panel" data-modal-panel="settings" hidden>
+            <div class="backend-settings">
+              <label class="text-field">
+                <span>백엔드 주소</span>
+                <input id="apiBaseUrl" type="url" inputmode="url" placeholder="비워두면 현재 주소의 /api 사용" />
+              </label>
+              <div class="backend-actions">
+                <button class="soft-button" type="button" id="testBackend">연결 테스트</button>
+                <button class="soft-button" type="button" id="saveApiBaseUrl">주소 저장</button>
+                <button class="soft-button" type="button" id="resetApiBaseUrl">현재 주소</button>
+              </div>
+              <p class="sheet-copy" id="backendStatus">백엔드 연결 상태를 확인하는 중입니다.</p>
+            </div>
             <div class="settings-actions">
               <button class="soft-button" type="button" id="testAlert">알림 테스트</button>
               <button class="soft-button" type="button" id="toggleWakeLock">화면유지 켜기</button>
@@ -172,6 +184,6 @@
       </section>
     </div>
 
-    <script src="script.js?v=20260529-profit-mobile"></script>
+    <script src="script.js?v=20260529-mobile-backend-2"></script>
   </body>
 </html>

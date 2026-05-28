@@ -76,15 +76,42 @@ function loadSettings() {
       vibrationEnabled: true,
       saveSignalLog: true,
       alertsEnabled: false,
+      apiBaseUrl: "",
       ...JSON.parse(localStorage.getItem(SETTINGS_KEY) || "{}"),
     };
   } catch (error) {
-    return { repeatStrongAlerts: true, vibrationEnabled: true, saveSignalLog: true, alertsEnabled: false };
+    return { repeatStrongAlerts: true, vibrationEnabled: true, saveSignalLog: true, alertsEnabled: false, apiBaseUrl: "" };
   }
 }
 
 function saveSettings() {
   localStorage.setItem(SETTINGS_KEY, JSON.stringify(state.settings));
+}
+
+function normalizeApiBaseUrl(value) {
+  const text = String(value || "").trim().replace(/\/+$/, "");
+  if (!text) return "";
+  if (/^https?:\/\//i.test(text)) return text;
+  const protocol = location.protocol === "https:" ? "https" : "http";
+  return `${protocol}://${text}`;
+}
+
+function apiBaseUrlFromInput() {
+  return normalizeApiBaseUrl(document.querySelector("#apiBaseUrl")?.value ?? state.settings.apiBaseUrl);
+}
+
+function currentApiBaseUrl() {
+  return normalizeApiBaseUrl(state.settings.apiBaseUrl);
+}
+
+function apiUrl(path, baseOverride = currentApiBaseUrl()) {
+  if (!String(path).startsWith("/api/")) return path;
+  const base = normalizeApiBaseUrl(baseOverride);
+  return base ? `${base}${path}` : path;
+}
+
+function apiBaseLabel(base = currentApiBaseUrl()) {
+  return base || "현재 주소";
 }
 
 function loadSignalLog() {
@@ -124,9 +151,10 @@ async function init() {
 }
 
 async function loadOptionalJson(path) {
+  const url = apiUrl(path);
   try {
-    const response = await fetch(path, { cache: "no-store" });
-    if (!response.ok) throw new Error(`${path} 로드 실패`);
+    const response = await fetch(url, { cache: "no-store" });
+    if (!response.ok) throw new Error(`${url} 로드 실패`);
     return response.json();
   } catch (error) {
     return null;
@@ -158,6 +186,9 @@ function bindControls() {
   document.querySelector("#enableAlerts")?.addEventListener("click", requestAlertToggle);
   document.querySelector("#testAlert")?.addEventListener("click", testAlert);
   document.querySelector("#toggleWakeLock")?.addEventListener("click", toggleWakeLock);
+  document.querySelector("#testBackend")?.addEventListener("click", () => testBackendConnection());
+  document.querySelector("#saveApiBaseUrl")?.addEventListener("click", saveApiBaseUrl);
+  document.querySelector("#resetApiBaseUrl")?.addEventListener("click", resetApiBaseUrl);
   document.querySelector("#cancelAlertConfirm")?.addEventListener("click", closeAlertConfirm);
   document.querySelector("#confirmAlertToggle")?.addEventListener("click", confirmAlertToggle);
   document.querySelector("#alertConfirmBackdrop")?.addEventListener("click", (event) => {
@@ -225,7 +256,7 @@ function startPolling() {
 async function loadMonitor(manual = false) {
   if (manual) setTopStatus("조회 중");
   try {
-    const response = await fetch("/api/options-monitor", { cache: "no-store" });
+    const response = await fetch(apiUrl("/api/options-monitor"), { cache: "no-store" });
     const snapshot = await response.json();
     state.monitor = snapshot;
     renderMonitor();
@@ -1216,14 +1247,67 @@ function renderSettings() {
   const soundText = state.alertsEnabled ? (state.audioContext ? "소리 ON" : "소리 대기") : "소리 OFF";
   const vibrationText = state.settings.vibrationEnabled ? "진동 ON" : "진동 OFF";
   const wakeText = state.wakeLock ? "화면유지 ON" : "화면유지 OFF";
+  const apiBase = currentApiBaseUrl();
   const alertText = `${state.alertsEnabled ? "알림 켜짐" : "알림 꺼짐"} · 브라우저 ${permission} · ${wakeText}`;
   setText("#alertStatus", alertText);
+  setText("#backendStatus", `${apiBaseLabel(apiBase)} · /api/options-monitor 사용`);
   setText("#boardStatus", `${soundText} · ${vibrationText} · 알림센터 ${permission} · ${wakeText}`);
   setText("#enableAlerts", state.alertsEnabled ? "알림 끄기" : "알림 켜기");
   setText("#toggleWakeLock", state.wakeLock ? "화면유지 끄기" : "화면유지 켜기");
+  const apiInput = document.querySelector("#apiBaseUrl");
+  if (apiInput) apiInput.value = apiBase;
   setChecked("#repeatStrongAlerts", state.settings.repeatStrongAlerts);
   setChecked("#vibrationEnabled", state.settings.vibrationEnabled);
   setChecked("#saveSignalLog", state.settings.saveSignalLog);
+}
+
+async function saveApiBaseUrl() {
+  const base = apiBaseUrlFromInput();
+  state.settings.apiBaseUrl = base;
+  saveSettings();
+  renderSettings();
+  setText("#backendStatus", `${apiBaseLabel(base)} 저장됨 · 연결 확인 중`);
+  await testBackendConnection(base);
+  await loadMonitor(true);
+  await refreshReplayFromApi();
+  setText("#backendStatus", `${apiBaseLabel(base)} 저장됨 · API 연결 적용`);
+}
+
+async function resetApiBaseUrl() {
+  state.settings.apiBaseUrl = "";
+  saveSettings();
+  renderSettings();
+  await testBackendConnection("");
+  await loadMonitor(true);
+  await refreshReplayFromApi();
+  setText("#backendStatus", "현재 주소 저장됨 · API 연결 적용");
+}
+
+async function testBackendConnection(baseOverride = apiBaseUrlFromInput()) {
+  const base = normalizeApiBaseUrl(baseOverride);
+  setText("#backendStatus", `${apiBaseLabel(base)} 연결 확인 중`);
+  try {
+    const response = await fetch(apiUrl("/api/health", base), { cache: "no-store" });
+    const payload = await response.json();
+    if (!response.ok || !payload.ok) throw new Error(payload.error || "health failed");
+    const time = payload.generated_at ? payload.generated_at.slice(11, 16) : "-";
+    setText("#backendStatus", `${apiBaseLabel(base)} 연결 OK · ${time}`);
+  } catch (error) {
+    setText("#backendStatus", `${apiBaseLabel(base)} 연결 실패 · 같은 Wi-Fi와 서버 주소를 확인하세요.`);
+  }
+}
+
+async function refreshReplayFromApi() {
+  if (state.activeReplayDate) {
+    await loadReplayDate(state.activeReplayDate);
+    return;
+  }
+  const payload = await loadOptionalJson("/api/options-replay");
+  if (payload) {
+    state.replay = normalizeReplayPayload(payload) || state.replay;
+    state.activeReplayDate = activeReplaySession()?.date || state.replay.active_session_id || null;
+  }
+  renderReplay();
 }
 
 function openModal(name) {

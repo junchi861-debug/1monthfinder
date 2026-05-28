@@ -6,13 +6,14 @@ import json
 import logging
 import threading
 import time
+from datetime import datetime
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from stock_finder.market_report import build_market_site_data
 from stock_finder.options_archive import build_options_replay_payload
-from stock_finder.options_monitor import build_options_monitor_snapshot
+from stock_finder.options_monitor import KST, build_options_monitor_snapshot
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -42,8 +43,21 @@ def serve_local_app(args: argparse.Namespace) -> None:
 
 
 class StockFinderRequestHandler(SimpleHTTPRequestHandler):
+    def end_headers(self) -> None:
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        super().end_headers()
+
+    def do_OPTIONS(self) -> None:
+        self.send_response(204)
+        self.end_headers()
+
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
+        if parsed.path == "/api/health":
+            self._send_health()
+            return
         if parsed.path == "/api/options-monitor":
             self._send_options_monitor()
             return
@@ -51,6 +65,27 @@ class StockFinderRequestHandler(SimpleHTTPRequestHandler):
             self._send_options_replay(parsed.query)
             return
         super().do_GET()
+
+    def _send_json(self, payload: dict, status: int = 200) -> None:
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _send_health(self) -> None:
+        self._send_json(
+            {
+                "ok": True,
+                "service": "1MonthFinder options backend",
+                "generated_at": datetime.now(KST).isoformat(),
+                "host": self.headers.get("Host", ""),
+                "endpoints": ["/api/options-monitor", "/api/options-replay"],
+                "env_mode": "server",
+            }
+        )
 
     def _send_options_monitor(self) -> None:
         try:
@@ -75,13 +110,7 @@ class StockFinderRequestHandler(SimpleHTTPRequestHandler):
                 },
             }
 
-        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Cache-Control", "no-store")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+        self._send_json(payload, status)
 
     def _send_options_replay(self, query: str) -> None:
         params = parse_qs(query)
@@ -101,13 +130,7 @@ class StockFinderRequestHandler(SimpleHTTPRequestHandler):
                 "active_session": None,
             }
 
-        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Cache-Control", "no-store")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+        self._send_json(payload, status)
 
 
 def _refresh_loop(args: argparse.Namespace) -> None:
