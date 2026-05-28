@@ -5,6 +5,14 @@
   "asset_scope": "KOSPI200 위클리 옵션",
   "depends_on": "index_trading",
   "purpose": "지수 매매 탭에서 찾은 신규 진입 위치를 옵션 상품 선택, 분할 주문, 부분 청산 계획으로 변환한다.",
+  "availability": {
+    "allowed_weekdays": [
+      "MONDAY",
+      "THURSDAY"
+    ],
+    "label": "월요일/목요일 전용",
+    "description": "현재 정리된 위클리 옵션 전략은 월요일과 목요일 차트에서만 복기 및 신호 산출 대상으로 사용한다. 다른 요일은 별도 전략이 확정되기 전까지 표시하지 않는다."
+  },
   "risk_limits": {
     "daily_max_loss_krw": 3000000,
     "per_stop_loss_krw_range": [
@@ -278,10 +286,53 @@
   },
   "signal_replay": {
     "status": "prototype",
-    "label": "어제 하루 신호 복기",
-    "date": "2026-05-27",
+    "label": "월/목 전략 신호 복기",
+    "date": "2026-05-28",
     "data_basis": "manual_replay_until_intraday_feed_connected",
-    "notice": "실제 증권사 5분봉 원데이터 연결 전에는 지금까지 받은 알고리즘을 기준으로 어제 차트에서 나왔어야 할 신호를 복기 레이어로 표시한다. 원데이터가 연결되면 이 목록은 자동 산출 대상으로 바꾼다.",
+    "active_session_id": "this_week_thursday",
+    "notice": "현재 전략은 월요일과 목요일 전용이다. 실제 증권사 5분봉 원데이터 연결 전에는 받은 차트가 있는 목요일만 복기 레이어로 표시하고, 이번주 월요일과 지난주 월요일은 차트 자료 필요 상태로 둔다.",
+    "sessions": [
+      {
+        "id": "this_week_monday",
+        "label": "이번주 월요일",
+        "date": "2026-05-25",
+        "weekday": "MONDAY",
+        "status": "needs_chart_data",
+        "action": "WAIT_FOR_5M_CHART",
+        "summary": "월요일 사용 가능일이지만 아직 5분봉 차트 또는 원데이터가 없어 실제 진입/청산 신호를 확정하지 않는다.",
+        "required_data": [
+          "KOSPI200 지수 또는 선물 5분봉 OHLCV",
+          "위클리 콜/풋 옵션 5분봉",
+          "당일 고가/저가와 30/50/400/456이평",
+          "전환선/기준선과 피보나치 라인"
+        ]
+      },
+      {
+        "id": "last_week_monday",
+        "label": "지난주 월요일",
+        "date": "2026-05-18",
+        "weekday": "MONDAY",
+        "status": "needs_chart_data",
+        "action": "WAIT_FOR_5M_CHART",
+        "summary": "지난주 월요일도 전략 사용 가능일이지만 차트 자료가 없어 신호 복기는 보류한다. 자료가 들어오면 같은 신호 목록 형식으로 산출한다.",
+        "required_data": [
+          "KOSPI200 지수 또는 선물 5분봉 OHLCV",
+          "위클리 옵션 행사가별 프리미엄 5분봉",
+          "거래량과 가능하면 미결제약정",
+          "장중 고점/저점 기준 피보나치"
+        ]
+      },
+      {
+        "id": "this_week_thursday",
+        "label": "이번주 목요일",
+        "date": "2026-05-28",
+        "weekday": "THURSDAY",
+        "status": "reviewed",
+        "action": "REPLAY_SIGNALS_READY",
+        "summary": "받은 목요일 차트 자료와 지금까지 정리된 알고리즘을 기준으로 핵심 신호 9개를 복기 레이어로 표시한다.",
+        "signal_count": 9
+      }
+    ],
     "levels": {
       "day_high": 1338.2,
       "day_low": 1237.5,

@@ -1172,6 +1172,7 @@ function renderIndexPanel() {
 function renderWeeklyHero() {
   const strategy = state.weeklyOptions || defaultWeeklyOptions;
   const risk = strategy.risk_limits || {};
+  const availability = strategy.availability || {};
   const indexReset = strategy.index_reset_reference || {};
   const resetPrepare = indexReset.call_retry_prepare || {};
   const resetWick = resetPrepare.wick_confirmation || {};
@@ -1184,7 +1185,7 @@ function renderWeeklyHero() {
   const pressureFilter = money.downside_pressure_filter || {};
   const entry = strategy.entry || {};
   const date = (state.report?.generated_at || "").slice(0, 10) || "공식 정리";
-  document.querySelector("#assetLabel").textContent = strategy.asset_scope || "KOSPI200 위클리 옵션";
+  document.querySelector("#assetLabel").textContent = `${strategy.asset_scope || "KOSPI200 위클리 옵션"} · ${availability.label || "월/목 전용"}`;
   document.querySelector("#asOfDate").textContent = date;
   document.querySelector("#appTitle").textContent = "위클리 옵션";
   document.querySelector("#marketSummary").textContent =
@@ -1199,6 +1200,7 @@ function renderWeeklyHero() {
 function renderWeeklyPanel() {
   const strategy = state.weeklyOptions || defaultWeeklyOptions;
   const risk = strategy.risk_limits || {};
+  const availability = strategy.availability || {};
   const indexReset = strategy.index_reset_reference || {};
   const resetPrepare = indexReset.call_retry_prepare || {};
   const resetWick = resetPrepare.wick_confirmation || {};
@@ -1264,6 +1266,7 @@ function renderWeeklyPanel() {
 
   document.querySelector("#weeklyStopBadge").textContent = formatWon(risk.daily_max_loss_krw || 3000000);
   document.querySelector("#weeklyRiskGrid").innerHTML = [
+    { label: availability.label || "월/목 전용", value: "월 · 목", text: availability.description || "현재 위클리 옵션 전략은 월요일과 목요일 차트에서만 복기 및 신호 산출 대상으로 사용합니다." },
     { label: "당일 최대 손실", value: formatWon(risk.daily_max_loss_krw || 3000000), text: risk.description || "" },
     { label: "1회 손절 비용", value: perStopRange, text: risk.per_stop_loss_description || "손절과 자리이동을 감수해 반등 시 수익 회수를 빠르게 노립니다." },
     { label: "수익 잠금", value: profitLockRange, text: profitLock.description || "당일 수익 달성 후 보수 모드로 전환합니다." },
@@ -1584,6 +1587,8 @@ function optionMetricCard(item) {
 
 function renderWeeklyReplay(strategy = state.weeklyOptions || defaultWeeklyOptions) {
   const replay = strategy.signal_replay || {};
+  const availability = strategy.availability || {};
+  const sessions = Array.isArray(replay.sessions) ? replay.sessions : [];
   const signals = Array.isArray(replay.signals) ? replay.signals : [];
   const series = Array.isArray(replay.series) ? replay.series : [];
   const title = document.querySelector("#weeklyReplayTitle");
@@ -1594,7 +1599,7 @@ function renderWeeklyReplay(strategy = state.weeklyOptions || defaultWeeklyOptio
   if (!title || !badge || !text || !list || !legend) return;
 
   title.textContent = replay.label || "어제 신호 차트";
-  badge.textContent = replay.date || "복기";
+  badge.textContent = availability.label || "월/목 전용";
   text.textContent = replay.notice || "실제 5분봉 데이터 연결 전에는 알고리즘 기준 복기 레이어로 표시합니다.";
   legend.innerHTML = [
     { label: "지수 흐름", color: "#17202a" },
@@ -1604,7 +1609,25 @@ function renderWeeklyReplay(strategy = state.weeklyOptions || defaultWeeklyOptio
     { label: "신호 마커", color: "#b6504a" },
   ].map((item) => `<span style="color:${escapeAttr(item.color)}"><i></i>${escapeHtml(item.label)}</span>`).join("");
 
-  list.innerHTML = signals.length ? signals.map((signal) => `
+  const sessionCards = sessions.map((session) => {
+    const needsData = session.status === "needs_chart_data";
+    const type = needsData ? "warning" : "buy";
+    const details = Array.isArray(session.required_data) && session.required_data.length
+      ? `필요자료: ${session.required_data.slice(0, 2).join(", ")}`
+      : `${formatNum(session.signal_count || signals.length, 0)}개 신호 표시`;
+    return `
+      <article class="replay-signal ${type}">
+        <span>${escapeHtml(session.date || "-")}<br>${escapeHtml(session.weekday || "")}</span>
+        <div>
+          <strong>${escapeHtml(session.label || "복기 대상")} · ${needsData ? "자료 필요" : "복기 완료"}</strong>
+          <small>${escapeHtml(session.summary || "")}</small>
+          <em>${escapeHtml(session.action || details)}${details ? ` · ${escapeHtml(details)}` : ""}</em>
+        </div>
+      </article>
+    `;
+  }).join("");
+
+  const signalCards = signals.length ? signals.map((signal) => `
     <article class="replay-signal ${escapeAttr(signal.type || "watch")}">
       <span>${escapeHtml(signal.time || "-")}<br>${escapeHtml(signal.action || "")}</span>
       <div>
@@ -1622,6 +1645,7 @@ function renderWeeklyReplay(strategy = state.weeklyOptions || defaultWeeklyOptio
       </div>
     </article>
   `;
+  list.innerHTML = sessionCards + signalCards;
 
   requestAnimationFrame(() => drawWeeklyReplayChart(replay, series, signals));
 }
