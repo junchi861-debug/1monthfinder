@@ -1,818 +1,210 @@
+const MONITOR_POLL_MS = 60000;
+const SIGNAL_LOG_KEY = "1monthfinder.options.signalLog";
+const SETTINGS_KEY = "1monthfinder.options.settings";
+const TRADE_COLORS = {
+  entry: "#2f7f83",
+  stop: "#a95f59",
+  tp1: "#5275ad",
+  tp2: "#315f9d",
+  exit: "#657186",
+  watch: "#a97022",
+  test: "#a97022",
+  risk: "#a95f59",
+  take_profit: "#5275ad",
+};
+
 const state = {
-  report: null,
-  chartConfig: null,
-  indexStrategy: null,
   weeklyOptions: null,
-  period: "1d",
-  algorithm: null,
-  selectedSymbol: null,
-  holdings: [],
-  weeklyReplaySessionId: null,
-  weeklyReplayDate: null,
-  optionsMonitor: null,
-  optionsMonitorTimer: null,
-  optionsAlertsEnabled: false,
-  optionsAlertPermission: "default",
-  lastOptionsAlertKey: null,
-  optionsAudioContext: null,
+  replay: null,
+  monitor: null,
+  monitorTimer: null,
+  activeReplayDate: null,
+  replayCursors: {},
+  activeModal: null,
+  alertsEnabled: false,
+  pendingAlertState: null,
+  lastAlertKey: null,
+  audioContext: null,
   serviceWorkerRegistration: null,
-  mode: initialMode(),
+  signalLog: loadSignalLog(),
+  settings: loadSettings(),
+  wakeLock: null,
 };
 
-const STORAGE_KEY = "1monthfinder.holdings";
-const OPTIONS_MONITOR_POLL_MS = 60000;
-const OPTIONS_MONITOR_ALERT_TYPES = new Set(["candidate", "sell", "warning", "watch"]);
-
-const defaultChartConfig = {
-  palette: {
-    equity: "#008c8c",
-    grid: "#dfe5ea",
-    text: "#637083",
-    candidate: "#2d8f64",
-    warning: "#d89216",
-    sell: "#b6504a",
-  },
-  charts: {
-    stock_price: {
-      height: 260,
-      padding: 22,
-      empty_message: "차트 자료가 없습니다.",
-      lines: [
-        { key: "close", label: "가격", formula: "close", color: "#17202a", width: 2.6 },
-        { key: "ma5", label: "단기선", formula: "sma(close, 5)", color: "#008c8c", width: 1.8 },
-        { key: "ma20", label: "기준선", formula: "sma(close, 20)", color: "#d89216", width: 1.8 },
-        { key: "risk_floor", label: "경고선", formula: "last_close * 0.94", color: "#b6504a", width: 1.4, dash: [5, 5] },
-      ],
-      signal_rules: [
-        {
-          condition: "close > ma5 && ma5 > ma20 && score >= 58",
-          signal: "buy",
-          label: "매수 후보",
-          text: "가격이 단기선 위에 있고 단기선이 기준선보다 높습니다. 알고리즘 점수도 후보 기준을 넘어 매수 후보로 볼 수 있습니다.",
-        },
-        {
-          condition: "close < risk_floor || risk_score < 0.25",
-          signal: "sell",
-          label: "매도/제외",
-          text: "가격이 경고선 아래로 내려왔거나 리스크 점수가 낮습니다. 신규 매수보다 제외 또는 축소 관점이 우선입니다.",
-        },
-        {
-          condition: "close < ma5 || issue_score >= 0.45",
-          signal: "warning",
-          label: "경고/관찰",
-          text: "단기선 이탈 또는 이슈성 급등 신호가 있어 추격 매수보다 확인이 필요합니다.",
-        },
-      ],
-    },
-  },
-  display: {
-    top_candidate_cards: 8,
-  },
+const modalMeta = {
+  replay: { eyebrow: "차트 검증", title: "설계선과 복기" },
+  design: { eyebrow: "옵션 프리미엄", title: "설계선" },
+  guide: { eyebrow: "전략 기준", title: "설명" },
+  settings: { eyebrow: "알림", title: "설정" },
 };
 
-const defaultIndexStrategy = {
-  title: "지수 매매 전략",
-  status: "draft",
-  asset_scope: "KOSPI200 지수/선물",
-  purpose: "KOSPI200 지수 방향과 진입·청산 신호를 계산합니다.",
-  timeframes: {
-    context: "30분봉",
-    execution: "5분봉",
-    fibonacci_lookback: "최근 3거래일 고점/저점",
-  },
-  formulas: [
-    {
-      key: "gma_30",
-      label: "30봉 기하이평",
-      formula: "exp(avg(log(close), 30))",
-      role: "상위 방향과 잔량 운용 기준",
-    },
-    {
-      key: "gma_50",
-      label: "50봉 기하이평",
-      formula: "exp(avg(log(close), 50))",
-      role: "30봉 기하이평과 함께 진입 위치 판단",
-    },
-    {
-      key: "gma_400",
-      label: "400봉 기하이평",
-      formula: "exp(avg(log(close), 400))",
-      role: "마지막 트라이에서 장기 지지 라인 후보로 봅니다.",
-    },
-    {
-      key: "gma_456",
-      label: "456봉 기하이평",
-      formula: "exp(avg(log(close), 456))",
-      role: "400봉 기하이평과 함께 마지막 트라이 지지 라인 후보로 봅니다.",
-    },
-    {
-      key: "tenkan_5m",
-      label: "5분봉 전환선",
-      formula: "(highest(high, 9) + lowest(low, 9)) / 2",
-      role: "진입 확인과 이탈 경고",
-    },
-    {
-      key: "kijun_5m",
-      label: "5분봉 기준선",
-      formula: "(highest(high, 26) + lowest(low, 26)) / 2",
-      role: "70% 청산 기준",
-    },
-    {
-      key: "reset_fib_618",
-      label: "리셋 61.8%",
-      formula: "previous_low",
-      role: "핵심 자리 이탈 후 직전 저가를 새 61.8% 라인으로 맞춘다.",
-    },
-    {
-      key: "reset_fib_100",
-      label: "리셋 100%",
-      formula: "reset_high - ((reset_high - previous_low) / 0.618)",
-      role: "직전 저가가 61.8%가 되도록 새 100% 자리를 다시 계산한다.",
-    },
-    {
-      key: "reset_mid_618_100",
-      label: "리셋 중심라인",
-      formula: "(reset_fib_618 + reset_fib_100) / 2",
-      role: "리셋된 61.8%와 100% 라인의 중심값으로, 프리미엄 1.5~1.8 콜을 2~3계약 재시작 후보로 본다.",
-    },
-    {
-      key: "lower_wick_5m",
-      label: "5분봉 밑꼬리",
-      formula: "min(open_5m, close_5m) - low_5m",
-      role: "원하는 자리 근처에서 아래로 찔렀다가 말아올린 흔적을 계산한다.",
-    },
-    {
-      key: "lower_wick_ratio_5m",
-      label: "밑꼬리 비율",
-      formula: "lower_wick_5m / max(high_5m - low_5m, tick_size)",
-      role: "밑꼬리가 전체 5분봉 범위에서 차지하는 비율로, 진입 확인 강도를 판단한다.",
-    },
-    {
-      key: "intraday_full_fib_50",
-      label: "당일 전구간 50%",
-      formula: "day_high - (day_high - day_low) * 0.5",
-      role: "당일 전체 고가/저가 기준으로 현재 지수의 중간 위치를 재점검합니다.",
-    },
-    {
-      key: "intraday_full_fib_618",
-      label: "당일 전구간 61.8%",
-      formula: "day_high - (day_high - day_low) * 0.618",
-      role: "자리이동 또는 마지막 트라이 후 당일 전체 피보나치 위치를 다시 확인합니다.",
-    },
-    {
-      key: "bottom_bounce_target_618",
-      label: "바닥 바운딩 1차 목표 61.8%",
-      formula: "intraday_full_fib_618",
-      role: "저점권에서 바운딩이 나오면 우선 도전할 1차 목표선으로 봅니다.",
-    },
-    {
-      key: "bottom_bounce_target_50",
-      label: "바닥 바운딩 2차 목표 50%",
-      formula: "intraday_full_fib_50",
-      role: "61.8% 회복 후 힘이 이어지면 다음 도전 목표선으로 봅니다.",
-    },
-    {
-      key: "fib50_gma50_confluence",
-      label: "50%+50이평 겹침",
-      formula: "abs(intraday_full_fib_50 - gma_50_5m) <= confluence_tolerance",
-      role: "수익극대화 잔량이 있을 때 올청을 검토하는 강한 목표 자리로 봅니다.",
-    },
-  ],
-  fibonacci: {
-    levels: [
-      { key: "fib_618", label: "61.8%", formula: "high_3d - (high_3d - low_3d) * 0.618", role: "상방 진입 1차 관찰" },
-      { key: "fib_809", label: "80.9%", formula: "high_3d - (high_3d - low_3d) * 0.809", role: "61.8%와 100% 바닥의 절반값" },
-      { key: "fib_100", label: "100%", formula: "low_3d", role: "휩소 감시선" },
-      { key: "fib_103", label: "103%", formula: "high_3d - (high_3d - low_3d) * 1.03", role: "밑꼬리 후 추가 진입 후보" },
-      { key: "fib_105", label: "105%", formula: "high_3d - (high_3d - low_3d) * 1.05", role: "확정 이탈 시 손절 후보" },
-    ],
-    reset_on_break: {
-      status: "draft",
-      trigger: "critical_spot_breakdown",
-      reset_high_source: "current_swing_high_after_break",
-      previous_low_as: "reset_fib_618",
-      reset_100_formula: "reset_high - ((reset_high - previous_low) / 0.618)",
-      reset_mid_formula: "(reset_fib_618 + reset_fib_100) / 2",
-      description: "핵심 자리가 무너지면 고가와 저가를 다시 셋업하고, 직전 저가를 새 61.8% 라인으로 맞춘 뒤 100% 자리를 다시 계산합니다.",
-      example: {
-        reset_high: 1309.36,
-        previous_low_reset_618: 1276.8,
-        reset_100: 1256.63,
-        reset_mid_618_100: 1266.72,
-      },
-      call_retry_prepare: {
-        status: "draft",
-        line: "reset_mid_618_100",
-        direction: "call",
-        target_premium_range: [1.5, 1.8],
-        contracts_range: [2, 3],
-        restart_mode: "fresh_initial_entry",
-        description: "리셋된 61.8%~100% 사이의 중심라인을 다시 설정하고, 그 자리에서 프리미엄 1.5~1.8 콜옵션을 2~3계약으로 새 초기 진입처럼 재시작하는 후보로 봅니다.",
-        wick_confirmation: {
-          status: "draft",
-          label: "원하는 자리 밑꼬리",
-          target_line: "reset_mid_618_100",
-          near_tolerance: "TODO",
-          lower_wick_ratio_threshold: "TODO",
-          confirmation: "low_5m pierces_or_touches target_line AND close_5m reclaims target_line",
-          effect: "entry_confidence_up",
-          description: "거의 원하는 자리에서 밑꼬리가 나오면 리셋 중심 콜 재시작 후보의 신뢰도를 높입니다.",
-        },
-      },
-    },
-    intraday_full_range_check: {
-      status: "draft",
-      trigger: "after_position_switch_or_final_try",
-      anchor: "day_high_day_low",
-      levels: ["0", "23.6", "38.2", "50", "61.8", "100"],
-      description: "자리이동 또는 마지막 트라이 이후 당일 전체 고가/저가 기준 피보나치를 다시 그려 현재 지수 위치를 체크합니다.",
-      bottom_bounce_targets: {
-        status: "draft",
-        trigger: "bottom_zone_rebound_confirmed",
-        sequence: ["intraday_full_fib_618", "intraday_full_fib_50"],
-        description: "저점권에서 바운딩이 나오면 목표는 먼저 당일 전구간 61.8% 라인, 이후 반등 힘이 유지되면 50% 라인까지 도전하는 구조로 봅니다.",
-        runner_full_exit: {
-          status: "draft",
-          trigger: "fib50_gma50_confluence",
-          position: "profit_runner",
-          action: "EXIT_ALL_REMAINING_AND_END_DAY",
-          description: "현재 자리가 당일 전구간 50% 라인이면서 5분봉 50이평 자리와 겹치면, 수익극대화 잔량은 올청 후보로 봅니다. 당일 목표 수익을 확보했다면 이후 더 트라이하지 않고 매매를 종료합니다.",
-        },
-      },
-    },
-  },
-  position_sizing: {
-    first_entry_pct: 70,
-    add_entry_pct: 30,
-    first_exit_pct: 70,
-    runner_pct: 30,
-  },
-  states: [
-    { key: "WAIT", label: "대기", description: "조건이 아직 맞지 않는다." },
-    { key: "WATCH_ENTRY", label: "진입 대기", description: "기하이평과 피보나치 진입 구간 접근을 본다." },
-    { key: "DOWNSIDE_PRESSURE", label: "하락 압력", description: "5분봉이 30이평, 전환선, 기준선 아래이면 보수 관찰로 전환한다." },
-    { key: "DOUBLE_BOTTOM_MIN_TRY", label: "쌍바닥 최소 트라이", description: "하락 압력 중 쌍바닥 후보에서는 최소 물량만 시도한다." },
-    { key: "PRE_100_FRONT_RUN", label: "100% 앞선 트라이", description: "우측 바닥이 100%보다 높은 자리에서 돌 수 있으므로 앞선 자리도 최소 물량 후보로 본다." },
-    { key: "CRITICAL_BREAK_WAIT", label: "핵심 이탈 대기", description: "쌍바닥, 100% 앞선 자리 등 방어해야 할 핵심 자리가 무너지면 재진입보다 대기한다." },
-    { key: "FIBONACCI_RESET", label: "피보나치 리셋", description: "핵심 자리가 무너지면 고가와 저가를 다시 셋업하고, 직전 저가를 새 61.8% 라인으로 맞춘 뒤 100% 자리를 다시 계산한다." },
-    { key: "RESET_MID_CALL_PREPARE", label: "리셋 중심 콜 재시작", description: "리셋된 61.8%~100% 사이의 중심라인에서 프리미엄 1.5~1.8 콜옵션을 2~3계약으로 새 초기 진입처럼 검토한다." },
-    { key: "RESET_MID_WICK_CONFIRM", label: "중심 밑꼬리 확인", description: "거의 원하는 리셋 중심라인에서 밑꼬리가 나오면 콜 재시작 후보의 확인 강도가 높아진다." },
-    { key: "LONG_MA_FINAL_TRY_LINE", label: "400/456이평 마지막 라인", description: "마지막 트라이에서는 400봉과 456봉 기하이평 라인대를 장기 지지 후보로 보고 콜 트라이 위치를 확인합니다." },
-    { key: "INTRADAY_FULL_FIB_CHECK", label: "당일 전구간 피보나치", description: "자리이동 또는 마지막 트라이 후에는 당일 전체 고가와 저가로 피보나치를 다시 그려 현재 지수 위치를 재점검합니다." },
-    { key: "BOTTOM_BOUNCE_TARGET_618", label: "바운딩 61.8% 목표", description: "저점권에서 바운딩이 확인되면 당일 전구간 61.8% 라인을 1차 목표로 봅니다." },
-    { key: "BOTTOM_BOUNCE_TARGET_50", label: "바운딩 50% 도전", description: "61.8% 라인을 회복하고 반등 힘이 유지되면 당일 전구간 50% 라인까지 도전 후보로 봅니다." },
-    { key: "RUNNER_FULL_EXIT_50_CONFLUENCE", label: "50%+50이평 잔량 올청", description: "수익극대화 잔량이 남아 있고 현재 자리가 당일 전구간 50%와 50이평이 겹치는 자리면 잔량 전량 청산 후보로 봅니다." },
-    { key: "DAILY_DONE_NO_MORE_TRY", label: "당일 매매 종료", description: "목표 수익을 확보하고 잔량까지 정리했으면 더 트라이하지 않고 당일 매매를 종료합니다." },
-    { key: "PROFIT_COLLATERAL_TENKAN_PULLBACK", label: "수익담보 전환선 눌림", description: "당일 수익이 담보된 보수 모드에서는 5분봉 전환선 눌림을 1계약 짧은 진입 후보로 봅니다." },
-    { key: "PROFIT_COLLATERAL_GMA30_EXIT", label: "수익담보 30이평 청산", description: "수익담보 1계약 포지션은 5분봉 30이평에 닿으면 청산 후보로 봅니다." },
-    { key: "ENTRY_70", label: "70% 1차 진입", description: "전환선 회복 확인 후 70%만 먼저 진입한다." },
-    { key: "WICK_WATCH", label: "밑꼬리 감시", description: "100~103% 휩소 여부를 감시한다." },
-    { key: "ADD_30", label: "30% 추가 진입", description: "말아올림 확인 후 잔여 30%를 추가한다." },
-    { key: "SELL_70", label: "70% 청산", description: "기준선 위에 올라타면 70%를 청산한다." },
-    { key: "HOLD_RUNNER", label: "잔량 운용", description: "30기하이평 돌파 후 잔량을 운용한다." },
-    { key: "SELL_REST", label: "잔량 청산", description: "30기하이평과 일목선 이탈 시 잔량을 청산한다." },
-    { key: "STOP_LOSS", label: "손절", description: "105% 라인 확정 이탈 시 손절한다." },
-  ],
-  signals: [
-    {
-      key: "downside_pressure_filter",
-      label: "하락 압력 보수 필터",
-      conditions: ["close_5m < gma_30_5m", "close_5m < tenkan_5m", "close_5m < kijun_5m"],
-      message: "5분봉이 30이평, 전환선, 기준선 아래에 있으면 아직 더 눌리는 상황으로 보고 일반 진입을 보류합니다.",
-    },
-    {
-      key: "double_bottom_min_try",
-      label: "쌍바닥 최소 물량 트라이",
-      conditions: ["downside_pressure_filter == true", "low_5m tests previous_intraday_low", "close_5m >= previous_intraday_low", "position_size == minimum"],
-      message: "하락 압력 중 이전 저점을 지키는 쌍바닥 후보에서는 최소 물량만 시도하고, 저점을 깨면 즉시 방어합니다.",
-    },
-    {
-      key: "pre_100_front_run_try",
-      label: "100% 앞선 반전 트라이",
-      conditions: ["downside_pressure_filter == true", "price approaches fib_100 but low_5m > fib_100", "right_bottom_candidate > previous_intraday_low", "position_size == minimum"],
-      message: "우측 바닥이 100% 자리까지 정확히 내려오지 않고 조금 위에서 돌 수 있으므로, 100%보다 앞선 자리도 최소 물량 트라이로 허용합니다.",
-    },
-    {
-      key: "critical_break_wait",
-      label: "핵심 자리 이탈 대기",
-      conditions: ["critical_spot_breakdown == true", "switch_attempts >= 2", "current_loss == small_loss"],
-      message: "핵심 자리가 무너지고 자리이동을 두 번 시도한 뒤 약손실이면 추가 트라이를 중단하고 대기합니다.",
-    },
-    {
-      key: "fibonacci_reset",
-      label: "피보나치 리셋",
-      conditions: ["critical_spot_breakdown == true", "new_swing_high is confirmed", "previous_low becomes reset_fib_618"],
-      message: "핵심 자리가 무너지면 고가와 저가를 다시 잡고, 직전 저가를 61.8% 라인으로 맞춘 뒤 새 100% 자리를 계산합니다.",
-    },
-    {
-      key: "reset_mid_call_prepare",
-      label: "리셋 중심 콜 재시작",
-      conditions: ["fibonacci_reset == true", "price approaches reset_mid_618_100", "call_option_premium between 1.5 and 1.8", "call_retry_contracts between 2 and 3", "restart_mode == fresh_initial_entry"],
-      message: "리셋 중심라인에 접근하면 프리미엄 1.5~1.8 콜옵션을 찾아 2~3계약으로 새 초기 진입처럼 재시작하는 후보로 봅니다.",
-    },
-    {
-      key: "reset_mid_wick_confirm",
-      label: "원하는 자리 밑꼬리",
-      conditions: ["price near reset_mid_618_100", "low_5m pierces_or_touches reset_mid_618_100", "close_5m reclaims reset_mid_618_100", "lower_wick_ratio_5m >= configured_threshold"],
-      message: "원하는 자리 근처에서 밑꼬리가 나오면 콜 재시작 후보의 신뢰도를 높이고, 2~3계약 진입 준비를 강화합니다.",
-    },
-    {
-      key: "long_ma_final_try_line",
-      label: "400/456이평 마지막 트라이",
-      conditions: ["final_try_context == true", "price near gma_400 or price near gma_456", "direction == call", "option_replacement_context == true"],
-      message: "마지막 트라이에서는 400봉·456봉 기하이평 라인대를 장기 지지 후보로 보고 콜옵션 재진입 위치를 확인합니다.",
-    },
-    {
-      key: "intraday_full_fib_check",
-      label: "당일 전구간 피보나치 재점검",
-      conditions: ["position_switch_or_final_try == true", "day_high is confirmed", "day_low is confirmed", "current_index_position recalculated"],
-      message: "자리이동 또는 마지막 트라이 이후 당일 전체 고가/저가 피보나치를 다시 그려 현재 지수가 어느 구간에 있는지 체크합니다.",
-    },
-    {
-      key: "bottom_bounce_target_ladder",
-      label: "바닥 바운딩 목표 순서",
-      conditions: ["bottom_zone_rebound_confirmed == true", "current_index < intraday_full_fib_618", "target_1 = intraday_full_fib_618", "target_2 = intraday_full_fib_50 if rebound_strength_holds"],
-      message: "저점권에서 바운딩이 나오면 1차 목표는 당일 전구간 61.8%, 이후 힘이 유지되면 50% 라인까지 도전 후보로 봅니다.",
-    },
-    {
-      key: "runner_full_exit_50_confluence",
-      label: "50%+50이평 잔량 올청",
-      conditions: ["profit_runner_position == true", "current_index near intraday_full_fib_50", "current_index near gma_50_5m", "unrealized_profit > 0"],
-      message: "현재 자리가 당일 전구간 50%이면서 50이평 자리와 겹치면 수익극대화 잔량은 올청 후보로 보고, 목표 수익 확보 후에는 당일 매매를 종료합니다.",
-    },
-    {
-      key: "profit_collateral_tenkan_pullback_entry",
-      label: "수익담보 전환선 눌림 1계약",
-      conditions: ["profit_lock_active == true", "position_contracts == 1", "price pulls back to tenkan_5m", "close_5m does not break critical_low"],
-      message: "당일 수익이 담보된 뒤에는 전환선 눌림 자리에서 1계약만 짧게 진입하는 후보로 봅니다.",
-    },
-    {
-      key: "profit_collateral_gma30_exit",
-      label: "수익담보 30이평 청산",
-      conditions: ["profit_collateral_position == true", "high_5m touches gma_30_5m or close_5m >= gma_30_5m", "position_contracts == 1"],
-      message: "수익담보 1계약 포지션은 30이평에 닿으면 청산해 당일 수익을 지키는 쪽을 우선합니다.",
-    },
-  ],
-  questions: [
-    "105% 손절 확정은 터치 기준인지, 5분봉 종가 이탈 기준인지 확인이 필요하다.",
-    "103% 밑꼬리 확인 조건을 명확히 해야 한다.",
-    "지수 신호를 위클리 옵션 행사가 선택으로 연결하는 별도 기준이 필요하다.",
-    "쌍바닥 판정과 이탈 기준을 저점 터치, 종가, 유지 봉 수 중 무엇으로 볼지 확인이 필요하다.",
-    "하락 압력 구간의 최소 물량이 옵션 1계약인지 예정 자금 비율인지 확인이 필요하다.",
-    "100% 앞선 트라이의 허용 범위가 몇 포인트 또는 몇 퍼센트인지 확인이 필요하다.",
-    "핵심 자리 이탈 기준과 약손실 기준, 자리이동 2회 카운트 기준 확인이 필요하다.",
-    "피보나치 리셋에 사용할 새 고가 기준과 콜/풋 양방향 적용 방식을 확인해야 한다.",
-    "리셋 중심라인에서 2계약과 3계약을 나누는 기준, 지정가 가격, 5분봉 전환선 회복 확인 여부가 필요하다.",
-    "원하는 자리 밑꼬리 확인은 저가 터치만 볼지, 5분봉 종가가 중심라인 위로 회복해야 하는지 확인이 필요하다.",
-    "밑꼬리 비율 임계값과 원하는 자리 근처 허용 오차를 포인트 또는 퍼센트로 정해야 한다.",
-    "400봉과 456봉 이평이 기하이평인지 단순이평인지, 5분봉 기준인지 확인이 필요하다.",
-    "마지막 트라이에서 400/456이평 접근 허용 폭을 지수 포인트 또는 퍼센트로 정해야 한다.",
-    "당일 전구간 피보나치의 고가/저가는 터치 고저인지 5분봉 종가 기준인지 확인이 필요하다.",
-    "당일 전구간 피보나치를 정규장 전체 기준으로 볼지, 전략 시작 이후 구간 기준으로 볼지 확인이 필요하다.",
-    "바닥 바운딩 확인 기준을 저점권 밑꼬리, 전환선 회복, 30이평 회복 중 무엇으로 볼지 확인이 필요하다.",
-    "61.8% 1차 목표 도달 시 일부 청산인지 전량 청산인지, 50% 도전은 어떤 강도 조건에서 허용할지 확인이 필요하다.",
-    "50% 피보나치와 50이평이 겹쳤다고 보는 허용 오차를 지수 포인트 또는 퍼센트로 정해야 한다.",
-    "잔량 올청 후 당일 매매 종료를 항상 적용할지, 당일 목표 수익 달성 시에만 적용할지 확인이 필요하다.",
-    "수익담보 전환선 눌림 진입의 눌림 판정은 전환선 터치인지, 이탈 후 회복인지, 근접 허용폭인지 확인이 필요하다.",
-    "수익담보 1계약의 30이평 청산은 터치 기준인지, 5분봉 종가 기준인지 확인이 필요하다.",
-  ],
-};
-
-const defaultWeeklyOptions = {
+const fallbackWeeklyOptions = {
   title: "위클리 옵션 전략",
-  status: "draft",
   asset_scope: "KOSPI200 위클리 옵션",
-  depends_on: "index_trading",
-  purpose: "지수 매매 신호를 옵션 상품 선택과 주문 계획으로 변환합니다.",
-  risk_limits: {
-    daily_max_loss_krw: 3000000,
-    per_stop_loss_krw_range: [300000, 500000],
-    per_stop_loss_description: "1회 손절당 30~50만원 손실이 날 수 있으나, 손절 및 자리이동으로 반등 시 수익 회수를 빠르게 노립니다.",
-    on_breach: "STOP_TRADING_FOR_DAY",
-    description: "당일 최대 손실 300만원에 걸리면 그날은 신규 진입을 중단합니다.",
-    loss_basis: "TODO",
-  },
-  money_management: {
-    status: "draft",
-    daily_profit_lock: {
-      base_contracts: 3,
-      profit_krw_range: [500000, 1000000],
-      mode: "CONSERVATIVE_AFTER_PROFIT",
-      description: "3계약 운용으로 당일 50~100만원 수익을 내면 이후는 보수 모드로 전환합니다.",
-    },
-    after_lock: {
-      entry_filter: "only_critical_spot",
-      max_contracts: 1,
-      avoid_full_size_contracts: 3,
-      use_profit_as_safety_margin: true,
-      description: "수익 잠금 이후에는 아주 급소자리 외에는 진입하지 않고, 하더라도 당일 수익금을 담보로 1계약만 안전하게 운용합니다.",
-      profit_collateral_scalp: {
-        status: "draft",
-        label: "수익담보 전환선 눌림 1계약",
-        direction: "call",
-        max_contracts: 1,
-        entry_trigger: "tenkan_pullback_5m",
-        exit_trigger: "gma_30_5m_touch",
-        example_option: "콜 2605 1275.0 4W",
-        example_profit_pct: 55.4,
-        description: "당일 수익이 담보된 뒤에는 전환선 눌림 자리에서 1계약만 진입하고, 30이평에 닿으면 청산하는 짧은 보수 플레이를 허용합니다.",
-      },
-    },
-    downside_pressure_filter: {
-      status: "draft",
-      timeframe: "5m",
-      conditions: ["close_5m < gma_30_5m", "close_5m < tenkan_5m", "close_5m < kijun_5m"],
-      interpretation: "5분봉이 30이평, 전환선, 기준선 아래이면 아직 눌림이 진행 중인 것으로 봅니다.",
-      allowed_action: "double_bottom_minimum_try_only",
-      max_contracts: 1,
-      break_risk: "쌍바닥을 깨면 오늘 고점에서 바닥까지의 하락 길이가 50% 이상 더 길어질 수 있다고 보고 방어합니다.",
-      description: "하락 압력 중에는 더블바텀 후보라도 아주 보수적으로 최소 물량만 사용합니다.",
-    },
-    rationale: "당일 수익금을 안전마진으로 삼고 수익극대화 물량인 1계약만으로 추가 기회를 봅니다.",
-  },
+  risk_limits: { daily_max_loss_krw: 3000000, loss_basis_label: "실현+평가+수수료" },
   entry: {
     initial_contracts: 3,
-    entry_source: "index_trading.new_entry_zone",
     strike_selection: {
-      call_strike_offset_pct: 2.5,
-      example_index: 1280,
-      example_call_strike_zone: "1312~1320",
       target_premium: 1.6,
-      target_premium_range: [1.5, 1.7],
-      description: "현재 중심가격에서 약 2.5% 위 행사가 중 프리미엄 1.6 근처 콜옵션을 찾습니다.",
-    },
-    double_bottom_entry_timing: {
-      status: "draft",
-      anchor: "fib_100",
-      allow_front_run_before_exact_100: true,
-      position_size: "minimum",
-      description: "쌍바닥은 100%를 정석적으로 찍을 수도 있지만 우측 바닥이 더 높은 자리에서 돌 수 있어 조금 앞선 자리도 최소 물량 트라이로 봅니다.",
-    },
-    expiry_day_time_adjustments: {
-      status: "draft",
-      morning: {
-        until: "12:00",
-        strike_offset_pct: 2.5,
-        target_premium_range: [1.5, 1.7],
-        description: "만기일 장초에는 2.5% 위치, 프리미엄 1.5~1.7 구간을 트라이합니다.",
-      },
-      after_noon: {
-        from: "12:00",
-        strike_offset_pct: 1.5,
-        target_premium_range: [0.6, 1.0],
-        stop_loss_pct: 40,
-        position_switch_required: true,
-        description: "만기일 12시 이후에는 1.5% 위치, 프리미엄 0.6~1.0 옵션으로 낮추고 손절 40% 기준으로 자리이동합니다.",
-      },
+      target_premium_range_label: "1.4~1.8",
+      description: "중심가격 기준 약 2.5% 위 콜 중 프리미엄 1.6 근처를 찾습니다.",
     },
     order_ladder: [
-      { contracts: 1, limit_price: 1.7, label: "1차 매수" },
-      { contracts: 1, limit_price: 1.6, label: "2차 매수" },
-      { contracts: 1, limit_price: 1.45, label: "3차 매수" },
+      { label: "1차", price: 1.7 },
+      { label: "2차", price: 1.6 },
+      { label: "3차", price: 1.45 },
     ],
-    expected_average_if_all_filled: 1.58,
   },
   visual_chart: {
-    title: "옵션 프리미엄 전략선",
-    height: 300,
-    base_price_source: "expected_average_if_all_filled",
-    description: "평균 진입가를 기준으로 손실 방어선, 자리이동 준비선, 빠른 청산선, 목표 청산선을 미리 그립니다.",
+    title: "옵션 전략선",
     lines: [
-      { key: "stop_30", label: "-30% 손실선", formula: "avg_entry * 0.70", color: "#b6504a", role: "손절 또는 자리이동 판단" },
-      { key: "switch_prepare_25", label: "-25% 자리이동", formula: "avg_entry * 0.75", color: "#d89216", role: "기존 옵션 자리이동 준비" },
-      { key: "entry_average", label: "평균 진입", formula: "avg_entry", color: "#17202a", role: "3분할 체결 평균 기준" },
-      { key: "quick_take_20", label: "+20% 빠른 청산", formula: "avg_entry * 1.20", color: "#2d8f64", role: "급반등 시 최소 1계약 청산" },
-      { key: "safe_margin_30", label: "+30% 안전마진", formula: "avg_entry * 1.30", color: "#008c8c", role: "2계약 청산 후 잔량 운용" },
-      { key: "target_35", label: "+35% 1차 청산", formula: "avg_entry * 1.35", color: "#2d8f64", role: "첫 목표 청산선" },
-      { key: "target_45", label: "+45% 2차 청산", formula: "avg_entry * 1.45", color: "#006f73", role: "두 번째 목표 청산선" },
-      { key: "switch_take_70_low", label: "자리이동 +36%", formula: "switch_entry * 1.36", color: "#2d8f64", role: "1270콜 2.2 진입 후 3.0 부근 70% 청산 하단 후보" },
-      { key: "switch_take_70_high", label: "자리이동 +50%", formula: "switch_entry * 1.50", color: "#008c8c", role: "1270콜 2.2 진입 후 3.3 부근 70% 청산 상단 후보" },
-      { key: "final_take_50", label: "마지막 +50%", formula: "final_entry * 1.50", color: "#8a63d2", role: "마지막 트라이 40~50% 수익권 1계약 청산 후보" },
-      { key: "final_take_100", label: "마지막 +100%", formula: "final_entry * 2.00", color: "#6d5bd0", role: "마지막 트라이 100% 수익권 1계약 추가 청산 후보" },
-      { key: "profit_scalp_55", label: "수익담보 +55%", formula: "scalp_entry * 1.554", color: "#9a4fb5", role: "수익담보 1계약 전환선 눌림 진입 후 30이평 터치 청산 예시" },
+      { key: "stop_loss", label: "-30% 손절", formula: "avg_entry * 0.70", color: "#a95f59" },
+      { key: "entry_average", label: "평균 진입", formula: "avg_entry", color: "#17202a" },
+      { key: "target_35", label: "+35%", formula: "avg_entry * 1.35", color: "#3b8f70" },
+      { key: "target_45", label: "+45%", formula: "avg_entry * 1.45", color: "#2f7f83" },
     ],
-    sample_path_multipliers: [1.08, 1, 0.92, 0.78, 0.75, 0.86, 1.03, 1.2, 1.32, 1.45, 1.38, 1.55],
   },
-  index_reset_reference: {
-    source: "index_trading.fibonacci.reset_on_break",
-    label: "지수 피보나치 리셋",
-    value: "중심라인 콜 2~3계약 재시작",
-    description: "지수의 핵심 자리가 무너지면 고가와 저가를 다시 셋업하고, 61.8%~100% 사이 중심라인에서 프리미엄 1.5~1.8 콜옵션을 2~3계약으로 새 초기 진입처럼 재시작하는 후보로 봅니다.",
-    call_retry_prepare: {
-      line: "reset_mid_618_100",
-      direction: "call",
-      target_premium_range: [1.5, 1.8],
-      contracts_range: [2, 3],
-      restart_mode: "fresh_initial_entry",
-      description: "리셋 중심라인 접근 시 프리미엄 1.5~1.8 콜옵션을 찾고, 2~3계약으로 다시 초기 진입하듯 접근합니다.",
-      wick_confirmation: {
-        source: "index_trading.signals.reset_mid_wick_confirm",
-        label: "원하는 자리 밑꼬리",
-        effect: "entry_confidence_up",
-        description: "거의 원하는 자리에서 밑꼬리가 나오면 리셋 중심라인 콜 재시작 후보의 신뢰도를 높이고 2~3계약 준비를 강화합니다.",
-      },
-    },
-  },
-  position_roles: {
-    status: "draft",
-    description: "초기 2계약, 즉 약 70% 물량은 안전마진을 만들고, 남은 1계약은 수익극대화를 위한 잔량입니다.",
-    safety_margin: {
-      contracts: 2,
-      position_pct: 70,
-      role: "최소 안전마진 확보",
-      description: "초기 두 개의 물량은 급반등 시 빠르게 일부 수익을 실현해 남은 잔량을 편하게 끌고 가기 위한 안전마진 물량입니다.",
-    },
-    profit_runner: {
-      contracts: 1,
-      position_pct: 30,
-      role: "수익극대화",
-      description: "남은 잔량은 손익 부담을 줄인 뒤 추세가 이어질 때 수익을 극대화하기 위한 물량입니다.",
-    },
-  },
-  exit: {
-    loss_control: {
-      hold_until_loss_pct: 30,
-      stop_price_formula: "average_entry_price * 0.70",
-      example_entry_price: 2.1,
-      example_stop_price: 1.47,
-      description: "진입 이후 더 밀려도 30% 손실구간까지 밀리지 않으면 홀딩합니다.",
-    },
-    quick_rebound: {
-      status: "draft",
-      purpose: "반등 자리에서 급반전하는 콜옵션 프리미엄을 빠르게 확보합니다.",
-      trigger: "rebound_zone_call_premium_fast_reverse",
-      minimum_take_profit: {
-        profit_pct_range: [20, 30],
-        min_position_pct: 30,
-        contracts: 1,
-        description: "순간 반등으로 20~30% 수익권에 들어오면 최소 1계약은 청산합니다.",
-      },
-      free_runner_plan: {
-        condition: "no_initial_stop_loss",
-        profit_pct: 30,
-        exit_position_pct: 70,
-        exit_contracts: 2,
-        remaining_contracts: 1,
-        concept: "초기 손절 전 2계약을 +30%에 청산하면 남은 1계약을 무위험 잔량 개념으로 운용합니다.",
-        arithmetic_check: "TODO",
-      },
-    },
-    targets: [
-      { contracts: 1, profit_pct: 35, price_formula: "average_entry_price * 1.35", example_entry_price: 2.1, example_target_price: 2.84, label: "1차 청산" },
-      { contracts: 1, profit_pct: 45, price_formula: "average_entry_price * 1.45", example_entry_price: 2.1, example_target_price: 3.05, label: "2차 청산" },
-    ],
-    runner: {
-      contracts: 1,
-      management: "trailing_stop_or_index_exit_signal",
-      description: "남은 1계약은 수익극대화 물량으로 두고 트레일링 스탑 또는 지수 청산 신호까지 운용합니다.",
-      trailing_stop_formula: "TODO",
-      full_exit_on_index_50_confluence: {
-        status: "draft",
-        trigger: "index.current_index_near_intraday_full_fib_50 AND index.current_index_near_gma_50_5m",
-        action: "EXIT_ALL_REMAINING",
-        after_action: "DAILY_DONE_NO_MORE_TRY",
-        description: "수익극대화 잔량이 남아 있고 지수가 당일 전구간 50% 자리이면서 50이평 자리와 겹치면 잔량은 올청 후보로 봅니다. 당일 수익을 확보했다면 이후 더 트라이하지 않고 매매를 종료합니다.",
-      },
-    },
-  },
-  position_switch: {
-    status: "draft",
-    rationale: "손절 및 자리이동을 하면서 더 안쪽 콜옵션으로 당겨와야 시장이 반등할 때 수익 전환을 빠르게 가져올 수 있습니다.",
-    trigger: {
-      index_push_points: "5~10",
-      fibonacci_zone: "100%~103%",
-      loss_prepare_pct_range: [20, 25],
-      description: "시장이 피보나치 진입 구간 이후 5~10포인트 더 밀리고 기존 옵션이 20~25% 손실권이면 자리이동을 준비합니다.",
-    },
-    replacement_selection: {
-      direction: "call",
-      strike_shift: "deeper_inside_call",
-      example_old_strike: 1315,
-      example_new_strike_zone: "1310~1305",
-      target_premium_min: 1.8,
-      target_premium_max: 2.2,
-      preferred_entry_price: 2.1,
-      avoid_market_order: true,
-      description: "더 안쪽 콜옵션 중 프리미엄 1.8~2.2 상품을 찾고, 저렴한 구간에서 지정가 진입을 노립니다.",
-    },
-    execution: {
-      new_contracts: 3,
-      old_contracts_to_close: 3,
-      old_position_exit_loss_pct: 25,
-      sequence: "fill_replacement_then_close_existing",
-      description: "새 3계약이 지정가로 체결되면 기존 손실 포지션 3계약을 즉시 청산합니다.",
-    },
-    retry_limit: {
-      max_switch_attempts: 2,
-      after_limit_action: "WAIT_NO_MORE_TRY",
-      loss_after_limit: "small_loss",
-      description: "핵심 자리가 무너지면 자리이동은 최대 2번까지만 시도하고, 두 번 이후 약손실이면 더 트라이하지 않고 대기합니다.",
-    },
-    critical_breakdown: {
-      trigger: "critical_spot_breakdown",
-      risk: "large_breakdown_possible",
-      action: "stop_retry_and_wait_after_two_switches",
-      description: "방어해야 할 자리가 무너지면 추가 하락이 커질 수 있어 무한 재진입하지 않습니다.",
-    },
-    low_floor_replacement_exit: {
-      status: "draft",
-      example_strike: 1270,
-      example_entry_premium: 2.2,
-      take_profit_premium_range: [3.0, 3.3],
-      take_profit_pct_range: [36, 50],
-      exit_position_pct: 70,
-      runner_position_pct: 30,
-      description: "저점 바닥에서 자리이동해 1270콜을 2.2 근처에서 잡았다면 3.0~3.3에서 약 70% 물량을 청산하고 나머지만 수익극대화로 가져갑니다.",
-    },
-    final_try: {
-      status: "draft",
-      label: "마지막 트라이",
-      example_strike: 1260,
-      example_entry_premium: 2.4,
-      support_lines: ["gma_400", "gma_456"],
-      description: "다시 자리 바꾸면서 마지막 트라이라고 보고 1260콜을 2.4 근처에서 시도합니다. 400/456이평 라인대를 트라이 라인으로 봅니다.",
-      exit_plan: {
-        avoid_fast_70pct_exit: true,
-        purpose: "recent_loss_recovery",
-        targets: [
-          { contracts: 1, profit_pct_range: [40, 50], premium_range: [3.36, 3.6], description: "마지막 트라이에서는 급하게 70% 물량을 청산하지 않고 40~50% 수익권에서 1계약을 청산합니다." },
-          { contracts: 1, profit_pct: 100, premium: 4.8, description: "100% 수익권에서 1계약을 추가 청산해 최근 손절분을 일부 회수합니다." },
-        ],
-        runner_contracts: 1,
-        description: "마지막 트라이는 빠른 70% 청산보다 단계 청산으로 최근 손절분 일부 회수를 우선합니다.",
-      },
-    },
-  },
-  intraday_full_fibonacci_review: {
-    source: "index_trading.fibonacci.intraday_full_range_check",
-    trigger: "after_final_try_or_profit_extension",
-    description: "포지션 변화 후 당일 전구간 피보나치를 다시 그려 현재 지수 위치를 체크합니다.",
-  },
-  index_bounce_target_reference: {
-    source: "index_trading.fibonacci.intraday_full_range_check.bottom_bounce_targets",
-    status: "draft",
-    label: "바닥 바운딩 목표",
-    sequence: ["intraday_full_fib_618", "intraday_full_fib_50"],
-    option_use: "runner_or_partial_exit_reference",
-    description: "저점권에서 바운딩이 나오면 지수 목표는 먼저 당일 전구간 61.8% 라인, 이후 힘이 이어지면 50% 라인까지 도전으로 봅니다. 옵션은 해당 지수 목표 도달 구간을 부분 청산 또는 잔량 운용 판단에 참조합니다.",
-    runner_full_exit: {
-      status: "draft",
-      target: "intraday_full_fib_50 + gma_50_5m",
-      action: "EXIT_ALL_REMAINING_AND_END_DAY",
-      description: "50% 피보나치 목표와 50이평이 겹치는 자리는 수익극대화 잔량 올청 후보로 봅니다. 당일 매매를 이미 끝낼 수 있는 수익이면 추가 트라이는 하지 않습니다.",
-    },
-  },
-  states: [
-    { key: "WAIT_INDEX_SIGNAL", label: "지수 신호 대기", description: "지수 매매 탭의 신규 진입 위치를 기다립니다." },
-    { key: "SELECT_OPTION", label: "옵션 선택", description: "2.5% 위 콜 행사가와 프리미엄 1.6 근처 상품을 찾습니다." },
-    { key: "PLACE_ENTRY_LADDER", label: "3분할 주문", description: "1.70, 1.60, 1.45에 각 1계약 주문합니다." },
-    { key: "PLACE_TARGETS", label: "부분 청산 예약", description: "+35%, +45%에 각 1계약 청산 주문을 냅니다." },
-    { key: "HOLD_OR_STOP", label: "손실선 전 홀딩", description: "30% 손실구간 전까지는 홀딩합니다." },
-    { key: "QUICK_REBOUND_EXIT", label: "급반등 1차 청산", description: "초기 2계약, 즉 70% 물량은 최소 안전마진을 만들기 위한 청산 후보입니다." },
-    { key: "FREE_RUNNER", label: "무위험 잔량 전환", description: "초기 손절 전 2계약을 +30%에 청산하면 남은 1계약은 수익극대화 잔량으로 운용합니다." },
-    { key: "SWITCH_PREPARE", label: "자리이동 준비", description: "100%~103% 구간과 -20~-25% 손실권이 겹치면 더 안쪽 콜을 찾습니다." },
-    { key: "SWITCH_EXECUTE", label: "자리이동 실행", description: "새 안쪽 콜 3계약 체결 후 기존 3계약을 청산합니다." },
-    { key: "SWITCH_LIMIT_2", label: "자리이동 2회 제한", description: "핵심 자리 이탈 구간에서는 자리이동을 최대 두 번까지만 허용합니다." },
-    { key: "WAIT_AFTER_SMALL_LOSS", label: "약손실 후 대기", description: "두 번 자리이동 후 약손실이면 더 트라이하지 않고 대기합니다." },
-    { key: "SWITCH_TAKE_PROFIT_70", label: "저점 자리이동 70% 청산", description: "1270콜을 2.2 근처에서 잡은 자리이동 포지션은 3.0~3.3에서 약 70% 물량을 청산하고 잔량만 수익극대화로 가져갑니다." },
-    { key: "FINAL_LONG_MA_TRY", label: "400/456이평 마지막 트라이", description: "다시 자리이동할 때 마지막 트라이라고 보고 400/456이평 라인대에서 1260콜 2.4 근처 진입을 검토합니다." },
-    { key: "FINAL_TRY_STAGED_EXIT", label: "마지막 트라이 단계 청산", description: "마지막 트라이에서는 +40~50%에서 1계약, +100%에서 1계약을 청산해 최근 손절분을 일부 회수합니다." },
-    { key: "INTRADAY_FULL_FIB_REVIEW", label: "당일 전구간 피보나치 확인", description: "수익을 조금 더 늘리거나 포지션을 바꾼 뒤에는 당일 전체 고가/저가 피보나치를 다시 그려 현재 지수 위치를 확인합니다." },
-    { key: "BOTTOM_BOUNCE_TARGET_618", label: "바운딩 61.8% 목표", description: "저점권에서 바운딩이 나오면 옵션 잔량 운용의 1차 지수 목표를 당일 전구간 61.8% 라인으로 둡니다." },
-    { key: "BOTTOM_BOUNCE_TARGET_50", label: "바운딩 50% 도전", description: "61.8% 목표를 넘고 반등 힘이 유지되면 남은 옵션 잔량은 당일 전구간 50% 라인까지 도전 후보로 봅니다." },
-    { key: "RUNNER_FULL_EXIT_50_CONFLUENCE", label: "50%+50이평 잔량 올청", description: "수익극대화 잔량이 남아 있고 지수가 당일 전구간 50%와 50이평이 겹치는 자리면 옵션 잔량을 전량 청산하는 후보로 봅니다." },
-    { key: "DAILY_DONE_NO_MORE_TRY", label: "당일 매매 종료", description: "잔량까지 정리하고 당일 수익을 확보했으면 더 트라이하지 않고 매매를 종료합니다." },
-    { key: "RESET_MID_RESTART_ENTRY", label: "중심라인 재시작", description: "리셋 중심라인에서 프리미엄 1.5~1.8 콜옵션을 2~3계약으로 새 초기 진입처럼 다시 시작하는 후보로 봅니다." },
-    { key: "RESET_MID_WICK_CONFIRM", label: "중심 밑꼬리 확인", description: "거의 원하는 자리에서 밑꼬리가 나오면 중심라인 콜 재시작 후보의 신뢰도를 높입니다." },
-    { key: "RUNNER_MANAGE", label: "잔량 운용", description: "남은 1계약은 추세를 따라갑니다." },
-    { key: "DOWNSIDE_PRESSURE_MIN_TRY", label: "하락 압력 최소 트라이", description: "5분봉이 30이평, 전환선, 기준선 아래이면 더블바텀 후보라도 최소 물량만 시도합니다." },
-    { key: "PRE_100_FRONT_RUN", label: "100% 앞선 트라이", description: "우측 바닥이 100%보다 높은 자리에서 돌 수 있어 앞선 자리도 최소 물량 후보로 봅니다." },
-    { key: "EXPIRY_AFTER_NOON_REPRICE", label: "만기일 12시 후 재선정", description: "12시 이후에는 1.5% 위치, 프리미엄 0.6~1.0 옵션으로 낮추고 손절 40% 기준으로 자리이동합니다." },
-    { key: "PROFIT_LOCK", label: "당일 수익 잠금", description: "3계약 운용으로 당일 50~100만원 수익을 내면 보수 모드로 전환합니다." },
-    { key: "REDUCED_SIZE_PLAY", label: "1계약 보수 플레이", description: "수익 잠금 이후에는 급소자리에서만 수익담보 내 1계약으로 진입합니다." },
-    { key: "PROFIT_COLLATERAL_TENKAN_ENTRY", label: "수익담보 전환선 눌림 진입", description: "당일 수익이 담보된 뒤 전환선 눌림 자리에서는 1계약만 짧게 진입합니다." },
-    { key: "SCALP_GMA30_EXIT", label: "30이평 터치 청산", description: "수익담보 1계약 포지션은 30이평에 닿으면 욕심내지 않고 청산합니다." },
-    { key: "DAILY_STOP", label: "당일 중단", description: "손실 300만원 도달 시 중단합니다." },
-  ],
-  questions: [
-    "당일 최대 손실 300만원의 계산 기준 확인이 필요합니다.",
-    "부분 체결 시 청산 주문 배분 기준 확인이 필요합니다.",
-    "트레일링 스탑 공식 확인이 필요합니다.",
-    "자리이동 시 새 3계약 체결 전후로 기존 3계약 청산 순서를 확인해야 합니다.",
-    "2계약을 +30%에 청산하면 남은 1계약이 실제로 무위험이 되는 산식을 확인해야 합니다.",
-    "계약수가 달라질 때 70% 안전마진 물량과 30% 수익극대화 물량의 반올림 기준을 확인해야 합니다.",
-    "당일 50~100만원 수익 잠금 기준과 이후 급소자리 조건을 확인해야 합니다.",
-    "하락 압력 구간의 더블바텀 트라이는 1계약 고정인지, 쌍바닥 이탈 기준은 무엇인지 확인해야 합니다.",
-    "100% 앞선 트라이 허용 폭과 만기일 12시 이후 40% 손절 기준을 확인해야 합니다.",
-    "약손실 기준, 자리이동 2회 카운트 방식, 핵심 자리 이탈 기준을 확인해야 합니다.",
-    "리셋 중심라인에서 2계약과 3계약을 나누는 기준과 프리미엄 1.5~1.8 주문가 분할 기준을 확인해야 합니다.",
-    "거의 원하는 자리에서 밑꼬리가 나왔을 때 바로 진입할지, 다음 5분봉 확인 후 들어갈지 확인해야 합니다.",
-    "400봉과 456봉 이평이 기하이평인지 단순이평인지, 5분봉 기준인지 확인해야 합니다.",
-    "당일 전구간 피보나치의 고가/저가 기준과 적용 구간을 확인해야 합니다.",
-    "1270콜과 1260콜은 예시 행사가인지, 시장 상황에 따라 자동 선택할 행사가 규칙인지 확인해야 합니다.",
-    "마지막 트라이가 기존 자리이동 2회 제한 안에 포함되는지, 예외적으로 허용되는 별도 시도인지 확인해야 합니다.",
-    "저점 자리이동 후 3.0~3.3에서 70% 물량 청산은 터치 즉시인지, 호가 안정 또는 5분봉 확인 후인지 확인해야 합니다.",
-    "당일 전구간 피보나치의 현재 지수 위치별 행동 규칙을 더 구체화해야 합니다.",
-    "바닥 바운딩 후 지수 61.8% 라인에서는 옵션을 몇 계약 또는 몇 퍼센트 청산할지 확인이 필요합니다.",
-    "61.8% 이후 50% 라인 도전은 전환선/30이평/거래량 중 어떤 힘 유지 조건을 필수로 볼지 확인이 필요합니다.",
-    "50% 피보나치와 50이평이 겹치는 자리에서 잔량 올청을 터치 즉시 할지, 5분봉 확인 후 할지 확인이 필요합니다.",
-    "잔량 올청 후 당일 매매 종료를 자동 상태로 둘지, 사용자가 수동으로 종료 체크할지 확인이 필요합니다.",
-    "수익담보 전환선 눌림 진입에서 전환선 터치, 이탈 후 회복, 근접 중 어떤 조건을 진입 기준으로 볼지 확인해야 합니다.",
-    "수익담보 1계약 청산의 30이평 터치 기준이 가격 터치인지, 5분봉 종가 도달인지 확인해야 합니다.",
-    "수익담보 스캘프의 허용 손실선과 미체결 주문 취소 기준을 별도로 정해야 합니다.",
-  ],
+  states: [],
+  questions: [],
 };
 
-const formatPct = (value) => (value == null ? "-" : `${(Number(value) * 100).toFixed(1)}%`);
-const formatNum = (value, digits = 2) =>
-  value == null ? "-" : Number(value).toLocaleString("ko-KR", { maximumFractionDigits: digits });
-const formatSigned = (value, digits = 2) => {
-  if (value == null) return "-";
-  const numeric = Number(value);
-  if (!Number.isFinite(numeric)) return "-";
-  return `${numeric > 0 ? "+" : ""}${numeric.toLocaleString("ko-KR", { maximumFractionDigits: digits })}`;
-};
-const formatWon = (value) => (value == null ? "-" : `${Number(value).toLocaleString("ko-KR")}원`);
-const formatScore = (value) => (value == null ? "-" : Number(value).toFixed(1));
-
-function initialMode() {
-  if (window.location.hash === "#overview" || window.location.hash === "#stocks") return "stocks";
-  if (window.location.hash === "#index") return "index";
-  if (window.location.hash === "#weekly" || window.location.hash === "#options") return "weekly";
-  return "weekly";
+function loadSettings() {
+  try {
+    return {
+      repeatStrongAlerts: true,
+      vibrationEnabled: true,
+      saveSignalLog: true,
+      alertsEnabled: false,
+      ...JSON.parse(localStorage.getItem(SETTINGS_KEY) || "{}"),
+    };
+  } catch (error) {
+    return { repeatStrongAlerts: true, vibrationEnabled: true, saveSignalLog: true, alertsEnabled: false };
+  }
 }
 
-async function loadJson(path) {
-  const response = await fetch(path, { cache: "no-store" });
-  if (!response.ok) throw new Error(`${path} 로드 실패`);
-  return response.json();
+function saveSettings() {
+  localStorage.setItem(SETTINGS_KEY, JSON.stringify(state.settings));
+}
+
+function loadSignalLog() {
+  try {
+    const log = JSON.parse(localStorage.getItem(SIGNAL_LOG_KEY) || "[]");
+    return Array.isArray(log) ? log.slice(0, 12) : [];
+  } catch (error) {
+    return [];
+  }
+}
+
+function saveSignalLog() {
+  if (!state.settings.saveSignalLog) return;
+  localStorage.setItem(SIGNAL_LOG_KEY, JSON.stringify(state.signalLog.slice(0, 12)));
+}
+
+async function init() {
+  state.alertsEnabled = Boolean(state.settings.alertsEnabled);
+  bindControls();
+  await registerServiceWorker();
+
+  const [weeklyOptions, replayPayload, publicReplay] = await Promise.all([
+    loadOptionalJson("data/weekly_options.json"),
+    loadOptionalJson("/api/options-replay"),
+    loadOptionalJson("data/public_weekly_replay.json"),
+  ]);
+
+  state.weeklyOptions = weeklyOptions || fallbackWeeklyOptions;
+  state.replay = normalizeReplayPayload(replayPayload) || publicReplay || state.weeklyOptions.signal_replay || {};
+  state.activeReplayDate = activeReplaySession()?.date || state.replay.active_session_id || null;
+
+  renderSignalLog();
+  renderStaticPanels();
+  renderSettings();
+  await loadMonitor(true);
+  startPolling();
 }
 
 async function loadOptionalJson(path) {
   try {
-    return await loadJson(path);
+    const response = await fetch(path, { cache: "no-store" });
+    if (!response.ok) throw new Error(`${path} 로드 실패`);
+    return response.json();
   } catch (error) {
     return null;
   }
 }
 
-async function init() {
-  bindModeTabs();
-  document.querySelector("#periodSelect")?.addEventListener("change", (event) => {
-    state.period = event.target.value;
-    state.algorithm = null;
-    renderDashboard();
-  });
-  document.querySelector("#algorithmSelect")?.addEventListener("change", (event) => {
-    state.algorithm = event.target.value;
-    renderDashboard();
-  });
-  document.querySelector("#holdingForm")?.addEventListener("submit", addHolding);
-  bindOptionsMonitorControls();
-  bindWeeklyReplayControls();
-  registerServiceWorker();
-
-  state.holdings = loadHoldings();
-
-  try {
-    const [report, chartConfig, indexStrategy, weeklyOptions, publicWeeklyReplay] = await Promise.all([
-      loadJson("data/market_report.json"),
-      loadOptionalJson("data/chart_config.json"),
-      loadOptionalJson("data/index_trading.json"),
-      loadOptionalJson("data/weekly_options.json"),
-      loadOptionalJson("data/public_weekly_replay.json"),
-    ]);
-    state.report = report;
-    state.chartConfig = mergeChartConfig(chartConfig || report.chart_config || {});
-    state.indexStrategy = indexStrategy || defaultIndexStrategy;
-    state.weeklyOptions = mergeWeeklyPublicReplay(weeklyOptions || defaultWeeklyOptions, publicWeeklyReplay);
-    state.weeklyReplaySessionId = state.weeklyOptions.signal_replay?.active_session_id || null;
-    state.weeklyReplayDate = state.weeklyReplaySessionId;
-    renderDashboard();
-    setupSectionAccordions();
-  } catch (error) {
-    state.chartConfig = defaultChartConfig;
-    state.indexStrategy = defaultIndexStrategy;
-    state.weeklyOptions = defaultWeeklyOptions;
-    renderError(error);
-    setupSectionAccordions();
-  }
-
-  setMode(state.mode, false);
-  loadOptionsMonitor();
-  startOptionsMonitorPolling();
+function normalizeReplayPayload(payload) {
+  if (!payload) return null;
+  if (payload.active_session || payload.status === "local_archive") return payload;
+  return payload.sessions?.length ? payload : null;
 }
 
-function mergeWeeklyPublicReplay(strategy, publicReplay) {
-  if (!publicReplay?.sessions?.length) return strategy;
-  return {
-    ...strategy,
-    signal_replay: {
-      ...(strategy.signal_replay || {}),
-      ...publicReplay,
-      sessions: publicReplay.sessions,
-    },
-  };
+async function loadReplayDate(date) {
+  const payload = await loadOptionalJson(`/api/options-replay?date=${encodeURIComponent(date || "")}`);
+  if (payload) {
+    state.replay = normalizeReplayPayload(payload) || state.replay;
+  } else {
+    state.replay = {
+      ...state.replay,
+      selected_date: date,
+      active_session: null,
+    };
+  }
+  renderReplay();
+}
+
+function bindControls() {
+  document.querySelector("#refreshMonitor")?.addEventListener("click", () => loadMonitor(true));
+  document.querySelector("#enableAlerts")?.addEventListener("click", requestAlertToggle);
+  document.querySelector("#testAlert")?.addEventListener("click", testAlert);
+  document.querySelector("#toggleWakeLock")?.addEventListener("click", toggleWakeLock);
+  document.querySelector("#cancelAlertConfirm")?.addEventListener("click", closeAlertConfirm);
+  document.querySelector("#confirmAlertToggle")?.addEventListener("click", confirmAlertToggle);
+  document.querySelector("#alertConfirmBackdrop")?.addEventListener("click", (event) => {
+    if (event.target.id === "alertConfirmBackdrop") closeAlertConfirm();
+  });
+  document.querySelector("#closeModal")?.addEventListener("click", closeModal);
+  document.querySelector("#modalBackdrop")?.addEventListener("click", (event) => {
+    if (event.target.id === "modalBackdrop") closeModal();
+  });
+  document.querySelectorAll("[data-open-modal]").forEach((button) => {
+    button.addEventListener("click", () => openModal(button.dataset.openModal));
+  });
+  document.querySelector("#replayDate")?.addEventListener("change", (event) => {
+    state.activeReplayDate = event.target.value || null;
+    if (state.activeReplayDate) state.replayCursors[state.activeReplayDate] = 0;
+    loadReplayDate(state.activeReplayDate);
+  });
+  document.querySelector("#replayFirst")?.addEventListener("click", () => moveReplayCursor("first"));
+  document.querySelector("#replayPrev")?.addEventListener("click", () => moveReplayCursor("prev"));
+  document.querySelector("#replayNext")?.addEventListener("click", () => moveReplayCursor("next"));
+  document.querySelector("#replayEnd")?.addEventListener("click", () => moveReplayCursor("end"));
+  document.querySelector("#replayCursor")?.addEventListener("input", (event) => {
+    const active = activeReplaySession();
+    if (!active) return;
+    state.replayCursors[active.date || active.id] = Number(event.target.value) || 0;
+    renderReplay();
+  });
+  document.querySelector("#repeatStrongAlerts")?.addEventListener("change", (event) => {
+    state.settings.repeatStrongAlerts = event.target.checked;
+    saveSettings();
+    renderSettings();
+  });
+  document.querySelector("#vibrationEnabled")?.addEventListener("change", (event) => {
+    state.settings.vibrationEnabled = event.target.checked;
+    saveSettings();
+    renderSettings();
+  });
+  document.querySelector("#saveSignalLog")?.addEventListener("change", (event) => {
+    state.settings.saveSignalLog = event.target.checked;
+    saveSettings();
+    renderSettings();
+  });
+  document.querySelector("#clearSignalLog")?.addEventListener("click", () => {
+    state.signalLog = [];
+    localStorage.removeItem(SIGNAL_LOG_KEY);
+    renderSignalLog();
+  });
+  window.addEventListener("resize", redrawCharts);
 }
 
 async function registerServiceWorker() {
@@ -824,293 +216,1064 @@ async function registerServiceWorker() {
   }
 }
 
-function bindOptionsMonitorControls() {
-  document.querySelector("#enableOptionsAlerts")?.addEventListener("click", enableOptionsAlerts);
-  document.querySelector("#testOptionsAlert")?.addEventListener("click", () => {
-    state.optionsAlertsEnabled = true;
-    fireOptionsAlert(
-      {
-        type: "candidate",
-        title: "테스트 알림",
-        message: "소리, 진동, 알림센터 전달 상태를 확인합니다.",
-        rule: "TEST_ALERT",
-        time: "-",
-      },
-      true,
-    );
-    updateOptionsAlertStatus("테스트 알림을 보냈습니다.");
-  });
-  document.querySelector("#refreshOptionsMonitor")?.addEventListener("click", () => loadOptionsMonitor(true));
-  updateOptionsAlertStatus();
+function startPolling() {
+  if (state.monitorTimer) window.clearInterval(state.monitorTimer);
+  state.monitorTimer = window.setInterval(() => loadMonitor(), MONITOR_POLL_MS);
 }
 
-function bindWeeklyReplayControls() {
-  document.querySelector("#weeklyReplayDate")?.addEventListener("change", (event) => {
-    state.weeklyReplayDate = event.target.value || null;
-    state.weeklyReplaySessionId = event.target.value || null;
-    renderWeeklyReplay();
-  });
-}
-
-async function enableOptionsAlerts() {
-  state.optionsAlertsEnabled = true;
-  unlockOptionsAudio();
-
-  if ("Notification" in window) {
-    try {
-      if (Notification.permission === "default") {
-        state.optionsAlertPermission = await Notification.requestPermission();
-      } else {
-        state.optionsAlertPermission = Notification.permission;
-      }
-    } catch (error) {
-      state.optionsAlertPermission = "denied";
-    }
-  } else {
-    state.optionsAlertPermission = "unsupported";
-  }
-
-  updateOptionsAlertStatus();
-  fireOptionsAlert(
-    {
-      type: "watch",
-      title: "알림 준비",
-      message: "옵션 감시 신호가 뜨면 이 폰에서 소리와 진동을 먼저 울립니다.",
-      rule: "ALERT_READY",
-      time: "-",
-    },
-    true,
-  );
-}
-
-function startOptionsMonitorPolling() {
-  if (state.optionsMonitorTimer) window.clearInterval(state.optionsMonitorTimer);
-  state.optionsMonitorTimer = window.setInterval(() => loadOptionsMonitor(), OPTIONS_MONITOR_POLL_MS);
-}
-
-async function loadOptionsMonitor(manual = false) {
-  const badge = document.querySelector("#optionsMonitorBadge");
-  if (manual && badge) {
-    badge.className = "signal-badge neutral";
-    badge.textContent = "조회중";
-  }
-
+async function loadMonitor(manual = false) {
+  if (manual) setTopStatus("조회 중");
   try {
     const response = await fetch("/api/options-monitor", { cache: "no-store" });
     const snapshot = await response.json();
-    state.optionsMonitor = snapshot;
-    renderOptionsMonitor();
-    maybeFireOptionsAlert(snapshot);
+    state.monitor = snapshot;
+    renderMonitor();
+    maybeRecordSignal(snapshot);
+    maybeFireAlert(snapshot);
   } catch (error) {
-    state.optionsMonitor = {
+    state.monitor = {
       ok: false,
       signal: {
         type: "warning",
         label: "연결 실패",
         title: "로컬 서버 연결 실패",
-        message: "로컬 서버의 옵션 감시 API를 읽지 못했습니다. 서버 실행 상태를 확인하세요.",
+        message: "옵션 감시 API를 읽지 못했습니다. 서버 실행 상태를 확인하세요.",
         rule: "LOCAL_API_FAILED",
         time: "-",
+        metrics: {},
       },
       main: { candles: [], latest: null, levels: {} },
+      secondary: { latest: null },
     };
-    renderOptionsMonitor();
+    renderMonitor();
   }
 }
 
-function renderOptionsMonitor() {
-  const snapshot = state.optionsMonitor || {};
+function renderMonitor() {
+  const snapshot = state.monitor || {};
   const signal = snapshot.signal || snapshot.main?.signal || {};
-  const badge = document.querySelector("#optionsMonitorBadge");
-  if (badge) {
-    badge.className = `signal-badge ${signalClass(signal.type)}`;
-    badge.textContent = signal.label || "대기";
-  }
-
-  const source = document.querySelector("#optionsMonitorSource");
-  if (source) {
-    source.textContent = snapshot.source?.key_required === false ? "키 없는 5분봉" : "5분봉 감시";
-  }
-
-  const text = document.querySelector("#optionsMonitorSignal");
-  if (text) {
-    const title = signal.title ? `${signal.title}: ` : "";
-    text.textContent = `${title}${signal.message || "분봉 데이터를 기다리고 있습니다."}`;
-  }
-
-  renderOptionsMonitorMetrics(snapshot);
-  renderOptionsMonitorLegend(snapshot);
-  drawOptionsMonitorChart();
-}
-
-function renderOptionsMonitorMetrics(snapshot) {
-  const metrics = document.querySelector("#optionsMonitorMetrics");
-  if (!metrics) return;
-
-  const main = snapshot.main || {};
-  const secondary = snapshot.secondary || {};
-  const latest = main.latest || {};
-  const secondaryLatest = secondary.latest || {};
-  const age = snapshot.signal?.metrics?.age_minutes;
-  metrics.innerHTML = [
-    {
-      label: "메인",
-      value: formatNum(latest.close, 2),
-      text: main.ok === false ? "조회 실패" : main.label || "KOSPI200",
-    },
-    {
-      label: "보조",
-      value: formatNum(secondaryLatest.close, 2),
-      text: secondary.ok === false ? "보조 조회 실패" : secondary.label || "KODEX200",
-    },
-    {
-      label: "최신봉",
-      value: latest.time || "-",
-      text: Number.isFinite(age) ? `${age}분 지연` : snapshot.generated_at ? "방금 갱신" : "대기",
-    },
-  ]
-    .map(
-      (item) => `
-        <article>
-          <span>${escapeHtml(item.label)}</span>
-          <strong>${escapeHtml(item.value)}</strong>
-          <small>${escapeHtml(item.text)}</small>
-        </article>
-      `,
-    )
-    .join("");
-}
-
-function renderOptionsMonitorLegend(snapshot) {
-  const legend = document.querySelector("#optionsMonitorLegend");
-  if (!legend) return;
+  const signalType = signalClass(signal.type);
+  const board = document.querySelector("#signalBoard");
+  const latest = snapshot.main?.latest || {};
+  const secondaryLatest = snapshot.secondary?.latest || {};
   const levels = snapshot.main?.levels || {};
+  const age = number(signal.metrics?.age_minutes);
+
+  if (board) {
+    board.className = `signal-board ${signalType}`;
+  }
+  setText("#signalBadge", signal.label || "대기");
+  document.querySelector("#signalBadge").className = `signal-pill ${signalType}`;
+  setText("#signalTitle", signal.title || signal.label || "신호 대기");
+  setText("#signalMessage", signal.message || "KOSPI200 5분봉 데이터를 기다리고 있습니다.");
+  setText("#latestCandleTime", `최신봉 ${latest.time || "-"}`);
+  setText("#delayText", Number.isFinite(age) ? `지연 ${age}분` : "지연 -");
+  setTopStatus(statusText(snapshot, signal));
+  renderPriceGrid(latest, secondaryLatest, levels);
+  renderLiveLegend(levels);
+  const livePlan = buildLiveTradePlan(snapshot);
+  renderLiveTradePlan(livePlan);
+  drawLiveChart(livePlan);
+  renderSettings();
+}
+
+function statusText(snapshot, signal) {
+  if (!snapshot.ok) return "데이터 오류";
+  if (signal?.type === "warning" && signal?.rule === "DATA_STALE_DURING_MARKET") return "데이터 지연";
+  return `${snapshot.source?.key_required === false ? "키 없음" : "데이터"} · ${signal?.label || "대기"}`;
+}
+
+function setTopStatus(text) {
+  setText("#topStatusText", text);
+}
+
+function renderPriceGrid(latest, secondaryLatest, levels) {
+  const items = [
+    { label: "메인", value: formatNum(latest.close, 2), text: "KOSPI200" },
+    { label: "보조", value: formatNum(secondaryLatest.close, 0), text: "KODEX200" },
+    { label: "기준", value: formatNum(levels.fib_618, 2), text: "61.8%" },
+  ];
+  document.querySelector("#priceGrid").innerHTML = items.map(metricCard).join("");
+}
+
+function metricCard(item) {
+  return `
+    <article>
+      <span>${escapeHtml(item.label)}</span>
+      <strong>${escapeHtml(item.value)}</strong>
+      <small>${escapeHtml(item.text)}</small>
+    </article>
+  `;
+}
+
+function renderLiveLegend(levels) {
   const entries = [
     { label: "KOSPI200", color: "#17202a" },
-    { label: "61.8%", color: "#2d8f64", value: levels.fib_618 },
-    { label: "50%", color: "#4069b8", value: levels.fib_50 },
-    { label: "105%", color: "#b6504a", value: levels.fib_105 },
+    { label: `61.8 ${formatNum(levels.fib_618, 2)}`, color: "#3b8f70" },
+    { label: `50 ${formatNum(levels.fib_50, 2)}`, color: "#5275ad" },
+    { label: `105 ${formatNum(levels.fib_105, 2)}`, color: "#a95f59" },
   ];
-  legend.innerHTML = entries
-    .map((entry) => {
-      const suffix = Number.isFinite(number(entry.value)) ? ` ${formatNum(entry.value, 2)}` : "";
-      return `<span style="color:${escapeAttr(entry.color)}"><i></i>${escapeHtml(entry.label + suffix)}</span>`;
+  document.querySelector("#liveLegend").innerHTML = entries.map(legendItem).join("");
+}
+
+function legendItem(item) {
+  return `<span style="color:${escapeAttr(item.color)}"><i></i>${escapeHtml(item.label)}</span>`;
+}
+
+function maybeRecordSignal(snapshot) {
+  const signal = snapshot.signal || {};
+  if (!signal.rule || signal.rule === "WAIT" || signal.alert_level === "silent") return;
+  const latest = snapshot.main?.latest || {};
+  const tradePlan = buildLiveTradePlan(snapshot);
+  const key = `${signal.rule}:${latest.datetime || signal.time}:${latest.close || ""}`;
+  if (state.signalLog[0]?.key === key) return;
+  state.signalLog.unshift({
+    key,
+    type: signal.type || "watch",
+    title: signal.title || signal.label || "신호",
+    message: signal.message || "",
+    time: signal.time || latest.time || "-",
+    close: latest.close,
+    trade: tradePlan?.status ? {
+      status: tradePlan.status,
+      entry: tradePlan.entry,
+      stop: tradePlan.stop,
+      tp1: tradePlan.tp1,
+      tp2: tradePlan.tp2,
+    } : null,
+    createdAt: new Date().toISOString(),
+  });
+  state.signalLog = state.signalLog.slice(0, 12);
+  saveSignalLog();
+  renderSignalLog();
+}
+
+function renderSignalLog() {
+  setText("#logCount", `${state.signalLog.length}개`);
+  const root = document.querySelector("#signalLog");
+  if (!root) return;
+  if (!state.signalLog.length) {
+    root.innerHTML = `<article class="empty-log">강한 신호가 발생하면 여기에 최근 기록이 쌓입니다.</article>`;
+    return;
+  }
+  root.innerHTML = state.signalLog
+    .slice(0, 5)
+    .map((item) => {
+      const tradeText = item.trade
+        ? `ENTRY ${formatNum(item.trade.entry, 2)} · STOP ${formatNum(item.trade.stop, 2)} · TP1 ${formatNum(item.trade.tp1, 2)}`
+        : item.message;
+      return `
+        <article class="log-item ${escapeAttr(signalClass(item.type))}">
+          <span>${escapeHtml(item.time || "-")} · ${formatNum(item.close, 2)}</span>
+          <strong>${escapeHtml(item.trade?.status || item.title)}</strong>
+          <small>${escapeHtml(tradeText)}</small>
+        </article>
+      `;
     })
     .join("");
 }
 
-function drawOptionsMonitorChart() {
-  const canvas = document.querySelector("#optionsMonitorChart");
-  if (!canvas) return;
+function renderStaticPanels() {
+  renderReplay();
+  renderDesign();
+  renderGuide();
+}
 
-  const snapshot = state.optionsMonitor || {};
-  const main = snapshot.main || {};
-  const candles = Array.isArray(main.candles) ? main.candles.slice(-72) : [];
-  if (!candles.length) {
-    drawEmptyChart(canvas, "KOSPI200 5분봉 데이터를 기다리고 있습니다.");
+function activeReplaySession() {
+  const sessions = Array.isArray(state.replay?.sessions) ? state.replay.sessions : [];
+  const requested = state.activeReplayDate || state.replay?.active_session_id;
+  if (state.replay?.active_session && (!requested || state.replay.active_session.date === requested || state.replay.active_session.id === requested)) {
+    return state.replay.active_session;
+  }
+  return (
+    sessions.find((session) => session.date === requested || session.id === requested) ||
+    sessions.find((session) => session.id === state.replay?.active_session_id) ||
+    sessions[0] ||
+    null
+  );
+}
+
+function renderReplay() {
+  const replay = state.replay || {};
+  const sessions = Array.isArray(replay.sessions) ? replay.sessions : [];
+  const active = activeReplaySession();
+  const requested = state.activeReplayDate;
+  const missing = Boolean(requested && !active);
+  const dateInput = document.querySelector("#replayDate");
+  if (dateInput) {
+    const dates = sessions.map((session) => session.date || session.id).filter(Boolean).sort();
+    const range = replay.date_range || {};
+    dateInput.value = requested || active?.date || replay.selected_date || "";
+    dateInput.min = range.start || dates[0] || "";
+    dateInput.max = range.end || dates[dates.length - 1] || "";
+  }
+
+  setText("#replayBadge", missing ? "자료 없음" : active?.profile?.label || "복기");
+  document.querySelector("#replayBadge").className = `signal-pill ${missing ? "warning" : "watch"}`;
+  const range = replay.date_range || {};
+  const rangeText = range.start && range.end
+    ? `저장 범위 ${range.start} ~ ${range.end} · 최근 ${replay.retention_days || 31}일`
+    : "저장된 최근 1개월 복기 데이터가 아직 없습니다.";
+  setText("#replayRangeText", rangeText);
+  renderReplayDataWarning(active, missing);
+  setText(
+    "#replayText",
+    missing
+      ? `${requested} 복기 데이터가 아직 없습니다. 저장된 날짜를 선택하세요.`
+      : active?.data_window
+        ? `옵션 프리미엄 플랜 전용 복기입니다. Yahoo 지수 5분봉 데이터 ${active.data_window.first_time}~${active.data_window.last_time} 기준입니다.`
+        : active?.trade_plan?.text || replay.notice || "선택 날짜의 5분봉 공식선과 신호를 표시합니다.",
+  );
+  const cursorIndex = missing ? 0 : replayCursorIndex(active);
+  renderReplayStepper(active, cursorIndex, missing);
+  const visibleSession = missing ? null : clipReplaySession(active, cursorIndex);
+  const tradePlan = missing ? emptyReplayTradePlan() : buildReplayTradePlan(visibleSession);
+  renderReplayTradeStats(tradePlan, missing);
+  renderReplayList(tradePlan.events, missing);
+  renderReplayLegend();
+  drawReplayChart(visibleSession, tradePlan);
+}
+
+function replayCursorIndex(session) {
+  const seriesLength = Array.isArray(session?.series) ? session.series.length : 0;
+  if (!seriesLength) return 0;
+  const key = session.date || session.id;
+  if (state.replayCursors[key] == null) state.replayCursors[key] = 0;
+  return Math.max(0, Math.min(seriesLength - 1, Number(state.replayCursors[key]) || 0));
+}
+
+function renderReplayStepper(session, cursorIndex, missing) {
+  const input = document.querySelector("#replayCursor");
+  const series = Array.isArray(session?.series) ? session.series : [];
+  const max = Math.max(0, series.length - 1);
+  if (input) {
+    input.min = "0";
+    input.max = String(max);
+    input.value = String(Math.max(0, Math.min(max, cursorIndex)));
+    input.disabled = missing || !series.length;
+  }
+  const point = series[cursorIndex] || {};
+  setText("#replayCursorText", series.length ? `${point.time || "-"} 기준 · ${cursorIndex + 1}/${series.length}봉 · 미래 데이터 숨김` : "복기 데이터 없음");
+  ["#replayFirst", "#replayPrev"].forEach((selector) => {
+    const node = document.querySelector(selector);
+    if (node) node.disabled = missing || cursorIndex <= 0;
+  });
+  ["#replayNext", "#replayEnd"].forEach((selector) => {
+    const node = document.querySelector(selector);
+    if (node) node.disabled = missing || cursorIndex >= max;
+  });
+}
+
+function clipReplaySession(session, cursorIndex) {
+  const series = Array.isArray(session?.series) ? session.series.slice(0, cursorIndex + 1) : [];
+  const signals = (Array.isArray(session?.signals) ? session.signals : []).filter((signal) => Number(signal.point_index || 0) <= cursorIndex);
+  return {
+    ...session,
+    series,
+    signals,
+    levels: levelsForVisibleSeries(series),
+  };
+}
+
+function levelsForVisibleSeries(series) {
+  const sample = series.length > 1 ? series.slice(0, -1) : series;
+  const highs = sample.map((point) => number(point.high)).filter((value) => value != null);
+  const lows = sample.map((point) => number(point.low)).filter((value) => value != null);
+  if (!highs.length || !lows.length) return {};
+  const high = Math.max(...highs);
+  const low = Math.min(...lows);
+  const span = Math.max(high - low, 0.0001);
+  return {
+    day_high: high,
+    day_low: low,
+    fib_382: high - span * 0.382,
+    fib_50: high - span * 0.5,
+    fib_618: high - span * 0.618,
+    fib_100: low,
+    fib_105: high - span * 1.05,
+  };
+}
+
+function moveReplayCursor(action) {
+  const active = activeReplaySession();
+  const seriesLength = Array.isArray(active?.series) ? active.series.length : 0;
+  if (!active || !seriesLength) return;
+  const key = active.date || active.id;
+  const current = replayCursorIndex(active);
+  const max = seriesLength - 1;
+  const next = {
+    first: 0,
+    prev: Math.max(0, current - 1),
+    next: Math.min(max, current + 1),
+    end: max,
+  }[action] ?? current;
+  state.replayCursors[key] = next;
+  renderReplay();
+}
+
+function renderReplayDataWarning(session, missing) {
+  const root = document.querySelector("#replayDataWarning");
+  if (!root) return;
+  if (missing || !session?.data_window) {
+    root.textContent = "저장된 데이터 범위를 확인할 수 없습니다.";
     return;
   }
+  const windowInfo = session.data_window;
+  const lastTime = windowInfo.last_time || "-";
+  const complete = lastTime >= "15:20";
+  root.textContent = complete
+    ? `데이터 범위 ${windowInfo.first_time || "-"}~${lastTime} · 공식 옵션장 ${windowInfo.official_options_session || "08:45~15:45"}`
+    : `데이터 범위 ${windowInfo.first_time || "-"}~${lastTime} · Yahoo 지수 5분봉 기준, 옵션장 후반 데이터 없음`;
+}
 
-  const { context, width, height } = setupCanvas(canvas, 230);
-  context.clearRect(0, 0, width, height);
-
-  const padding = 24;
-  const rightPadding = 48;
-  const closes = candles.map((candle) => number(candle.close)).filter((value) => value != null);
-  const levelEntries = [
-    { key: "fib_618", label: "61.8", color: "#2d8f64" },
-    { key: "fib_50", label: "50", color: "#4069b8" },
-    { key: "fib_100", label: "100", color: "#d89216" },
-    { key: "fib_105", label: "105", color: "#b6504a" },
-  ]
-    .map((level) => ({ ...level, value: number(main.levels?.[level.key]) }))
-    .filter((level) => level.value != null);
-  const allValues = closes.concat(levelEntries.map((level) => level.value));
-  const min = Math.min(...allValues);
-  const max = Math.max(...allValues);
-  const span = max - min || 1;
-  const xFor = (index) => padding + index * ((width - padding - rightPadding) / Math.max(candles.length - 1, 1));
-  const yFor = (value) => height - padding - ((value - min) / span) * (height - padding * 2);
-
-  drawGrid(context, width, height, padding);
-  levelEntries.forEach((level) => {
-    drawHorizontalLevel(context, width, padding, yFor(level.value), level.label, level.value, level.color);
-  });
-  drawSeries(context, candles.map((candle) => number(candle.close)), xFor, yFor, "#17202a", 2.7, []);
-
-  const latest = candles[candles.length - 1];
-  const latestClose = number(latest?.close);
-  if (latest && latestClose != null) {
-    const latestX = xFor(candles.length - 1);
-    const latestY = yFor(latestClose);
-    context.fillStyle = "#008c8c";
-    context.beginPath();
-    context.arc(latestX, latestY, 4, 0, Math.PI * 2);
-    context.fill();
-    context.fillStyle = "#17202a";
-    context.font = "11px Segoe UI, sans-serif";
-    context.textAlign = "right";
-    context.fillText(`${latest.time} ${formatNum(latestClose, 2)}`, width - padding, Math.max(14, latestY - 8));
+function renderReplayList(events, missing) {
+  const root = document.querySelector("#replaySignals");
+  if (!root) return;
+  if (!events.length) {
+    root.innerHTML = `
+      <article class="replay-item">
+        <span>${missing ? "자료 없음" : "대기"}</span>
+        <strong>${missing ? "선택 날짜 자료 없음" : "매매 포인트 없음"}</strong>
+        <small>${missing ? "저장된 공개 복기 날짜를 선택하세요." : "ENTRY 조건이 없어 가상 매매 로그를 만들지 않았습니다."}</small>
+      </article>
+    `;
+    return;
   }
+  root.innerHTML = events
+    .map((event) => `
+      <article class="replay-item ${escapeAttr(event.kind || signalClass(event.type))}">
+        <span>${escapeHtml(event.time || "-")} · ${escapeHtml(event.label || "")} · ${formatNum(event.index_value, 2)}</span>
+        <strong>${escapeHtml(event.title || "매매 포인트")}</strong>
+        <small>${escapeHtml(event.detail || "")}</small>
+      </article>
+    `)
+    .join("");
 }
 
-function maybeFireOptionsAlert(snapshot) {
-  if (!state.optionsAlertsEnabled) return;
-  const signal = snapshot.signal || snapshot.main?.signal || {};
-  if (!OPTIONS_MONITOR_ALERT_TYPES.has(signal.type)) return;
+function emptyReplayTradePlan() {
+  return {
+    events: [],
+    trades: [],
+    stats: { total: 0, entries: 0, tests: 0, takes: 0, risks: 0, stops: 0, bestPremium: null },
+  };
+}
+
+function renderLiveTradePlan(plan) {
+  const root = document.querySelector("#liveTradePlan");
+  if (!root) return;
+  const current = plan || standbyTradePlan();
+  root.className = `trade-strip ${current.tone || "neutral"}`;
+  const items = [
+    { label: "상태", value: current.status || "대기" },
+    { label: "진입프리", value: formatNum(current.entry, 2) },
+    { label: "손절프리", value: formatNum(current.stop, 2) },
+    { label: "1차청산", value: formatNum(current.tp1, 2) },
+    { label: "2차청산", value: formatNum(current.tp2, 2) },
+  ];
+  root.innerHTML = items
+    .map((item) => `
+      <article>
+        <span>${escapeHtml(item.label)}</span>
+        <strong>${escapeHtml(item.value)}</strong>
+      </article>
+    `)
+    .join("");
+}
+
+function renderReplayTradeStats(plan, missing) {
+  const root = document.querySelector("#replayTradeStats");
+  if (!root) return;
+  const stats = plan?.stats || emptyReplayTradePlan().stats;
+  const items = [
+    { label: "ENTRY", value: missing ? "-" : `${stats.entries}회`, className: stats.entries ? "good" : "" },
+    { label: "TEST", value: missing ? "-" : `${stats.tests}회` },
+    { label: "TP신호", value: missing ? "-" : `${stats.takes}회`, className: stats.takes ? "good" : "" },
+    { label: "위험", value: missing ? "-" : `${stats.risks}회`, className: stats.risks ? "bad" : "" },
+    { label: "손절", value: missing ? "-" : `${stats.stops}회`, className: stats.stops ? "bad" : "" },
+    { label: "최대프리", value: missing ? "-" : formatNum(stats.bestPremium, 2), className: stats.bestPremium ? "good" : "" },
+  ];
+  root.innerHTML = items
+    .map((item) => `
+      <article class="${escapeAttr(item.className || "")}">
+        <span>${escapeHtml(item.label)}</span>
+        <strong>${escapeHtml(item.value)}</strong>
+      </article>
+    `)
+    .join("");
+}
+
+function standbyTradePlan(status = "대기") {
+  return {
+    tone: "neutral",
+    status,
+    entry: null,
+    stop: null,
+    tp1: null,
+    tp2: null,
+    markers: [],
+  };
+}
+
+function buildLiveTradePlan(snapshot) {
+  const latest = snapshot?.main?.latest || {};
+  const close = number(latest.close);
+  if (!snapshot?.ok || close == null) return standbyTradePlan("대기");
+
+  const candles = Array.isArray(snapshot.main?.candles) ? snapshot.main.candles.slice(-48) : [];
+  const signal = snapshot.signal || {};
+  const levels = snapshot.main?.levels || {};
+  const pointIndex = Math.max(0, candles.length - 1);
+  const signalLike = {
+    ...signal,
+    point_index: pointIndex,
+    index_value: close,
+    levels,
+    candle: latest,
+  };
+  const setup = tradeSetupFromSignal(signalLike, { levels }, close);
+  if (setup) {
+    return {
+      tone: "buy",
+      status: setup.contracts > 1 ? "CALL ENTRY" : "CALL TEST",
+      entry: setup.entry,
+      stop: setup.stop,
+      tp1: setup.tp1,
+      tp2: setup.tp2,
+      markers: [tradeEvent("entry", 1, candles[pointIndex] || latest, pointIndex, setup)],
+    };
+  }
+
+  if (signal.type === "sell" || String(signal.rule || "").includes("BREAK")) {
+    const premium = optionPremiumPlan(signal);
+    return {
+      tone: "sell",
+      status: "STOP/EXIT",
+      entry: premium.entry,
+      stop: premium.stop,
+      tp1: premium.tp1,
+      tp2: premium.tp2,
+      markers: [tradeEvent("stop", 1, candles[pointIndex] || latest, pointIndex, { ...premium, indexEntry: close, indexStop: close, indexTp1: close, indexTp2: close, risk: 1 })],
+    };
+  }
+
+  if (signal.type === "warning") {
+    const premium = optionPremiumPlan(signal);
+    return {
+      ...standbyTradePlan("WATCH"),
+      tone: "warning",
+      markers: [tradeEvent("watch", 1, candles[pointIndex] || latest, pointIndex, { ...premium, indexEntry: close, indexStop: close, indexTp1: close, indexTp2: close, risk: 1 })],
+    };
+  }
+
+  return standbyTradePlan("대기");
+}
+
+function buildReplayTradePlan(session) {
+  if (!session?.series?.length) return emptyReplayTradePlan();
+  const plan = emptyReplayTradePlan();
+  const series = session.series;
+  const signalsByIndex = groupSignalsByIndex(session.signals, series.length);
+  let activeTrade = null;
+
+  series.forEach((point, index) => {
+    if (activeTrade && index > activeTrade.entryIndex) {
+      const exitEvent = updateActiveTradeFromCandle(activeTrade, point, index, plan);
+      if (exitEvent) {
+        closeReplayTrade(activeTrade, exitEvent, plan);
+        activeTrade = null;
+      }
+    }
+
+    const signals = signalsByIndex.get(index) || [];
+    signals.forEach((signal) => {
+      if (isEntrySignal(signal)) {
+        if (activeTrade) return;
+        const setup = tradeSetupFromSignal(signal, session, number(point?.index));
+        if (!setup) return;
+        const tradeId = plan.trades.length + 1;
+        const entryEvent = tradeEvent("entry", tradeId, point, index, setup);
+        plan.events.push(entryEvent);
+        activeTrade = {
+          id: tradeId,
+          setup,
+          entryIndex: index,
+          tp1Hit: false,
+          bestPremium: setup.entry,
+        };
+        return;
+      }
+
+      plan.events.push(signalEvent(signal, point, index, activeTrade));
+    });
+  });
+
+  if (activeTrade) {
+    const lastIndex = series.length - 1;
+    const exitEvent = tradeEvent("exit", activeTrade.id, series[lastIndex], lastIndex, activeTrade.setup, number(series[lastIndex]?.index));
+    closeReplayTrade(activeTrade, exitEvent, plan);
+  }
+
+  plan.stats = tradeStats(plan.trades, plan.events);
+  plan.events.sort((a, b) => (a.point_index - b.point_index) || eventPriority(a.kind) - eventPriority(b.kind));
+  return plan;
+}
+
+function groupSignalsByIndex(signals, length) {
+  const grouped = new Map();
+  (Array.isArray(signals) ? signals : []).forEach((signal) => {
+    const index = clampIndex(signal.point_index, length);
+    if (!grouped.has(index)) grouped.set(index, []);
+    grouped.get(index).push(signal);
+  });
+  return grouped;
+}
+
+function updateActiveTradeFromCandle(activeTrade, point, pointIndex, plan) {
+  const setup = activeTrade.setup;
+  const price = number(point?.index);
+  const high = number(point?.high) ?? price;
+  const low = number(point?.low) ?? price;
+  if (price == null) return null;
+
+  if (low <= setup.indexStop) {
+    return tradeEvent("stop", activeTrade.id, point, pointIndex, setup, setup.indexStop);
+  }
+
+  if (!activeTrade.tp1Hit && high >= setup.indexTp1) {
+    activeTrade.tp1Hit = true;
+    setup.tp1Hit = true;
+    activeTrade.bestPremium = Math.max(activeTrade.bestPremium, setup.tp1);
+    plan.events.push(tradeEvent("tp1", activeTrade.id, point, pointIndex, setup, setup.indexTp1));
+  }
+
+  if (high >= setup.indexTp2) {
+    activeTrade.bestPremium = Math.max(activeTrade.bestPremium, setup.tp2);
+    return tradeEvent("tp2", activeTrade.id, point, pointIndex, setup, setup.indexTp2);
+  }
+
+  return null;
+}
+
+function closeReplayTrade(activeTrade, exitEvent, plan) {
+  plan.events.push(exitEvent);
+  plan.trades.push({
+    id: activeTrade.id,
+    entry: activeTrade.setup.entry,
+    exit: exitEvent.premium,
+    exitKind: exitEvent.kind,
+    hadTake: activeTrade.tp1Hit || exitEvent.kind === "tp1" || exitEvent.kind === "tp2",
+    bestPremium: Math.max(activeTrade.bestPremium, exitEvent.premium || 0),
+  });
+}
+
+function signalEvent(signal, point, pointIndex, activeTrade) {
+  const kind = signalKind(signal);
+  const setup = optionSignalSetup(signal, point, activeTrade);
+  return {
+    kind,
+    trade_id: activeTrade?.id || 0,
+    point_index: pointIndex,
+    time: point?.time || signal.time || "-",
+    index_value: number(signal.index_value) ?? number(point?.index),
+    premium: setup.entry,
+    label: signalLabel(kind),
+    title: signalTitle(kind, signal, activeTrade),
+    detail: signalDetail(kind, signal, setup, activeTrade),
+    color: TRADE_COLORS[kind] || TRADE_COLORS.watch,
+  };
+}
+
+function optionSignalSetup(signal, point, activeTrade) {
+  if (activeTrade?.setup) return activeTrade.setup;
+  const premium = optionPremiumPlan(signal);
+  const indexValue = number(signal.index_value) ?? number(point?.index) ?? 0;
+  return {
+    ...premium,
+    indexEntry: indexValue,
+    indexStop: indexValue,
+    indexTp1: indexValue,
+    indexTp2: indexValue,
+    risk: 1,
+  };
+}
+
+function signalKind(signal) {
+  const decision = signal?.trade_decision;
+  if (decision === "test") return "test";
+  if (decision === "take_profit") return "take_profit";
+  if (decision === "risk") return "risk";
+  if (decision === "stop") return "stop";
+  if (decision === "watch") return "watch";
+  return signalClass(signal?.type);
+}
+
+function signalLabel(kind) {
+  return {
+    test: "TEST",
+    take_profit: "TP CHECK",
+    risk: "RISK",
+    stop: "STOP",
+    watch: "WATCH",
+    warning: "WATCH",
+  }[kind] || tradeLabel(kind);
+}
+
+function signalTitle(kind, signal, activeTrade) {
+  if (kind === "take_profit" && activeTrade) return `#${activeTrade.id} TP CHECK`;
+  if (kind === "stop" && activeTrade) return `#${activeTrade.id} STOP CHECK`;
+  return signal?.label || signal?.title || signalLabel(kind);
+}
+
+function signalDetail(kind, signal, setup, activeTrade) {
+  if (kind === "test") {
+    return `테스트 관찰 · 기준프리 ${formatNum(setup.entry, 2)} · ${signal.message || ""}`;
+  }
+  if (kind === "take_profit") {
+    return activeTrade
+      ? `보유 플랜 청산 확인 · 1차 ${formatNum(setup.tp1, 2)} · 2차 ${formatNum(setup.tp2, 2)}`
+      : `청산 후보 · 보유 포지션 없음 · ${signal.message || ""}`;
+  }
+  if (kind === "risk" || kind === "stop") {
+    return activeTrade
+      ? `위험 확인 · 손절프리 ${formatNum(setup.stop, 2)}`
+      : `위험 신호 · 보유 포지션 없음 · ${signal.message || ""}`;
+  }
+  return signal.message || signal.alert || "실시간 재생식 관찰 신호";
+}
+
+function eventPriority(kind) {
+  return {
+    stop: 1,
+    tp1: 2,
+    tp2: 3,
+    entry: 4,
+    test: 5,
+    take_profit: 6,
+    risk: 7,
+    watch: 8,
+    exit: 9,
+  }[kind] || 10;
+}
+
+function isEntrySignal(signal) {
+  const action = String(signal?.action || signal?.rule || "");
+  if (signal?.trade_decision) return signal.trade_decision === "entry";
+  return signal?.type === "candidate" && action.includes("FIB_618") && signal?.filter_pass !== false;
+}
+
+function tradeSetupFromSignal(signal, session, entryOverride = null) {
+  if (!isEntrySignal(signal)) return null;
+  const levels = signal.levels || session?.levels || {};
+  const indexEntry = number(entryOverride) ?? number(signal.index_value);
+  if (indexEntry == null) return null;
+
+  const action = String(signal.action || signal.rule || "");
+  const span = levelSpan(levels, indexEntry);
+  const buffer = Math.max(span * 0.012, 0.12);
+  const minRisk = Math.max(span * 0.018, 0.35);
+  const reference = action.includes("FIB_50") ? number(levels.fib_50) : number(levels.fib_618);
+  const candleLow = number(signal.candle?.low);
+  const stopCandidates = [candleLow, reference]
+    .filter((value) => value != null)
+    .map((value) => value - buffer)
+    .filter((value) => value < indexEntry);
+
+  let indexStop = stopCandidates.length ? Math.min(...stopCandidates) : indexEntry - minRisk;
+  let risk = indexEntry - indexStop;
+  if (!Number.isFinite(risk) || risk < minRisk) {
+    risk = minRisk;
+    indexStop = indexEntry - risk;
+  }
+  const indexTp1 = targetAbove(indexEntry, [levels.fib_50, levels.fib_382, levels.day_high], risk);
+  const indexTp2 = targetAbove(indexTp1, [levels.fib_382, levels.day_high], risk * 0.8);
+  const premium = optionPremiumPlan(signal);
+
+  return {
+    direction: "CALL",
+    entry: premium.entry,
+    stop: premium.stop,
+    tp1: premium.tp1,
+    tp2: premium.tp2,
+    contracts: premium.contracts,
+    indexEntry,
+    indexStop,
+    indexTp1,
+    indexTp2,
+    risk,
+  };
+}
+
+function optionPremiumPlan(signal = {}) {
+  const strategy = state.weeklyOptions || fallbackWeeklyOptions;
+  const entry = strategy.entry || {};
+  const profile = premiumProfile(signal, entry);
+  const base = profile.entry;
+  const contracts = profile.contracts;
+  return {
+    entry: base,
+    stop: base * profile.stopMultiplier,
+    tp1: base * profile.tp1Multiplier,
+    tp2: base * profile.tp2Multiplier,
+    contracts,
+  };
+}
+
+function premiumProfile(signal = {}, entry = {}) {
+  if (signal.trade_decision === "test") {
+    return {
+      entry: 1.0,
+      contracts: 1,
+      stopMultiplier: 0.6,
+      tp1Multiplier: 1.3,
+      tp2Multiplier: 1.45,
+    };
+  }
+
+  const base = averageEntry(entry);
+  return {
+    entry: base,
+    contracts: entry.initial_contracts || 3,
+    stopMultiplier: 0.7,
+    tp1Multiplier: 1.3,
+    tp2Multiplier: 1.45,
+  };
+}
+
+function targetAbove(entry, candidates, fallbackDistance) {
+  const usable = candidates
+    .map((value) => number(value))
+    .filter((value) => value != null && value > entry)
+    .sort((a, b) => a - b);
+  return usable[0] ?? entry + Math.max(fallbackDistance, 0.35);
+}
+
+function levelSpan(levels, fallback) {
+  const high = number(levels?.day_high);
+  const low = number(levels?.day_low);
+  if (high != null && low != null && high > low) return high - low;
+  return Math.max((number(fallback) || 100) * 0.01, 1);
+}
+
+function tradeEvent(kind, tradeId, point, pointIndex, setup, overridePrice = null) {
+  const price = number(overridePrice) ?? number(point?.index) ?? number(point?.close) ?? setup.indexEntry;
+  const premium = premiumForEvent(kind, setup);
+  return {
+    kind,
+    trade_id: tradeId,
+    point_index: pointIndex,
+    time: point?.time || "-",
+    index_value: price,
+    premium,
+    label: tradeLabel(kind),
+    title: tradeTitle(kind, tradeId),
+    detail: tradeDetail(kind, setup, premium),
+    color: TRADE_COLORS[kind] || TRADE_COLORS.watch,
+  };
+}
+
+function premiumForEvent(kind, setup) {
+  return {
+    entry: setup.entry,
+    stop: setup.stop,
+    tp1: setup.tp1,
+    tp2: setup.tp2,
+    exit: setup.entry,
+    watch: setup.entry,
+  }[kind] ?? setup.entry;
+}
+
+function tradeLabel(kind) {
+  return {
+    entry: "ENTRY",
+    stop: "STOP",
+    tp1: "TP1",
+    tp2: "TP2",
+    exit: "EXIT",
+    watch: "WATCH",
+    test: "TEST",
+    risk: "RISK",
+    take_profit: "TP CHECK",
+  }[kind] || "SIGNAL";
+}
+
+function tradeTitle(kind, tradeId) {
+  const prefix = `#${tradeId}`;
+  return {
+    entry: `${prefix} CALL ENTRY`,
+    stop: `${prefix} STOP`,
+    tp1: `${prefix} TP1`,
+    tp2: `${prefix} TP2 EXIT`,
+    exit: `${prefix} TIME EXIT`,
+    watch: "WATCH",
+    test: "CALL TEST",
+    risk: "RISK",
+    take_profit: "TP CHECK",
+  }[kind] || `${prefix} SIGNAL`;
+}
+
+function tradeDetail(kind, setup, outputR) {
+  if (kind === "entry") {
+    return `${setup.contracts}계약 · 손절 ${formatNum(setup.stop, 2)} · 1차 ${formatNum(setup.tp1, 2)} · 2차 ${formatNum(setup.tp2, 2)}`;
+  }
+  if (kind === "watch") return "진입 전 관찰 구간";
+  return `프리 ${formatNum(outputR, 2)} · 진입 ${formatNum(setup.entry, 2)}`;
+}
+
+function tradeStats(trades, events = []) {
+  const total = trades.length;
+  const entries = events.filter((event) => event.kind === "entry").length;
+  const tests = events.filter((event) => event.kind === "test").length;
+  const takes = events.filter((event) => event.kind === "tp1" || event.kind === "tp2" || event.kind === "take_profit").length;
+  const risks = events.filter((event) => event.kind === "risk" || (event.kind === "stop" && !event.trade_id)).length;
+  const stops = trades.filter((trade) => trade.exitKind === "stop").length;
+  const bestPremium = trades.length ? Math.max(...trades.map((trade) => number(trade.bestPremium) || number(trade.exit) || 0)) : null;
+  return { total, entries, tests, takes, risks, stops, bestPremium };
+}
+
+function clampIndex(value, length) {
+  if (!length) return 0;
+  return Math.max(0, Math.min(length - 1, Number(value) || 0));
+}
+
+function renderReplayLegend() {
+  const entries = [
+    { label: "지수", color: "#17202a" },
+    { label: "ENTRY", color: TRADE_COLORS.entry },
+    { label: "TEST", color: TRADE_COLORS.test },
+    { label: "STOP", color: TRADE_COLORS.stop },
+    { label: "TP", color: TRADE_COLORS.tp1 },
+    { label: "RISK", color: TRADE_COLORS.risk },
+  ];
+  document.querySelector("#replayLegend").innerHTML = entries.map(legendItem).join("");
+}
+
+function renderDesign() {
+  const strategy = state.weeklyOptions || fallbackWeeklyOptions;
+  const risk = strategy.risk_limits || {};
+  const entry = strategy.entry || {};
+  const strike = entry.strike_selection || {};
+  const money = strategy.money_management || {};
+  const profitLock = money.daily_profit_lock || {};
+  const avgEntry = averageEntry(entry);
+  const items = [
+    { label: "평균 진입", value: formatNum(avgEntry, 2), text: "3분할 기준" },
+    { label: "목표 프리", value: strike.target_premium_range_label || formatNum(strike.target_premium, 2), text: "허용 범위" },
+    { label: "손실한도", value: formatWon(risk.daily_max_loss_krw), text: risk.loss_basis_label || "누적 손실" },
+    { label: "수익잠금", value: profitLock.profit_krw_range ? `${formatWon(profitLock.profit_krw_range[0])}~${formatWon(profitLock.profit_krw_range[1])}` : "-", text: "보수 모드" },
+    { label: "계약", value: `${entry.initial_contracts || 3}계약`, text: "주문 없음" },
+    { label: "행사가", value: `${strike.call_strike_offset_pct || 2.5}% 위`, text: "콜 후보" },
+  ];
+  document.querySelector("#designSummary").innerHTML = items.map(metricCard).join("");
+
+  const ladder = Array.isArray(entry.order_ladder) ? entry.order_ladder : [];
+  document.querySelector("#orderPlan").innerHTML = ladder.length
+    ? ladder.map((order, index) => `
+        <article class="replay-item buy">
+          <span>${index + 1}차</span>
+          <strong>${escapeHtml(order.label || "분할 주문")} · ${formatNum(order.price, 2)}</strong>
+          <small>${escapeHtml(order.description || order.formula || "지정가 후보만 표시합니다.")}</small>
+        </article>
+      `).join("")
+    : `<article class="replay-item"><strong>분할 주문 자료 없음</strong><small>전략 JSON의 order_ladder를 확인하세요.</small></article>`;
+  renderDesignLegend();
+  drawDesignChart();
+}
+
+function renderDesignLegend() {
+  const visual = (state.weeklyOptions || fallbackWeeklyOptions).visual_chart || fallbackWeeklyOptions.visual_chart;
+  const entries = (visual.lines || []).slice(0, 5).map((line) => ({
+    label: line.label || line.key,
+    color: line.color || "#17202a",
+  }));
+  document.querySelector("#designLegend").innerHTML = entries.map(legendItem).join("");
+}
+
+function renderGuide() {
+  const strategy = state.weeklyOptions || fallbackWeeklyOptions;
+  const risk = strategy.risk_limits || {};
+  const entry = strategy.entry || {};
+  const strike = entry.strike_selection || {};
+  const states = Array.isArray(strategy.states) ? strategy.states : [];
+  const questions = Array.isArray(strategy.questions) ? strategy.questions : [];
+
+  const riskItems = [
+    { label: "당일 중단", value: formatWon(risk.daily_max_loss_krw), text: risk.description || "한도 도달 시 신규 진입 중단" },
+    { label: "진입", value: `${entry.initial_contracts || 3}계약`, text: "1계약씩 분할" },
+    { label: "프리미엄", value: strike.target_premium_range_label || formatNum(strike.target_premium, 2), text: strike.description || "목표 프리미엄" },
+  ];
+  document.querySelector("#riskSummary").innerHTML = riskItems.map(metricCard).join("");
+  document.querySelector("#guideList").innerHTML = [
+    ...states.slice(0, 8).map((step) => ({
+      title: step.label || step.key,
+      text: step.description || "",
+    })),
+    ...questions.slice(0, 4).map((question) => ({ title: "확인 필요", text: question })),
+  ]
+    .map((item) => `
+      <article class="guide-item">
+        <strong>${escapeHtml(item.title)}</strong>
+        <small>${escapeHtml(item.text)}</small>
+      </article>
+    `)
+    .join("");
+}
+
+function renderSettings() {
+  const permission = "Notification" in window ? Notification.permission : "unsupported";
+  const soundText = state.alertsEnabled ? (state.audioContext ? "소리 ON" : "소리 대기") : "소리 OFF";
+  const vibrationText = state.settings.vibrationEnabled ? "진동 ON" : "진동 OFF";
+  const wakeText = state.wakeLock ? "화면유지 ON" : "화면유지 OFF";
+  const alertText = `${state.alertsEnabled ? "알림 켜짐" : "알림 꺼짐"} · 브라우저 ${permission} · ${wakeText}`;
+  setText("#alertStatus", alertText);
+  setText("#boardStatus", `${soundText} · ${vibrationText} · 알림센터 ${permission} · ${wakeText}`);
+  setText("#enableAlerts", state.alertsEnabled ? "알림 끄기" : "알림 켜기");
+  setText("#toggleWakeLock", state.wakeLock ? "화면유지 끄기" : "화면유지 켜기");
+  setChecked("#repeatStrongAlerts", state.settings.repeatStrongAlerts);
+  setChecked("#vibrationEnabled", state.settings.vibrationEnabled);
+  setChecked("#saveSignalLog", state.settings.saveSignalLog);
+}
+
+function openModal(name) {
+  state.activeModal = name;
+  const meta = modalMeta[name] || modalMeta.replay;
+  setText("#modalEyebrow", meta.eyebrow);
+  setText("#modalTitle", meta.title);
+  document.querySelector("#modalBackdrop").hidden = false;
+  document.querySelectorAll("[data-modal-panel]").forEach((panel) => {
+    panel.hidden = panel.dataset.modalPanel !== name;
+  });
+  document.querySelectorAll("[data-open-modal]").forEach((button) => {
+    button.classList.toggle("active", button.dataset.openModal === name);
+  });
+  redrawCharts();
+}
+
+function closeModal() {
+  state.activeModal = null;
+  document.querySelector("#modalBackdrop").hidden = true;
+  document.querySelectorAll("[data-open-modal]").forEach((button) => button.classList.remove("active"));
+}
+
+function requestAlertToggle() {
+  const nextState = !state.alertsEnabled;
+  state.pendingAlertState = nextState;
+  setText("#alertConfirmEyebrow", nextState ? "알림 켜기" : "알림 끄기");
+  setText("#alertConfirmTitle", nextState ? "알림을 켤까요?" : "알림을 끌까요?");
+  setText(
+    "#alertConfirmText",
+    nextState
+      ? "신호가 발생하면 이 폰에서 소리, 진동, 가능한 경우 알림센터 알림을 보냅니다."
+      : "알림을 끄면 신호는 화면에만 표시되고 소리와 진동은 울리지 않습니다.",
+  );
+  setText("#confirmAlertToggle", nextState ? "켜기" : "끄기");
+  document.querySelector("#alertConfirmBackdrop").hidden = false;
+}
+
+function closeAlertConfirm() {
+  state.pendingAlertState = null;
+  document.querySelector("#alertConfirmBackdrop").hidden = true;
+}
+
+async function confirmAlertToggle() {
+  const nextState = Boolean(state.pendingAlertState);
+  document.querySelector("#alertConfirmBackdrop").hidden = true;
+  state.pendingAlertState = null;
+  await setAlertsEnabled(nextState);
+}
+
+async function setAlertsEnabled(enabled) {
+  state.alertsEnabled = enabled;
+  state.settings.alertsEnabled = enabled;
+  saveSettings();
+
+  if (enabled) {
+    unlockAudio();
+    if ("Notification" in window && Notification.permission === "default") {
+      try {
+        await Notification.requestPermission();
+      } catch (error) {
+        // Sound and vibration still work while the page is open.
+      }
+    }
+    fireAlert({
+      type: "watch",
+      title: "알림 준비",
+      message: "신호가 뜨면 이 폰에서 소리와 진동을 보냅니다.",
+      rule: "ALERT_READY",
+    }, true);
+  } else {
+    state.lastAlertKey = null;
+    if (navigator.vibrate) navigator.vibrate(0);
+  }
+
+  renderSettings();
+}
+
+function testAlert() {
+  renderSettings();
+  fireAlert({
+    type: "candidate",
+    title: "테스트 알림",
+    message: "소리, 진동, 알림센터 전달 상태를 확인합니다.",
+    rule: "TEST_ALERT",
+  }, true);
+}
+
+function maybeFireAlert(snapshot) {
+  if (!state.alertsEnabled) return;
+  const signal = snapshot.signal || {};
+  if (!["candidate", "sell", "warning", "watch"].includes(signal.type)) return;
   if (signal.alert_level === "silent") return;
-
   const latest = snapshot.main?.latest || {};
-  const alertKey = `${signal.rule}:${signal.time}:${latest.datetime || ""}:${latest.close || ""}`;
-  if (state.lastOptionsAlertKey === alertKey) return;
-  state.lastOptionsAlertKey = alertKey;
-  fireOptionsAlert(signal);
+  const key = `${signal.rule}:${latest.datetime || signal.time}:${latest.close || ""}`;
+  if (state.lastAlertKey === key) return;
+  state.lastAlertKey = key;
+  fireAlert(signal);
 }
 
-async function fireOptionsAlert(signal, force = false) {
-  if (!force && !state.optionsAlertsEnabled) return;
-  playOptionsTone(signal.type);
-  vibrateOptionsSignal(signal.type);
+async function fireAlert(signal, force = false) {
+  if (!force && !state.alertsEnabled) return;
+  playTone(signal.type);
+  vibrate(signal.type);
 
+  if (!("Notification" in window) || Notification.permission !== "granted") return;
   const title = `옵션 감시: ${signal.title || signal.label || "신호"}`;
   const body = signal.message || "KOSPI200 5분봉 신호를 확인하세요.";
   try {
-    if (state.serviceWorkerRegistration && "Notification" in window && Notification.permission === "granted") {
+    if (state.serviceWorkerRegistration) {
       await state.serviceWorkerRegistration.showNotification(title, {
         body,
         tag: `options-monitor-${signal.rule || "signal"}`,
         renotify: true,
-        requireInteraction: signal.type === "candidate" || signal.type === "sell",
+        requireInteraction: ["candidate", "sell"].includes(signal.type),
       });
-    } else if ("Notification" in window && Notification.permission === "granted") {
+    } else {
       new Notification(title, { body, tag: `options-monitor-${signal.rule || "signal"}` });
     }
   } catch (error) {
-    // Sound and vibration are still the primary path while the monitor page is open.
+    // The page alert path still completed.
   }
 }
 
-function unlockOptionsAudio() {
+function unlockAudio() {
   const AudioContext = window.AudioContext || window.webkitAudioContext;
   if (!AudioContext) return;
-  if (!state.optionsAudioContext) state.optionsAudioContext = new AudioContext();
-  if (state.optionsAudioContext.state === "suspended") {
-    state.optionsAudioContext.resume();
-  }
+  if (!state.audioContext) state.audioContext = new AudioContext();
+  if (state.audioContext.state === "suspended") state.audioContext.resume();
 }
 
-function playOptionsTone(type) {
+function playTone(type) {
   const AudioContext = window.AudioContext || window.webkitAudioContext;
   if (!AudioContext) return;
-  if (!state.optionsAudioContext) state.optionsAudioContext = new AudioContext();
-  const context = state.optionsAudioContext;
+  if (!state.audioContext) state.audioContext = new AudioContext();
+  const context = state.audioContext;
   if (context.state === "suspended") context.resume();
-
+  const strong = state.settings.repeatStrongAlerts && ["candidate", "sell"].includes(type);
   const pattern =
     type === "sell"
-      ? [760, 520, 760, 520]
+      ? [760, 520, 760, 520, ...(strong ? [760, 520] : [])]
       : type === "candidate"
-        ? [880, 880, 660]
+        ? [880, 880, 660, ...(strong ? [880, 660] : [])]
         : type === "warning"
           ? [620, 620]
           : [520];
@@ -1130,8 +1293,8 @@ function playOptionsTone(type) {
   });
 }
 
-function vibrateOptionsSignal(type) {
-  if (!navigator.vibrate) return;
+function vibrate(type) {
+  if (!state.settings.vibrationEnabled || !navigator.vibrate) return;
   const pattern =
     type === "sell"
       ? [260, 90, 260, 90, 420]
@@ -1143,1648 +1306,310 @@ function vibrateOptionsSignal(type) {
   navigator.vibrate(pattern);
 }
 
-function updateOptionsAlertStatus(extraMessage = "") {
-  const status = document.querySelector("#optionsMonitorAlertStatus");
-  const button = document.querySelector("#enableOptionsAlerts");
-  if (!status) return;
-
-  const secureText = window.isSecureContext
-    ? "알림센터 권한을 사용할 수 있는 환경입니다."
-    : "현재 주소는 보안 컨텍스트가 아니라 알림센터 권한이 제한될 수 있습니다. 그래도 열린 화면의 소리/진동은 사용합니다.";
-  const permission =
-    "Notification" in window
-      ? `브라우저 알림: ${Notification.permission}`
-      : "브라우저 알림: 미지원";
-  status.textContent = extraMessage || `${state.optionsAlertsEnabled ? "알림 켜짐" : "알림 꺼짐"} · ${permission} · ${secureText}`;
-  if (button) button.textContent = state.optionsAlertsEnabled ? "알림 켜짐" : "알림 켜기";
-}
-
-function setupSectionAccordions() {
-  document.querySelectorAll(".mode-panel .chart-card, .mode-panel .list-card, .mode-panel .metrics-card").forEach((section, index) => {
-    if (section.dataset.accordionReady === "true") return;
-    if (section.dataset.accordion === "skip") return;
-    const head = section.querySelector(":scope > .section-head");
-    if (!head) return;
-
-    const content = document.createElement("div");
-    content.className = "accordion-content";
-    content.id = section.id ? `${section.id}-content` : `accordion-section-${index}-content`;
-    while (head.nextSibling) content.appendChild(head.nextSibling);
-    section.appendChild(content);
-
-    const toggle = document.createElement("button");
-    toggle.type = "button";
-    toggle.className = "accordion-toggle";
-    toggle.setAttribute("aria-controls", content.id);
-    toggle.setAttribute("aria-expanded", "false");
-    toggle.setAttribute("aria-label", "섹션 열기");
-    toggle.innerHTML = `<span class="visually-hidden">섹션 열기</span>`;
-
-    section.classList.add("section-accordion", "collapsed");
-    content.hidden = true;
-    head.classList.add("accordion-head");
-    head.appendChild(toggle);
-
-    const toggleSection = () => {
-      const shouldOpen = section.classList.contains("collapsed");
-      setAccordionState(section, shouldOpen);
-    };
-    toggle.addEventListener("click", (event) => {
-      event.stopPropagation();
-      toggleSection();
-    });
-    head.addEventListener("click", (event) => {
-      if (event.target.closest("button, a, input, select, textarea")) return;
-      toggleSection();
-    });
-
-    section.dataset.accordionReady = "true";
-  });
-}
-
-function setAccordionState(section, open) {
-  const content = section.querySelector(":scope > .accordion-content");
-  const toggle = section.querySelector(":scope > .section-head .accordion-toggle");
-  section.classList.toggle("collapsed", !open);
-  if (content) content.hidden = !open;
-  if (toggle) {
-    toggle.setAttribute("aria-expanded", String(open));
-    toggle.setAttribute("aria-label", open ? "섹션 접기" : "섹션 열기");
-    const hiddenText = toggle.querySelector(".visually-hidden");
-    if (hiddenText) hiddenText.textContent = open ? "섹션 접기" : "섹션 열기";
-  }
-  if (open) requestAnimationFrame(redrawCurrentModeCharts);
-}
-
-function redrawCurrentModeCharts() {
-  if (state.mode === "index") drawIndexBlueprint();
-  else if (state.mode === "weekly") {
-    drawOptionsMonitorChart();
-    drawWeeklyBlueprint();
-    renderWeeklyReplay();
-  } else if (state.mode === "stocks") {
-    renderSelectedChart();
-  }
-}
-
-function bindModeTabs() {
-  document.querySelectorAll("[data-mode-tab]").forEach((button) => {
-    button.addEventListener("click", () => setMode(button.dataset.modeTab));
-  });
-}
-
-function setMode(mode, updateHash = true) {
-  state.mode = ["index", "weekly"].includes(mode) ? mode : "stocks";
-
-  document.querySelectorAll("[data-mode-panel]").forEach((panel) => {
-    panel.hidden = panel.dataset.modePanel !== state.mode;
-  });
-
-  document.querySelectorAll("[data-mode-tab]").forEach((button) => {
-    const active = button.dataset.modeTab === state.mode;
-    button.classList.toggle("active", active);
-    button.setAttribute("aria-selected", String(active));
-  });
-
-  if (updateHash) {
-    const hash = state.mode === "index" ? "#index" : state.mode === "weekly" ? "#weekly" : "#overview";
-    window.history.replaceState(null, "", hash);
-  }
-
-  if (state.mode === "index") {
-    renderIndexHero();
-    renderIndexPanel();
-  } else if (state.mode === "weekly") {
-    renderWeeklyHero();
-    renderWeeklyPanel();
-  } else if (state.report && currentPeriod()) {
-    renderSummary(currentPeriod(), recommendationRows(currentPeriod()));
-    renderSelectedChart();
-  }
-}
-
-function currentAsset() {
-  return state.report?.domestic || null;
-}
-
-function currentPeriodBase() {
-  return currentAsset()?.periods?.[state.period] || null;
-}
-
-function currentPeriod() {
-  const base = currentPeriodBase();
-  if (!base) return null;
-  const algorithm = activeAlgorithm(base);
-  const variant = base.algorithms?.[algorithm];
-  if (!variant) return base;
-  return {
-    ...base,
-    ...variant,
-    label: base.label,
-    description: base.description,
-    algorithm,
-    default_algorithm: base.default_algorithm,
-    algorithm_options: base.algorithm_options,
-    algorithms: base.algorithms,
-  };
-}
-
-function activeAlgorithm(periodBase = currentPeriodBase()) {
-  if (!periodBase?.algorithms) return state.algorithm;
-  if (state.algorithm && periodBase.algorithms[state.algorithm]) return state.algorithm;
-  return periodBase.default_algorithm || Object.keys(periodBase.algorithms)[0];
-}
-
-function updateAlgorithmSelect(periodBase) {
-  const select = document.querySelector("#algorithmSelect");
-  const description = document.querySelector("#algorithmDescription");
-  if (!select || !description) return;
-
-  const options = periodBase?.algorithm_options || algorithmOptionsFromReport();
-  if (!options.length) {
-    select.innerHTML = `<option>준비 중</option>`;
-    select.disabled = true;
-    description.textContent = "알고리즘 데이터가 아직 없습니다.";
+async function toggleWakeLock() {
+  if (!("wakeLock" in navigator)) {
+    setText("#alertStatus", "이 브라우저는 화면 유지 API를 지원하지 않습니다.");
     return;
   }
-
-  const selected = activeAlgorithm(periodBase);
-  state.algorithm = selected;
-  select.disabled = false;
-  select.innerHTML = options.map((option) => `<option value="${escapeAttr(option.key)}">${escapeHtml(option.label)}</option>`).join("");
-  select.value = selected;
-  const option = options.find((item) => item.key === selected);
-  description.textContent = option?.description || "선택한 알고리즘 기준으로 후보를 다시 봅니다.";
-}
-
-function algorithmOptionsFromReport() {
-  return Object.entries(state.report?.algorithms || {}).map(([key, value]) => ({
-    key,
-    label: value.label || key,
-    description: value.description || "",
-  }));
-}
-
-function renderDashboard() {
-  const periodBase = currentPeriodBase();
-  updateAlgorithmSelect(periodBase);
-
-  const period = currentPeriod();
-  if (!state.report || !period) {
-    renderError(new Error("국내 주식 데이터가 없습니다."));
-    return;
-  }
-
-  const periodSelect = document.querySelector("#periodSelect");
-  if (periodSelect) periodSelect.value = state.period;
-  document.querySelector("#asOfDate").textContent = (state.report.generated_at || "").slice(0, 10) || "-";
-
-  const rows = recommendationRows(period);
-  if (!state.selectedSymbol || !findRow(state.selectedSymbol)) {
-    state.selectedSymbol = rows[0]?.symbol || state.holdings[0] || null;
-  }
-
-  if (state.mode === "stocks") renderSummary(period, rows);
-  renderCandidateList(rows);
-  renderHoldingList();
-  renderMetrics(period);
-  renderSelectedChart();
-}
-
-function renderSummary(period, rows) {
-  const summary = currentAsset()?.universe_summary || {};
-  const top = rows[0];
-  const algorithmLabel = period.algorithm_label || state.report.algorithms?.[period.algorithm]?.label || "알고리즘";
-  document.querySelector("#assetLabel").textContent = "국내 주식";
-  document.querySelector("#appTitle").textContent = "오늘의 신호";
-  document.querySelector("#marketSummary").textContent =
-    `${period.label} · ${algorithmLabel} 기준, 국내 ${formatNum(summary.total_count, 0)}개 종목 중 ${rows.length}개를 우선 확인합니다.`;
-
-  const card = document.querySelector("#topSignalCard");
-  if (!top) {
-    card.innerHTML = `<span class="signal-badge neutral">대기</span><strong>후보 없음</strong><small>조건을 통과한 종목이 없습니다.</small>`;
-    return;
-  }
-
-  const signal = signalForRow(top);
-  card.innerHTML = `
-    <span class="signal-badge ${signal.className}">${escapeHtml(signal.label)}</span>
-    <strong>${escapeHtml(top.name || top.symbol)}</strong>
-    <small>${escapeHtml(top.symbol)} · 점수 ${formatScore(top.score)} · ${escapeHtml(top.reason || "신호 확인 필요")}</small>
-  `;
-}
-
-function recommendationRows(period) {
-  const candidates = period?.final_candidates || [];
-  const watch = period?.watch || [];
-  return (candidates.length ? candidates : watch).slice(0, displaySetting("top_candidate_cards", 8));
-}
-
-function renderCandidateList(rows) {
-  const list = document.querySelector("#candidateList");
-  document.querySelector("#candidateCount").textContent = rows.length;
-  if (!rows.length) {
-    list.innerHTML = `<button class="stock-row empty" type="button">현재 조건의 추천 종목이 없습니다.</button>`;
-    return;
-  }
-  list.innerHTML = rows.map((row) => stockButton(row, false)).join("");
-  bindStockButtons(list);
-}
-
-function renderHoldingList() {
-  const list = document.querySelector("#holdingList");
-  if (!state.holdings.length) {
-    list.innerHTML = `<button class="stock-row empty" type="button">보유 종목을 추가하면 여기서 바로 차트를 볼 수 있습니다.</button>`;
-    return;
-  }
-  list.innerHTML = state.holdings.map((symbol) => stockButton(findRow(symbol) || holdingFallback(symbol), true)).join("");
-  bindStockButtons(list);
-}
-
-function stockButton(row, compact) {
-  const signal = signalForRow(row);
-  const active = row.symbol === state.selectedSymbol ? " active" : "";
-  const metrics = compact
-    ? ""
-    : `
-      <div class="stock-metrics">
-        <div><span>점수</span><strong>${formatScore(row.score)}</strong></div>
-        <div><span>1일</span><strong>${formatPct(row.ret_1d)}</strong></div>
-        <div><span>1주</span><strong>${formatPct(row.ret_5d)}</strong></div>
-        <div><span>위험</span><strong>${formatScore(row.risk_score)}</strong></div>
-      </div>
-    `;
-
-  return `
-    <button class="stock-row${active}" data-symbol="${escapeAttr(row.symbol)}" type="button">
-      <span class="stock-main">
-        <strong>${escapeHtml(row.name || row.symbol)}</strong>
-        <span>${escapeHtml(row.symbol)} · ${escapeHtml(row.reason || "차트 신호 확인")}</span>
-      </span>
-      <span class="signal-badge ${signal.className}">${escapeHtml(signal.label)}</span>
-      ${metrics}
-    </button>
-  `;
-}
-
-function bindStockButtons(root) {
-  root.querySelectorAll("[data-symbol]").forEach((button) => {
-    button.addEventListener("click", () => {
-      state.selectedSymbol = button.dataset.symbol;
-      renderCandidateList(recommendationRows(currentPeriod()));
-      renderHoldingList();
-      renderSelectedChart();
-    });
-  });
-}
-
-function renderMetrics(period) {
-  const metrics = period.backtest?.metrics || {};
-  document.querySelector("#winRate").textContent = formatPct(metrics.win_rate);
-  document.querySelector("#avgReturn").textContent = formatPct(metrics.average_return);
-  document.querySelector("#tradeCount").textContent = formatNum(metrics.trade_count, 0);
-  document.querySelector("#maxDrawdown").textContent = formatPct(metrics.max_drawdown);
-}
-
-function renderSelectedChart() {
-  const row = findRow(state.selectedSymbol) || holdingFallback(state.selectedSymbol);
-  const title = document.querySelector("#chartTitle");
-  const symbol = document.querySelector("#selectedSymbol");
-  const badge = document.querySelector("#chartSignalBadge");
-  const signalText = document.querySelector("#chartSignalText");
-  const canvas = document.querySelector("#stockChart");
-
-  if (!row?.symbol) {
-    title.textContent = "종목 차트";
-    symbol.textContent = "-";
-    badge.className = "signal-badge neutral";
-    badge.textContent = "대기";
-    signalText.textContent = "추천 또는 보유 종목을 선택하면 공식선과 신호 설명을 표시합니다.";
-    drawEmptyChart(canvas, chartDefinition("stock_price").empty_message);
-    return;
-  }
-
-  const points = pricePointsForRow(row);
-  const lines = computeChartLines(points, row);
-  const chartSignal = evaluateChartSignal(row, lines);
-  title.textContent = row.name || row.symbol;
-  symbol.textContent = row.symbol;
-  badge.className = `signal-badge ${chartSignal.className}`;
-  badge.textContent = chartSignal.label;
-  signalText.textContent = chartSignal.text;
-  renderLegend(lines);
-  drawStockChart(canvas, points, lines);
-}
-
-function findRow(symbol) {
-  if (!symbol) return null;
-  const period = currentPeriod();
-  const rows = [
-    ...(period?.final_candidates || []),
-    ...(period?.watch || []),
-    ...(period?.rows || []),
-  ];
-  return rows.find((row) => row.symbol === symbol) || null;
-}
-
-function holdingFallback(symbol) {
-  if (!symbol) return null;
-  const raw = currentAsset()?.raw_universe?.find((row) => row.symbol === symbol);
-  return {
-    symbol,
-    name: raw?.name || symbol,
-    last_close: raw?.close || null,
-    final_action: raw ? "unscored" : "unscored",
-    score: null,
-    reason: raw ? "원자료에 있는 보유 종목입니다." : "현재 데이터에서 찾지 못한 보유 종목입니다.",
-  };
-}
-
-function addHolding(event) {
-  event.preventDefault();
-  const input = document.querySelector("#holdingInput");
-  const symbol = normalizeSymbol(input.value);
-  if (!symbol) return;
-  state.holdings = [symbol, ...state.holdings.filter((item) => item !== symbol)].slice(0, 12);
-  state.selectedSymbol = symbol;
-  input.value = "";
-  saveHoldings();
-  renderDashboard();
-}
-
-function loadHoldings() {
   try {
-    const data = JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]");
-    return Array.isArray(data) ? data.map(normalizeSymbol).filter(Boolean) : [];
-  } catch (error) {
-    return [];
-  }
-}
-
-function saveHoldings() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state.holdings));
-}
-
-function normalizeSymbol(value) {
-  const text = String(value || "").trim().toUpperCase();
-  if (!text) return "";
-  return /^\d{1,6}$/.test(text) ? text.padStart(6, "0") : text;
-}
-
-function signalForRow(row) {
-  const action = row?.trade_signal || row?.final_action || "neutral";
-  return {
-    buy: { label: "매수 후보", className: "buy" },
-    candidate: { label: "매수 후보", className: "buy" },
-    warning: { label: "경고/관찰", className: "warning" },
-    watch: { label: "경고/관찰", className: "warning" },
-    sell: { label: "매도/제외", className: "sell" },
-    avoid: { label: "매도/제외", className: "sell" },
-    unscored: { label: "미분석", className: "neutral" },
-  }[action] || { label: "관망", className: "neutral" };
-}
-
-function renderIndexHero() {
-  const strategy = state.indexStrategy || defaultIndexStrategy;
-  const date = (state.report?.generated_at || "").slice(0, 10) || "공식 정리";
-  document.querySelector("#assetLabel").textContent = strategy.asset_scope || "KOSPI200";
-  document.querySelector("#asOfDate").textContent = date;
-  document.querySelector("#appTitle").textContent = "지수 매매";
-  document.querySelector("#marketSummary").textContent =
-    `${strategy.timeframes?.context || "30분봉"} 방향과 ${strategy.timeframes?.execution || "5분봉"} 진입·청산을 분리해 봅니다.`;
-  document.querySelector("#topSignalCard").innerHTML = `
-    <span class="signal-badge neutral">설계중</span>
-    <strong>옵션과 분리 완료</strong>
-    <small>이 탭은 지수 매매 조건 전용입니다. 위클리 옵션 행사가 선택은 별도 전략으로 확정합니다.</small>
-  `;
-}
-
-function renderIndexPanel() {
-  const strategy = state.indexStrategy || defaultIndexStrategy;
-  const sizing = strategy.position_sizing || {};
-  document.querySelector("#indexScope").textContent = strategy.asset_scope || "KOSPI200 지수/선물";
-  document.querySelector("#indexStatusBadge").textContent = strategy.status === "active" ? "활성" : "설계중";
-  document.querySelector("#indexChartSignalText").textContent =
-    `현재 공식은 ${sizing.first_entry_pct || 70}% 1차 진입, ${sizing.add_entry_pct || 30}% 추가 진입, 핵심 이탈 리셋, 바닥 바운딩 후 61.8%→50% 목표 순서입니다.`;
-
-  const formulas = [
-    ...(strategy.formulas || []),
-    ...(strategy.fibonacci?.levels || []),
-  ];
-  document.querySelector("#indexFormulaList").innerHTML = formulas.map((item) => `
-    <article class="formula-item">
-      <div>
-        <span>${escapeHtml(item.key)}</span>
-        <strong>${escapeHtml(item.label)}</strong>
-      </div>
-      <code>${escapeHtml(item.formula)}</code>
-      <small>${escapeHtml(item.role || "")}</small>
-    </article>
-  `).join("");
-
-  document.querySelector("#indexLevelList").innerHTML = (strategy.fibonacci?.levels || []).map((level) => `
-    <article class="level-item ${level.key === "fib_105" ? "danger" : level.key === "fib_103" || level.key === "fib_100" ? "watch" : ""}">
-      <span>${escapeHtml(level.label)}</span>
-      <strong>${escapeHtml(level.role || "")}</strong>
-      <small>${escapeHtml(level.formula)}</small>
-    </article>
-  `).join("");
-
-  document.querySelector("#indexStateFlow").innerHTML = (strategy.states || []).map((step, index) => `
-    <article class="state-step">
-      <span>${String(index + 1).padStart(2, "0")}</span>
-      <div>
-        <strong>${escapeHtml(step.label)}</strong>
-        <code>${escapeHtml(step.key)}</code>
-        <small>${escapeHtml(step.description || "")}</small>
-      </div>
-    </article>
-  `).join("");
-
-  document.querySelector("#indexSignalRules").innerHTML = (strategy.signals || []).map((rule) => `
-    <article class="rule-item">
-      <div>
-        <span>${escapeHtml(rule.key)}</span>
-        <strong>${escapeHtml(rule.label)}</strong>
-      </div>
-      <p>${escapeHtml(rule.message || "")}</p>
-      <ul>${(rule.conditions || []).map((condition) => `<li>${escapeHtml(condition)}</li>`).join("")}</ul>
-    </article>
-  `).join("");
-
-  document.querySelector("#indexQuestions").innerHTML = (strategy.questions || [])
-    .map((question) => `<li>${escapeHtml(question)}</li>`)
-    .join("");
-
-  renderIndexLegend();
-  requestAnimationFrame(() => drawIndexBlueprint());
-}
-
-function renderWeeklyHero() {
-  const strategy = state.weeklyOptions || defaultWeeklyOptions;
-  const risk = strategy.risk_limits || {};
-  const availability = strategy.availability || {};
-  const indexReset = strategy.index_reset_reference || {};
-  const resetPrepare = indexReset.call_retry_prepare || {};
-  const resetWick = resetPrepare.wick_confirmation || {};
-  const money = strategy.money_management || {};
-  const profitLock = money.daily_profit_lock || {};
-  const afterLock = money.after_lock || {};
-  const profitScalp = afterLock.profit_collateral_scalp || {};
-  const profitLottery = afterLock.profit_collateral_lottery || {};
-  const lotteryFinalRule = profitLottery.final_20_minutes || {};
-  const pressureFilter = money.downside_pressure_filter || {};
-  const entry = strategy.entry || {};
-  const date = (state.report?.generated_at || "").slice(0, 10) || "공식 정리";
-  document.querySelector("#assetLabel").textContent = `${strategy.asset_scope || "KOSPI200 위클리 옵션"} · ${availability.label || "월/목 전용"}`;
-  document.querySelector("#asOfDate").textContent = date;
-  document.querySelector("#appTitle").textContent = "위클리 옵션";
-  document.querySelector("#marketSummary").textContent =
-    `${entry.initial_contracts || 3}계약 분할 · 알림 전용 · 주문 없음`;
-  document.querySelector("#topSignalCard").innerHTML = `
-    <span class="signal-badge sell">중단</span>
-    <strong>손실한도 ${formatWon(risk.daily_max_loss_krw || 3000000)}</strong>
-    <small>신호 확인 후 다른 폰에서 직접 매매합니다.</small>
-  `;
-}
-
-function renderWeeklyPanel() {
-  renderOptionsMonitor();
-  const strategy = state.weeklyOptions || defaultWeeklyOptions;
-  const risk = strategy.risk_limits || {};
-  const availability = strategy.availability || {};
-  const indexReset = strategy.index_reset_reference || {};
-  const resetPrepare = indexReset.call_retry_prepare || {};
-  const resetWick = resetPrepare.wick_confirmation || {};
-  const money = strategy.money_management || {};
-  const profitLock = money.daily_profit_lock || {};
-  const afterLock = money.after_lock || {};
-  const profitScalp = afterLock.profit_collateral_scalp || {};
-  const profitLottery = afterLock.profit_collateral_lottery || {};
-  const lotteryFinalRule = profitLottery.final_20_minutes || {};
-  const pressureFilter = money.downside_pressure_filter || {};
-  const entry = strategy.entry || {};
-  const orderPolicy = entry.order_ladder_policy || {};
-  const partialFill = entry.partial_fill_policy || {};
-  const partialFillOne = partialFill.one_contract || {};
-  const partialFillTwo = partialFill.two_contracts || {};
-  const unfilledOrder = entry.unfilled_order_management || {};
-  const rolePlan = strategy.position_roles || {};
-  const safetyRole = rolePlan.safety_margin || {};
-  const profitRole = rolePlan.profit_runner || {};
-  const strike = entry.strike_selection || {};
-  const entryTiming = entry.double_bottom_entry_timing || {};
-  const expiryTiming = entry.expiry_day_time_adjustments || {};
-  const weekdayPlan = expiryTiming.weekday_premium_profiles || {};
-  const weekdayProfiles = Array.isArray(weekdayPlan.profiles) ? weekdayPlan.profiles : [];
-  const morningPlan = expiryTiming.morning || {};
-  const afterNoonPlan = expiryTiming.after_noon || {};
-  const exit = strategy.exit || {};
-  const loss = exit.loss_control || {};
-  const quickRebound = exit.quick_rebound || {};
-  const minTake = quickRebound.minimum_take_profit || {};
-  const freeRunner = quickRebound.free_runner_plan || {};
-  const runner = exit.runner || {};
-  const trailingMethod = runner.trailing_stop_method || {};
-  const conflictResolution = exit.conflict_resolution || {};
-  const runnerFullExit = runner.full_exit_on_index_50_confluence || {};
-  const switchRule = strategy.position_switch || {};
-  const switchTrigger = switchRule.trigger || {};
-  const switchReplacement = switchRule.replacement_selection || {};
-  const switchExecution = switchRule.execution || {};
-  const switchRetry = switchRule.retry_limit || {};
-  const criticalBreakdown = switchRule.critical_breakdown || {};
-  const lowFloorExit = switchRule.low_floor_replacement_exit || {};
-  const finalTry = switchRule.final_try || {};
-  const finalExitPlan = finalTry.exit_plan || {};
-  const intradayReview = strategy.intraday_full_fibonacci_review || {};
-  const indexBounce = strategy.index_bounce_target_reference || {};
-  const indexBounceFullExit = indexBounce.runner_full_exit || {};
-  const lateExtension = strategy.late_session_extension || {};
-  const cloudTarget = lateExtension.index_target || {};
-  const expiryScalpReason = lateExtension.expiry_scalp_reason || {};
-  const moonshotRunner = lateExtension.moonshot_runner || {};
-  const etfSeparation = lateExtension.kodex200_etf_separation || {};
-  const perStopRange = Array.isArray(risk.per_stop_loss_krw_range)
-    ? `${formatWon(risk.per_stop_loss_krw_range[0])}~${formatWon(risk.per_stop_loss_krw_range[1])}`
-    : "300,000~500,000원";
-  const profitLockRange = Array.isArray(profitLock.profit_krw_range)
-    ? `${formatWon(profitLock.profit_krw_range[0])}~${formatWon(profitLock.profit_krw_range[1])}`
-    : "500,000원~1,000,000원";
-  const formatPremiumRange = (range) => Array.isArray(range)
-    ? `${Number(range[0]).toFixed(1)}~${Number(range[1]).toFixed(1)}`
-    : "-";
-  const formatPctRange = (range) => Array.isArray(range)
-    ? `+${formatNum(range[0], 0)}~+${formatNum(range[1], 0)}%`
-    : "-";
-  const formatContractRange = (range, fallback = 3) => Array.isArray(range)
-    ? `${formatNum(range[0], 0)}~${formatNum(range[1], 0)}계약`
-    : `${formatNum(fallback, 0)}계약`;
-  const morningPremiumRange = formatPremiumRange(morningPlan.target_premium_range || strike.target_premium_range);
-  const afterNoonPremiumRange = formatPremiumRange(afterNoonPlan.target_premium_range);
-  const resetPremiumRange = formatPremiumRange(resetPrepare.target_premium_range || resetPrepare.premium_range);
-  const resetContractRange = formatContractRange(resetPrepare.contracts_range, resetPrepare.contracts || 3);
-  const entryPremiumRange = formatPremiumRange(strike.target_premium_range);
-  const acceptedPremiumRange = formatPremiumRange(orderPolicy.acceptable_fill_premium_range || strike.target_premium_range);
-  const switchLimitValue = switchRetry.allow_consecutive_switches_until_daily_max_loss
-    ? "손실한도 전까지"
-    : `최대 ${formatNum(switchRetry.max_switch_attempts || 2, 0)}회`;
-  const switchLimitDescription = switchRetry.description || "당일 손실 한도를 최상위 제한으로 두고 자리이동 여부를 판단합니다.";
-  const lotteryProfitBasis = lotteryFinalRule.profit_basis_label || "수수료 차감 후 순수익";
-
-  document.querySelector("#weeklyStopBadge").textContent = formatWon(risk.daily_max_loss_krw || 3000000);
-  document.querySelector("#weeklyRiskGrid").innerHTML = [
-    { label: availability.label || "요일/만기별 분기", value: "월~금", text: availability.description || "큰 지수 자리 판단은 요일 공통으로 두고, 옵션 행사가와 프리미엄은 만기 잔존일별로 조정합니다." },
-    { label: weekdayPlan.label || "요일별 옵션 선택값", value: "D-2 · D-1 · 만기", text: weekdayPlan.description || "프리미엄이 붙어 있는 정도에 따라 행사가 거리와 목표 프리미엄을 바꿉니다." },
-    { label: "당일 최대 손실", value: formatWon(risk.daily_max_loss_krw || 3000000), text: risk.description || "" },
-    { label: "손실 계산", value: risk.loss_basis_label || "실현+평가+수수료", text: "평가손익, 실현손익, 수수료를 모두 더한 누적 손실 기준으로 중단 여부를 봅니다." },
-    { label: "1회 손절 비용", value: perStopRange, text: risk.per_stop_loss_description || "손절과 자리이동을 감수해 반등 시 수익 회수를 빠르게 노립니다." },
-    { label: "계약 기준", value: entry.contract_scope_label || `신호당 ${entry.initial_contracts || 3}계약`, text: entry.contract_scope_description || "초기 계약수는 하루 총량이 아니라 지수 신호 1회당 기준 물량입니다." },
-    { label: "일시 노출", value: `최대 ${formatNum(switchExecution.max_temporary_contracts || entry.initial_contracts * 2 || 6, 0)}계약`, text: switchExecution.description || "자리이동 체결 과정에서는 새 3계약과 기존 3계약이 잠시 겹칠 수 있습니다." },
-    { label: "수익 잠금", value: profitLockRange, text: profitLock.description || "당일 수익 달성 후 보수 모드로 전환합니다." },
-    { label: "이후 진입", value: `${afterLock.max_contracts || 1}계약만`, text: afterLock.description || "급소자리 외에는 진입하지 않고 수익담보 내에서만 운용합니다." },
-    { label: "수익담보 눌림", value: `${profitScalp.max_contracts || 1}계약`, text: profitScalp.description || "전환선 눌림에서 1계약만 진입하고 30이평 터치 시 청산합니다." },
-    { label: profitLottery.label || "수익담보 소액 옵션", value: `${formatNum(profitLottery.target_entry_premium || 1, 1)} → ${formatNum(profitLottery.example_target_premium || 4, 1)}`, text: profitLottery.description || "올청 후에도 강한 장이면 당일 수익담보 안에서 소액 옵션을 버려두는 후보로 봅니다." },
-    { label: "만기 20분 전", value: `${lotteryProfitBasis} ${formatNum(lotteryFinalRule.max_budget_profit_pct || 10, 0)}% 이하`, text: lotteryFinalRule.description || "만기 20분 전부터는 프리미엄 급감이 극단적이므로 복권 플레이는 수익담보 안에서도 더 작게 제한합니다." },
-    { label: "복권 적중률", value: `${formatNum(lotteryFinalRule.estimated_hit_probability_max_pct || 10, 0)}% 이내`, text: lotteryFinalRule.allowed_only_when_profit_surplus ? "수익이 넉넉할 때만 허용하고, 아니면 스킵합니다." : "적중 확률을 낮게 보고 소액만 허용합니다." },
-    { label: "하락 압력", value: `${pressureFilter.max_contracts || 1}계약`, text: pressureFilter.description || "5분봉이 30이평, 전환선, 기준선 아래이면 최소 물량만 시도합니다." },
-    { label: "100% 앞선 자리", value: "최소 물량", text: entryTiming.description || "우측 바닥이 더 높게 돌 수 있어 100%를 딱 기다리지 않고 앞선 자리도 봅니다." },
-    { label: afterNoonPlan.label || "중·후반 재선정", value: `${formatNum(afterNoonPlan.strike_offset_pct || 1.5, 1)}% / ${afterNoonPremiumRange}`, text: afterNoonPlan.description || "프리미엄 급감 구간에서는 더 가까운 행사가와 낮은 프리미엄으로 재선정합니다." },
-    { label: `${afterNoonPlan.label || "12시 후"} 손절`, value: `-${formatNum(afterNoonPlan.stop_loss_pct || 40, 0)}%`, text: afterNoonPlan.position_switch_required ? "손절 범위를 40%로 두고 자리이동을 전제로 운용합니다." : "손절 기준 확인이 필요합니다." },
-    { label: "자리이동 한도", value: switchLimitValue, text: switchLimitDescription },
-    { label: "이후 대기", value: "핵심 이탈 시 수동 판단", text: criticalBreakdown.description || "방어해야 할 자리가 무너지면 추가 하락이 커질 수 있어 수동 대기 후보로 봅니다." },
-    { label: "저점 자리이동", value: `${formatNum(lowFloorExit.example_strike || 1270, 0)}콜 ${formatNum(lowFloorExit.example_entry_premium || 2.2, 1)}`, text: lowFloorExit.description || "저점 자리이동 포지션은 빠른 70% 청산 후 잔량만 가져갑니다." },
-    { label: "마지막 트라이", value: `${formatNum(finalTry.example_strike || 1260, 0)}콜 ${formatNum(finalTry.example_entry_premium || 2.4, 1)}`, text: finalTry.description || "400/456이평 라인대에서 마지막 트라이 후보를 봅니다." },
-    { label: "전구간 피보나치", value: "위치 재점검", text: intradayReview.description || "포지션 변화 후 당일 전체 고저 피보나치로 현재 위치를 다시 봅니다." },
-    { label: indexBounce.label || "바운딩 목표", value: "61.8% → 50%", text: indexBounce.description || "저점권 바운딩 후 지수 목표는 61.8%, 이후 50% 라인까지 순서대로 봅니다." },
-    { label: cloudTarget.label || "후반 목표", value: "38.2%+구름대", text: cloudTarget.description || "후반 반등이 강하면 구름대와 38.2% 라인을 다음 목표로 봅니다." },
-    { label: "만기일 줄먹", value: "목표+부분청산", text: expiryScalpReason.description || "만기일 프리미엄 감소를 감안해 상단 목표와 줄먹을 병행합니다." },
-    { label: "잔량 올청", value: "50%+50이평", text: indexBounceFullExit.description || runnerFullExit.description || "수익극대화 잔량은 50% 피보나치와 50이평이 겹치는 자리에서 전량 청산 후보로 봅니다." },
-    { label: "10배 러너", value: `${formatNum(moonshotRunner.example_entry_premium || 2.2, 1)} → ${formatNum(moonshotRunner.example_current_premium || 20.5, 1)}`, text: moonshotRunner.description || "초강세장에서는 남은 1계약을 끝까지 끌고 가는 수익극대화 가치가 커집니다." },
-    { label: "KODEX200 ETF", value: "별도 규칙", text: etfSeparation.description || "ETF는 옵션과 메커니즘이 달라 손절과 재진입 중심으로 별도 설계합니다." },
-    { label: "도달 시", value: "오늘 중단", text: "신규 진입과 추가 진입을 멈춥니다." },
-    { label: "초기 계약", value: entry.contract_scope_label || `${entry.initial_contracts || 3}계약`, text: "1계약씩 3분할 주문을 기본값으로 둡니다." },
-    { label: "기준 신호", value: "지수 매매", text: "지수 탭의 신규 진입 위치를 옵션 선택의 출발점으로 씁니다." },
-    { label: indexReset.label || "지수 피보나치 리셋", value: indexReset.value || "중심라인 콜 2~3계약 재시작", text: indexReset.description || "핵심 자리가 무너지면 리셋 중심라인에서 프리미엄 1.5~1.8 콜을 2~3계약 재시작 후보로 봅니다." },
-    { label: resetWick.label || "원하는 자리 밑꼬리", value: "확인 강도 상승", text: resetWick.description || "거의 원하는 자리에서 밑꼬리가 나오면 중심라인 콜 재시작 후보의 신뢰도를 높입니다." },
-  ].map(optionMetricCard).join("");
-
-  const weekdayProfileCards = weekdayProfiles.map((profile) => {
-    const premiumText = formatPremiumRange(profile.target_premium_range);
-    const rangeText = Number.isFinite(number(profile.range_point_offset))
-      ? `레인지 +${formatNum(profile.range_point_offset, 0)}p`
-      : profile.strike_offset_pct
-        ? `중심 +${formatNum(profile.strike_offset_pct, 1)}%`
-        : "거리 확인 필요";
-    return `
-      <article class="option-summary-card">
-        <span>${escapeHtml(profile.label || "요일 프로필")}</span>
-        <strong>${escapeHtml(rangeText)} · ${escapeHtml(premiumText)}</strong>
-        <small>${escapeHtml(profile.description || "")}</small>
-      </article>
-    `;
-  }).join("");
-
-  document.querySelector("#weeklyEntrySummary").innerHTML = `
-    <article class="option-summary-card">
-      <span>장초 선택</span>
-      <strong>중심가격 +${formatNum(strike.call_strike_offset_pct, 1)}%</strong>
-      <small>예: 지수 ${formatNum(strike.example_index, 0)}이면 콜 ${escapeHtml(strike.example_call_strike_zone || "-")} 구간, 만기일 장초 프리미엄 ${morningPremiumRange} 근처를 찾습니다.</small>
-    </article>
-    <article class="option-summary-card">
-      <span>자동 주문가</span>
-      <strong>프리미엄 ${entryPremiumRange || acceptedPremiumRange}</strong>
-      <small>${escapeHtml(orderPolicy.description || "1.6 근처를 중심으로 분할 주문가를 자동 재계산하고 1.4~1.8 범위 체결을 허용합니다.")}</small>
-    </article>
-    <article class="option-summary-card">
-      <span>부분 체결</span>
-      <strong>1계약=러너 · 2계약=+30% 1계약</strong>
-      <small>${escapeHtml(partialFillOne.description || "1계약만 체결되면 트레일링 스탑으로 운용합니다.")} ${escapeHtml(partialFillTwo.description || "")}</small>
-    </article>
-    <article class="option-summary-card">
-      <span>하방 풋 후보</span>
-      <strong>2.5~3% · 프리 2.0</strong>
-      <small>${escapeHtml(entry.direction_rule?.put || "하방 신호는 아직 임시 규칙입니다.")}</small>
-    </article>
-    <article class="option-summary-card">
-      <span>미체결 관리</span>
-      <strong>반등 시 하단 주문 취소</strong>
-      <small>${escapeHtml(unfilledOrder.description || "일부 체결 뒤 시장이 날아가면 아래 받쳐둔 미체결 주문은 취소합니다.")}</small>
-    </article>
-    <article class="option-summary-card">
-      <span>${escapeHtml(afterNoonPlan.label || "12시 이후")}</span>
-      <strong>중심가격 +${formatNum(afterNoonPlan.strike_offset_pct || 1.5, 1)}%</strong>
-      <small>프리미엄 ${afterNoonPremiumRange} 구간 · 손절 ${formatNum(afterNoonPlan.stop_loss_pct || 40, 0)}% · 자리이동 전제</small>
-    </article>
-    ${weekdayProfileCards}
-    <article class="option-summary-card">
-      <span>리셋 중심라인</span>
-      <strong>콜 ${resetContractRange}</strong>
-      <small>프리미엄 ${resetPremiumRange} · 새 초기 진입처럼 재시작</small>
-    </article>
-    <article class="option-summary-card">
-      <span>밑꼬리 확인</span>
-      <strong>진입 후보 강화</strong>
-      <small>${escapeHtml(resetWick.description || "거의 원하는 자리에서 밑꼬리가 나오면 콜 재시작 후보의 신뢰도를 높입니다.")}</small>
-    </article>
-    <article class="option-summary-card">
-      <span>저점 자리이동</span>
-      <strong>${formatNum(lowFloorExit.example_strike || 1270, 0)}콜 ${formatNum(lowFloorExit.example_entry_premium || 2.2, 1)}</strong>
-      <small>${formatPremiumRange(lowFloorExit.take_profit_premium_range || [3.0, 3.3])}에서 ${formatNum(lowFloorExit.exit_position_pct || 70, 0)}% 청산</small>
-    </article>
-    <article class="option-summary-card">
-      <span>마지막 트라이</span>
-      <strong>${formatNum(finalTry.example_strike || 1260, 0)}콜 ${formatNum(finalTry.example_entry_premium || 2.4, 1)}</strong>
-      <small>400/456이평 · ${formatPctRange(finalExitPlan.targets?.[0]?.profit_pct_range || [40, 50])} 1계약, +${formatNum(finalExitPlan.targets?.[1]?.profit_pct || 100, 0)}% 1계약</small>
-    </article>
-    <article class="option-summary-card">
-      <span>수익담보 스캘프</span>
-      <strong>전환선 눌림 ${formatNum(profitScalp.max_contracts || 1, 0)}계약</strong>
-      <small>30이평 터치 청산 · 예시 ${escapeHtml(profitScalp.example_option || "콜 2605 1275.0 4W")} +${formatNum(profitScalp.example_profit_pct || 55.4, 1)}%</small>
-    </article>
-    <article class="option-summary-card">
-      <span>후반 목표</span>
-      <strong>38.2%+구름대</strong>
-      <small>${escapeHtml(cloudTarget.description || "강한 반등은 구름대와 38.2% 라인까지 목표로 보되 만기일에는 부분청산을 병행합니다.")}</small>
-    </article>
-    <article class="option-summary-card">
-      <span>10배 러너</span>
-      <strong>${formatNum(moonshotRunner.example_entry_premium || 2.2, 1)} → ${formatNum(moonshotRunner.example_current_premium || 20.5, 1)}</strong>
-      <small>잔량 1계약을 끝까지 끌고 가는 초강세장 수익극대화 후보</small>
-    </article>
-    <article class="option-summary-card">
-      <span>수익담보 소액</span>
-      <strong>${formatNum(profitLottery.target_entry_premium || 1, 1)}짜리 1계약</strong>
-      <small>${escapeHtml(profitLottery.description || "올청 후 당일 수익담보 안에서 버려두는 추가 수익 후보입니다.")}</small>
-    </article>
-    <article class="option-summary-card">
-      <span>만기 20분전</span>
-      <strong>${escapeHtml(lotteryProfitBasis)} ${formatNum(lotteryFinalRule.max_budget_profit_pct || 10, 0)}% 이하</strong>
-      <small>100만원 순수익이면 10만원 이하 · 적중확률 ${formatNum(lotteryFinalRule.estimated_hit_probability_max_pct || 10, 0)}% 이내</small>
-    </article>
-    <article class="option-summary-card">
-      <span>쌍바닥 타이밍</span>
-      <strong>100% 앞선 자리 허용</strong>
-      <small>${escapeHtml(entryTiming.description || "우측 바닥이 더 높은 자리에서 돌 수 있어 최소 물량으로 먼저 시도할 수 있습니다.")}</small>
-    </article>
-  `;
-
-  document.querySelector("#weeklyOrderLadder").innerHTML = (entry.order_ladder || []).map((order, index) => `
-    <article class="order-step">
-      <span>${String(index + 1).padStart(2, "0")}</span>
-      <div>
-        <strong>${escapeHtml(order.label || `${index + 1}차 매수`)}</strong>
-        <small>${formatNum(order.limit_price, 2)}에 ${formatNum(order.contracts, 0)}계약 주문</small>
-      </div>
-    </article>
-  `).join("") + `
-    <article class="order-step average">
-      <span>평균</span>
-      <div>
-        <strong>${formatNum(entry.expected_average_if_all_filled, 2)}</strong>
-        <small>3계약 모두 체결됐을 때 예상 평균단가</small>
-      </div>
-    </article>
-  `;
-
-  const lossItem = `
-    <article class="target-item stop">
-      <span>손실 방어</span>
-      <strong>-${formatNum(loss.hold_until_loss_pct || 30, 0)}% 전까지 홀딩</strong>
-      <small>${escapeHtml(loss.stop_price_formula || "average_entry_price * 0.70")} · 진입 ${formatNum(loss.example_entry_price, 2)} 예시 ${formatNum(loss.example_stop_price, 2)}</small>
-    </article>
-  `;
-
-  const reboundProfitRange = Array.isArray(minTake.profit_pct_range)
-    ? `+${formatNum(minTake.profit_pct_range[0], 0)}~+${formatNum(minTake.profit_pct_range[1], 0)}%`
-    : "+20~+30%";
-  const quickReboundItems = quickRebound.status ? `
-    <article class="target-item quick">
-      <span>급반등 1차 청산</span>
-      <strong>${reboundProfitRange} · 최소 ${formatNum(minTake.contracts || 1, 0)}계약</strong>
-      <small>${formatNum(minTake.min_position_pct || 30, 0)}% 물량 확보 · ${escapeHtml(quickRebound.purpose || "급반전 프리미엄을 빠르게 확보합니다.")}</small>
-    </article>
-    <article class="target-item quick">
-      <span>무위험 잔량 전환</span>
-      <strong>+${formatNum(freeRunner.profit_pct || 30, 0)}%에서 ${formatNum(freeRunner.exit_contracts || 2, 0)}계약 청산</strong>
-      <small>${escapeHtml(freeRunner.arithmetic_check || `남은 ${formatNum(freeRunner.remaining_contracts || 1, 0)}계약은 무위험 잔량 개념으로 운용합니다.`)}</small>
-    </article>
-  ` : "";
-
-  const roleItems = rolePlan.status ? `
-    <article class="target-item role">
-      <span>안전마진 물량</span>
-      <strong>${formatNum(safetyRole.contracts || 2, 0)}계약 · ${formatNum(safetyRole.position_pct || 70, 0)}%</strong>
-      <small>${escapeHtml(safetyRole.description || "초기 두 개 물량은 최소한의 안전마진을 만들기 위한 물량입니다.")}</small>
-    </article>
-    <article class="target-item role">
-      <span>수익극대화 물량</span>
-      <strong>${formatNum(profitRole.contracts || 1, 0)}계약 · ${formatNum(profitRole.position_pct || 30, 0)}%</strong>
-      <small>${escapeHtml(profitRole.description || "남은 잔량은 수익극대화를 위한 물량입니다.")}</small>
-    </article>
-  ` : "";
-
-  const bounceTargetItems = indexBounce.status ? `
-    <article class="target-item quick">
-      <span>바닥 바운딩 목표</span>
-      <strong>1차 61.8% · 2차 50%</strong>
-      <small>${escapeHtml(indexBounce.description || "저점권 바운딩 후 지수 61.8%, 이후 50% 라인까지 도전 후보로 봅니다.")}</small>
-    </article>
-    <article class="target-item quick">
-      <span>50%+50이평 올청</span>
-      <strong>수익극대화 잔량 전량 청산</strong>
-      <small>${escapeHtml(indexBounceFullExit.description || runnerFullExit.description || "50% 피보나치 목표와 50이평이 겹치면 잔량 올청 후 당일 매매를 종료합니다.")}</small>
-    </article>
-  ` : "";
-
-  const lateExtensionItems = lateExtension.status ? `
-    <article class="target-item quick">
-      <span>후반 상단 목표</span>
-      <strong>38.2% · 구름대 근접</strong>
-      <small>${escapeHtml(cloudTarget.description || "강한 반등은 38.2% 라인과 구름대 근접까지 목표로 봅니다.")}</small>
-    </article>
-    <article class="target-item quick">
-      <span>만기일 줄먹 병행</span>
-      <strong>목표 추적 + 부분 청산</strong>
-      <small>${escapeHtml(expiryScalpReason.description || "만기일에는 프리미엄 감소가 빠르므로 목표 보유와 중간 청산을 같이 봅니다.")}</small>
-    </article>
-    <article class="target-item runner">
-      <span>10배 러너 후보</span>
-      <strong>${formatNum(moonshotRunner.example_entry_premium || 2.2, 1)} → ${formatNum(moonshotRunner.example_current_premium || 20.5, 1)}</strong>
-      <small>${escapeHtml(moonshotRunner.description || "초강세장에서는 남은 1계약을 끝까지 끌고 가는 위클리 옵션 전략의 가치가 커집니다.")}</small>
-    </article>
-    <article class="target-item quick">
-      <span>수익담보 소액 옵션</span>
-      <strong>${formatNum(profitLottery.target_entry_premium || 1, 1)} → ${formatNum(profitLottery.example_target_premium || 4, 1)}</strong>
-      <small>${escapeHtml(profitLottery.description || "주요 포지션 올청 후 당일 수익담보 안에서 소액 옵션을 버려두는 후보입니다.")}</small>
-    </article>
-    <article class="target-item stop">
-      <span>만기 20분 전 제한</span>
-      <strong>${escapeHtml(lotteryProfitBasis)} ${formatNum(lotteryFinalRule.max_budget_profit_pct || 10, 0)}% 이하</strong>
-      <small>${escapeHtml(lotteryFinalRule.description || "복권 플레이는 수익이 넉넉할 때만 허용하고 예산을 넘으면 스킵합니다.")}</small>
-    </article>
-    <article class="target-item switch">
-      <span>KODEX200 ETF 분리</span>
-      <strong>손절+재진입 별도 메커니즘</strong>
-      <small>${escapeHtml(etfSeparation.description || "ETF는 옵션 프리미엄 구조와 달라 별도 전략으로 분리합니다.")}</small>
-    </article>
-  ` : "";
-
-  const profitScalpItems = profitScalp.status ? `
-    <article class="target-item quick">
-      <span>수익담보 전환선 눌림</span>
-      <strong>${formatNum(profitScalp.max_contracts || 1, 0)}계약만 진입</strong>
-      <small>당일 수익을 담보로 짧게 접근 · ${escapeHtml(profitScalp.entry_trigger || "tenkan_pullback_5m")}</small>
-    </article>
-    <article class="target-item quick">
-      <span>30이평 터치 청산</span>
-      <strong>예시 +${formatNum(profitScalp.example_profit_pct || 55.4, 1)}%</strong>
-      <small>${escapeHtml(profitScalp.example_option || "콜 2605 1275.0 4W")} · ${escapeHtml(profitScalp.exit_trigger || "gma_30_5m_touch")}</small>
-    </article>
-  ` : "";
-
-  const dynamicExitItems = `
-    <article class="target-item runner">
-      <span>동적 트레일링</span>
-      <strong>전환선 · 기준선 · 30이평</strong>
-      <small>${escapeHtml(trailingMethod.description || "고정 퍼센트가 아니라 5분봉 주요 선과 현재 수익 상황으로 잔량 보유/청산을 판단합니다.")}</small>
-    </article>
-    <article class="target-item runner">
-      <span>감마 청산 정정</span>
-      <strong>높은 호가부터 정정</strong>
-      <small>${escapeHtml(conflictResolution.description || "지수 청산 신호와 옵션 프리미엄 청산이 충돌하면 감마 스퀴즈 가능성을 보며 청산 호가를 단계적으로 정정합니다.")}</small>
-    </article>
-    <article class="target-item stop">
-      <span>미체결 주문 취소</span>
-      <strong>반등 확인 시 하단 주문 제거</strong>
-      <small>${escapeHtml(unfilledOrder.description || "일부 체결 뒤 시장이 반등하면 아래 받쳐둔 미체결 주문은 취소합니다.")}</small>
-    </article>
-  `;
-
-  const switchLossRange = Array.isArray(switchTrigger.loss_prepare_pct_range)
-    ? `-${formatNum(switchTrigger.loss_prepare_pct_range[0], 0)}~-${formatNum(switchTrigger.loss_prepare_pct_range[1], 0)}%`
-    : "-20~-25%";
-  const marketOrderText = switchReplacement.avoid_market_order ? "시장가 금지" : "지정가 우선";
-  const switchItems = switchRule.status ? `
-    <article class="target-item switch">
-      <span>자리이동 준비</span>
-      <strong>${switchLossRange} 손실권</strong>
-      <small>지수 ${escapeHtml(switchTrigger.index_push_points || "5~10")} 추가 하락 · 피보나치 ${escapeHtml(switchTrigger.fibonacci_zone || "100%~103%")}</small>
-    </article>
-    <article class="target-item switch">
-      <span>교체 옵션</span>
-      <strong>${escapeHtml(String(switchReplacement.example_old_strike || "1315"))}콜 → ${escapeHtml(switchReplacement.example_new_strike_zone || "1310~1305")}콜</strong>
-      <small>${marketOrderText} · 프리미엄 ${formatNum(switchReplacement.target_premium_min, 1)}~${formatNum(switchReplacement.target_premium_max, 1)}, 선호 진입 ${formatNum(switchReplacement.preferred_entry_price, 1)}</small>
-    </article>
-    <article class="target-item switch">
-      <span>실행 순서</span>
-      <strong>일시 최대 ${formatNum(switchExecution.max_temporary_contracts || 6, 0)}계약 허용</strong>
-      <small>새 ${formatNum(switchExecution.new_contracts, 0)}계약 체결 후 기존 ${formatNum(switchExecution.old_contracts_to_close, 0)}계약 청산 · 기존 포지션이 약 -${formatNum(switchExecution.old_position_exit_loss_pct, 0)}% 손실권이면 즉시 정리</small>
-    </article>
-    <article class="target-item switch">
-      <span>저점 자리이동 회수</span>
-      <strong>${formatNum(lowFloorExit.example_strike || 1270, 0)}콜 ${formatNum(lowFloorExit.example_entry_premium || 2.2, 1)} → ${formatPremiumRange(lowFloorExit.take_profit_premium_range || [3.0, 3.3])}</strong>
-      <small>${formatNum(lowFloorExit.exit_position_pct || 70, 0)}% 물량 청산 · 남은 ${formatNum(lowFloorExit.runner_position_pct || 30, 0)}%만 수익극대화</small>
-    </article>
-    <article class="target-item switch">
-      <span>마지막 트라이 라인</span>
-      <strong>${formatNum(finalTry.example_strike || 1260, 0)}콜 ${formatNum(finalTry.example_entry_premium || 2.4, 1)} · 400/456이평</strong>
-      <small>${escapeHtml(finalTry.description || "장기 이평 라인대에서 마지막 트라이 후보를 봅니다.")}</small>
-    </article>
-    <article class="target-item switch">
-      <span>마지막 단계 청산</span>
-      <strong>${formatPctRange(finalExitPlan.targets?.[0]?.profit_pct_range || [40, 50])} 1계약 · +${formatNum(finalExitPlan.targets?.[1]?.profit_pct || 100, 0)}% 1계약</strong>
-      <small>${escapeHtml(finalExitPlan.description || "빠른 70% 청산보다 손절분 회수용 단계 청산을 우선합니다.")}</small>
-    </article>
-    <article class="target-item switch">
-      <span>전구간 피보나치</span>
-      <strong>현재 지수 위치 재점검</strong>
-      <small>${escapeHtml(intradayReview.description || "포지션 변화 후 당일 전체 고가/저가 기준 피보나치를 다시 그립니다.")}</small>
-    </article>
-    <article class="target-item switch">
-      <span>자리이동 제한</span>
-      <strong>${escapeHtml(switchLimitValue)}</strong>
-      <small>${escapeHtml(switchLimitDescription)}</small>
-    </article>
-    <article class="target-item switch">
-      <span>약손실 후 대기</span>
-      <strong>더 트라이 금지</strong>
-      <small>${escapeHtml(criticalBreakdown.description || "방어해야 할 자리가 무너지면 추가 하락이 커질 수 있어 대기합니다.")}</small>
-    </article>
-    <article class="target-item switch">
-      <span>자리이동 목적</span>
-      <strong>반등 수익 회수 속도</strong>
-      <small>${escapeHtml(switchRule.rationale || "더 안쪽 옵션으로 당겨와 반등 시 수익 전환을 빠르게 노립니다.")}</small>
-    </article>
-  ` : "";
-
-  const targetItems = (exit.targets || []).map((target) => {
-    const exampleBase = target.example_entry_price ?? 2.1;
-    const exampleTarget = target.example_target_price ?? target.example_from_1_58;
-    return `
-    <article class="target-item">
-      <span>${escapeHtml(target.label)}</span>
-      <strong>+${formatNum(target.profit_pct, 0)}% · ${formatNum(target.contracts, 0)}계약</strong>
-      <small>${escapeHtml(target.price_formula)} · 진입 ${formatNum(exampleBase, 2)} 예시 ${formatNum(exampleTarget, 2)}</small>
-    </article>
-  `;
-  }).join("");
-
-  document.querySelector("#weeklyTargetList").innerHTML = lossItem + roleItems + quickReboundItems + bounceTargetItems + lateExtensionItems + profitScalpItems + dynamicExitItems + switchItems + targetItems + `
-    <article class="target-item runner">
-      <span>잔량 운용</span>
-      <strong>${formatNum(runner.contracts || 1, 0)}계약</strong>
-      <small>${escapeHtml(runner.description || "트레일링 스탑 또는 지수 청산 신호까지 보유합니다.")}</small>
-    </article>
-  `;
-
-  document.querySelector("#weeklyStateFlow").innerHTML = (strategy.states || []).map((step, index) => `
-    <article class="state-step">
-      <span>${String(index + 1).padStart(2, "0")}</span>
-      <div>
-        <strong>${escapeHtml(step.label)}</strong>
-        <code>${escapeHtml(step.key)}</code>
-        <small>${escapeHtml(step.description || "")}</small>
-      </div>
-    </article>
-  `).join("");
-
-  document.querySelector("#weeklyQuestions").innerHTML = (strategy.questions || [])
-    .map((question) => `<li>${escapeHtml(question)}</li>`)
-    .join("");
-
-  const visual = strategy.visual_chart || defaultWeeklyOptions.visual_chart || {};
-  document.querySelector("#weeklyChartTitle").textContent = visual.title || "옵션 전략선";
-  document.querySelector("#weeklyChartSignalText").textContent =
-    visual.description || "평균 진입가 기준으로 손실선, 자리이동선, 청산선을 먼저 그립니다.";
-  renderWeeklyLegend(visual);
-  renderWeeklyReplay(strategy);
-  requestAnimationFrame(() => drawWeeklyBlueprint(strategy));
-}
-
-function optionMetricCard(item) {
-  return `
-    <article>
-      <span>${escapeHtml(item.label)}</span>
-      <strong>${escapeHtml(item.value)}</strong>
-      <small>${escapeHtml(item.text)}</small>
-    </article>
-  `;
-}
-
-function renderWeeklyReplay(strategy = state.weeklyOptions || defaultWeeklyOptions) {
-  const replay = strategy.signal_replay || {};
-  const availability = strategy.availability || {};
-  const sessions = Array.isArray(replay.sessions) ? replay.sessions : [];
-  const requestedDate = state.weeklyReplayDate || state.weeklyReplaySessionId || replay.active_session_id || null;
-  const requestedSession = sessions.find((session) => session.date === requestedDate || session.id === requestedDate) || null;
-  const requestedSessionMissing = Boolean(requestedDate && !requestedSession);
-  const fallbackSession =
-    sessions.find((session) => session.id === state.weeklyReplaySessionId) ||
-    sessions.find((session) => session.id === replay.active_session_id) ||
-    sessions.find((session) => session.status === "public_reviewed" || session.status === "reviewed") ||
-    null;
-  const activeSession = requestedSessionMissing ? null : requestedSession || fallbackSession;
-  if (activeSession && state.weeklyReplaySessionId !== activeSession.id) {
-    state.weeklyReplaySessionId = activeSession.id;
-  }
-  if (activeSession && state.weeklyReplayDate !== activeSession.date) {
-    state.weeklyReplayDate = activeSession.date || activeSession.id || null;
-  }
-  const signals = Array.isArray(activeSession?.signals)
-    ? activeSession.signals
-    : Array.isArray(replay.signals)
-      ? replay.signals
-      : [];
-  const series = Array.isArray(activeSession?.series)
-    ? activeSession.series
-    : Array.isArray(replay.series)
-      ? replay.series
-      : [];
-  const title = document.querySelector("#weeklyReplayTitle");
-  const badge = document.querySelector("#weeklyReplayBadge");
-  const text = document.querySelector("#weeklyReplayText");
-  const list = document.querySelector("#weeklySignalReplay");
-  const legend = document.querySelector("#weeklyReplayLegend");
-  const dateInput = document.querySelector("#weeklyReplayDate");
-  if (!title || !badge || !text || !list || !legend) return;
-
-  if (dateInput) {
-    const sessionDates = sessions.map((session) => session.date || session.id).filter(Boolean).sort();
-    dateInput.value = state.weeklyReplayDate || "";
-    if (sessionDates.length) {
-      dateInput.min = sessionDates[0];
-      dateInput.max = sessionDates[sessionDates.length - 1];
+    if (state.wakeLock) {
+      await state.wakeLock.release();
+      state.wakeLock = null;
+    } else {
+      state.wakeLock = await navigator.wakeLock.request("screen");
+      state.wakeLock.addEventListener("release", () => {
+        state.wakeLock = null;
+        renderSettings();
+      });
     }
+  } catch (error) {
+    setText("#alertStatus", "화면 유지 요청이 거부되었습니다.");
   }
-
-  title.textContent = activeSession?.label || replay.label || "최근 1주 신호 차트";
-  badge.textContent = requestedSessionMissing ? "자료 없음" : activeSession?.profile?.label || availability.label || "공개 복기";
-  badge.className = `signal-badge ${requestedSessionMissing ? "warning" : "watch"}`;
-  text.textContent = requestedSessionMissing
-    ? `${requestedDate} 복기 데이터가 아직 없습니다. 저장된 날짜를 선택하면 해당 차트와 신호가 표시됩니다.`
-    : activeSession?.trade_plan?.text || replay.notice || "실제 5분봉 데이터 연결 전에는 알고리즘 기준 복기 레이어로 표시합니다.";
-  legend.innerHTML = [
-    { label: "지수 흐름", color: "#17202a" },
-    { label: "30이평", color: "#008c8c" },
-    { label: "50이평", color: "#95a3b7" },
-    { label: "전환선", color: "#d89216" },
-    { label: "피보나치 목표", color: "#4069b8" },
-    { label: "신호 마커", color: "#b6504a" },
-  ].map((item) => `<span style="color:${escapeAttr(item.color)}"><i></i>${escapeHtml(item.label)}</span>`).join("");
-
-  const sessionCards = sessions.map((session) => {
-    const needsData = session.status === "needs_chart_data";
-    const isActive = activeSession?.id === session.id;
-    const type = needsData ? "warning" : session.trade_plan?.result === "watch_only" ? "watch" : "buy";
-    const details = Array.isArray(session.required_data) && session.required_data.length
-      ? `필요자료: ${session.required_data.slice(0, 2).join(", ")}`
-      : `${formatNum(session.signal_count || 0, 0)}개 신호 · ${session.day_change_pct != null ? `${formatSigned(session.day_change_pct, 2)}%` : "공개 복기"}`;
-    const actionText = session.action_label || (session.status === "public_reviewed" ? "공개 차트 복기" : session.action || details);
-    return `
-      <button class="replay-signal replay-session ${type}${isActive ? " active" : ""}" type="button" data-replay-session="${escapeAttr(session.id || "")}">
-        <span>${escapeHtml(session.date || "-")}<br>${escapeHtml(session.weekday_label || session.weekday || "")}</span>
-        <div>
-          <strong>${escapeHtml(session.label || "복기 대상")} · ${needsData ? "자료 필요" : session.profile?.label || "복기 완료"}</strong>
-          <small>${escapeHtml(session.summary || "")}</small>
-          <em>${escapeHtml(actionText)}${details ? ` · ${escapeHtml(details)}` : ""}</em>
-        </div>
-      </button>
-    `;
-  }).join("");
-
-  const visibleSignals = requestedSessionMissing ? [] : signals;
-  const signalCards = visibleSignals.length ? visibleSignals.map((signal) => `
-    <article class="replay-signal ${escapeAttr(signal.type || "watch")}">
-      <span>${escapeHtml(signal.time || "-")}<br>${escapeHtml(signal.action || "")}</span>
-      <div>
-        <strong>${escapeHtml(signal.label || "신호")}</strong>
-        <small>${escapeHtml(signal.message || "")}</small>
-        <em>${escapeHtml(signal.alert || "")}</em>
-      </div>
-    </article>
-  `).join("") : `
-    <article class="replay-signal watch">
-      <span>${escapeHtml(requestedDate || "대기")}</span>
-      <div>
-        <strong>${requestedSessionMissing ? "선택 날짜 자료 없음" : "복기 신호 없음"}</strong>
-        <small>${requestedSessionMissing ? "저장된 공개 복기 날짜를 선택하세요." : "선택한 날짜 기준 신호 데이터가 아직 없습니다."}</small>
-      </div>
-    </article>
-  `;
-  list.innerHTML = sessionCards ? `<div class="replay-session-strip">${sessionCards}</div>${signalCards}` : signalCards;
-  list.querySelectorAll("[data-replay-session]").forEach((button) => {
-    button.addEventListener("click", () => {
-      state.weeklyReplaySessionId = button.dataset.replaySession;
-      const selected = sessions.find((session) => session.id === state.weeklyReplaySessionId);
-      state.weeklyReplayDate = selected?.date || state.weeklyReplaySessionId;
-      renderWeeklyReplay(strategy);
-    });
-  });
-
-  requestAnimationFrame(() => drawWeeklyReplayChart(replay, requestedSessionMissing ? [] : series, visibleSignals, requestedSessionMissing ? null : activeSession));
+  renderSettings();
 }
 
-function drawWeeklyReplayChart(replay = {}, series = [], signals = [], activeSession = null) {
-  const canvas = document.querySelector("#weeklyReplayChart");
-  if (!canvas) return;
-  const { context, width, height } = setupCanvas(canvas, 320);
-  context.clearRect(0, 0, width, height);
+function drawLiveChart(livePlan = buildLiveTradePlan(state.monitor)) {
+  const canvas = document.querySelector("#liveChart");
+  const candles = Array.isArray(state.monitor?.main?.candles) ? state.monitor.main.candles.slice(-48) : [];
+  if (!candles.length) {
+    drawEmptyChart(canvas, "5분봉 대기");
+    return;
+  }
+  const levels = state.monitor?.main?.levels || {};
+  const values = candles.map((candle) => number(candle.close)).filter((value) => value != null);
+  const levelEntries = [
+    { key: "fib_618", label: "61.8", color: "#3b8f70" },
+    { key: "fib_50", label: "50", color: "#5275ad" },
+    { key: "fib_100", label: "100", color: "#a97022" },
+    { key: "fib_105", label: "105", color: "#a95f59" },
+  ]
+    .map((level) => ({ ...level, value: number(levels[level.key]) }))
+    .filter((level) => level.value != null);
+  drawLineChart(canvas, {
+    height: 210,
+    points: candles,
+    valueKey: "close",
+    timeKey: "time",
+    levels: levelEntries,
+    marker: state.monitor?.signal?.type !== "neutral",
+    tradeMarkers: livePlan?.markers || [],
+  });
+}
 
-  const points = series
-    .map((point, index) => ({ ...point, index, value: number(point.index) }))
-    .filter((point) => Number.isFinite(point.value));
+function drawReplayChart(session, tradePlan = null) {
+  const canvas = document.querySelector("#replayChart");
+  if (!session?.series?.length) {
+    drawEmptyChart(canvas, "복기 자료 없음", 320);
+    return;
+  }
+  const levels = session.levels || {};
+  const levelEntries = [
+    { key: "fib_618", label: "61.8", color: "#3b8f70", value: levels.fib_618 },
+    { key: "fib_50", label: "50", color: "#5275ad", value: levels.fib_50 },
+    { key: "fib_100", label: "100", color: "#a97022", value: levels.fib_100 },
+    { key: "fib_382", label: "38.2", color: "#a95f59", value: levels.fib_382 },
+  ].filter((level) => number(level.value) != null);
+  drawLineChart(document.querySelector("#replayChart"), {
+    height: 320,
+    points: session.series,
+    valueKey: "index",
+    timeKey: "time",
+    levels: levelEntries,
+    extraSeries: [
+      { key: "gma30", color: "#2f7f83", width: 1.5, dash: [] },
+      { key: "gma50", color: "#95a3b7", width: 1.5, dash: [5, 4] },
+    ],
+    tradeMarkers: (tradePlan || buildReplayTradePlan(session)).events,
+  });
+}
+
+function drawDesignChart() {
+  const canvas = document.querySelector("#designChart");
+  const strategy = state.weeklyOptions || fallbackWeeklyOptions;
+  const visual = strategy.visual_chart || fallbackWeeklyOptions.visual_chart;
+  const avgEntry = averageEntry(strategy.entry || {});
+  const scope = {
+    avg_entry: avgEntry,
+    switch_entry: 2.2,
+    final_entry: 2.4,
+    scalp_entry: 1.0,
+    lottery_entry: 1.0,
+  };
+  const multipliers = visual.sample_path_multipliers || [1, 0.92, 0.75, 0.96, 1.18, 1.35, 1.45, 1.3, 1.55];
+  const points = multipliers.map((multiplier, index) => ({
+    time: index === 0 ? "진입" : `${index}`,
+    value: avgEntry * multiplier,
+  }));
+  const levels = (visual.lines || [])
+    .map((line) => ({
+      label: line.label || line.key,
+      color: line.color || "#17202a",
+      value: formulaValue(line.formula, scope),
+    }))
+    .filter((level) => number(level.value) != null);
+  drawLineChart(canvas, {
+    height: 300,
+    points,
+    valueKey: "value",
+    timeKey: "time",
+    levels,
+  });
+}
+
+function drawLineChart(canvas, options) {
+  if (!canvas) return;
+  const points = (options.points || []).filter((point) => number(point[options.valueKey]) != null);
+  const { context, width, height } = setupCanvas(canvas, options.height || 210);
+  context.clearRect(0, 0, width, height);
   if (!points.length) {
-    drawEmpty(context, width, height, "복기 차트 자료가 없습니다.");
+    drawEmpty(context, width, height, "차트 자료 없음");
     return;
   }
 
-  const levels = activeSession?.levels || replay.levels || {};
-  const lineValues = [
-    ...points.map((point) => point.value),
-    ...points.map((point) => number(point.gma30)).filter(Number.isFinite),
-    ...points.map((point) => number(point.gma50)).filter(Number.isFinite),
-    ...points.map((point) => number(point.tenkan)).filter(Number.isFinite),
-    ...["fib_382", "fib_50", "fib_618", "reset_mid_618_100"].map((key) => number(levels[key])).filter(Number.isFinite),
-  ];
-  const padding = 28;
-  const bottomPadding = 34;
-  const min = Math.min(...lineValues) - 4;
-  const max = Math.max(...lineValues) + 4;
+  const padding = 24;
+  const rightPadding = 46;
+  const values = points.map((point) => number(point[options.valueKey]));
+  const extraValues = (options.extraSeries || []).flatMap((series) => points.map((point) => number(point[series.key]))).filter((value) => value != null);
+  const levelValues = (options.levels || []).map((level) => number(level.value)).filter((value) => value != null);
+  const allValues = values.concat(extraValues, levelValues).filter((value) => value != null);
+  const min = Math.min(...allValues);
+  const max = Math.max(...allValues);
   const span = max - min || 1;
-  const xFor = (index) => padding + index * ((width - padding * 2) / Math.max(points.length - 1, 1));
-  const yFor = (value) => height - bottomPadding - ((value - min) / span) * (height - padding - bottomPadding);
+  const xFor = (index) => padding + index * ((width - padding - rightPadding) / Math.max(points.length - 1, 1));
+  const yFor = (value) => height - padding - ((value - min) / span) * (height - padding * 2);
 
   drawGrid(context, width, height, padding);
-  [
-    { key: "fib_382", label: "38.2%", color: "#b6504a" },
-    { key: "fib_50", label: "50%", color: "#4069b8" },
-    { key: "fib_618", label: "61.8%", color: "#4069b8" },
-    { key: "reset_mid_618_100", label: "리셋 중심", color: "#8a63d2" },
-  ].forEach((level) => {
-    const value = number(levels[level.key]);
-    if (Number.isFinite(value)) drawHorizontalLevel(context, width, padding, yFor(value), level.label, value, level.color);
+  (options.levels || []).forEach((level) => drawHorizontalLevel(context, width, padding, yFor(number(level.value)), level, rightPadding));
+  (options.extraSeries || []).forEach((series) => {
+    drawSeries(context, points.map((point) => number(point[series.key])), xFor, yFor, series.color, series.width || 1.5, series.dash || []);
   });
+  drawSeries(context, values, xFor, yFor, "#17202a", 2.6, []);
+  drawLatestPoint(context, points, values, xFor, yFor, options);
+  if (options.tradeMarkers?.length) {
+    drawTradeMarkers(context, points, xFor, yFor, options);
+  } else {
+    drawSignalMarkers(context, points, xFor, yFor, options);
+  }
+  drawAxisLabels(context, width, height, padding, points, values, options.timeKey);
+}
 
-  const valuesByKey = (key) => points.map((point) => number(point[key]));
-  drawSeries(context, valuesByKey("gma50"), xFor, yFor, "#95a3b7", 1.8, [6, 4]);
-  drawSeries(context, valuesByKey("tenkan"), xFor, yFor, "#d89216", 1.8, [3, 3]);
-  drawSeries(context, valuesByKey("gma30"), xFor, yFor, "#008c8c", 2.1, []);
-  drawSeries(context, points.map((point) => point.value), xFor, yFor, "#17202a", 2.8, []);
+function drawLatestPoint(context, points, values, xFor, yFor, options) {
+  const lastIndex = values.length - 1;
+  const latest = values[lastIndex];
+  if (latest == null) return;
+  const x = xFor(lastIndex);
+  const y = yFor(latest);
+  context.fillStyle = options.marker ? "#a95f59" : "#2f7f83";
+  context.beginPath();
+  context.arc(x, y, options.marker ? 5 : 4, 0, Math.PI * 2);
+  context.fill();
+  context.fillStyle = "#17202a";
+  context.font = "11px Segoe UI, sans-serif";
+  context.textAlign = "right";
+  context.fillText(`${points[lastIndex][options.timeKey] || ""} ${formatNum(latest, 2)}`, x, Math.max(13, y - 9));
+}
 
-  context.save();
-  context.fillStyle = "#637083";
-  context.font = "10px Segoe UI, sans-serif";
-  context.textAlign = "left";
-  [0, 3, 6, 9, 12, 15, 18].forEach((index) => {
-    const point = points[index];
-    if (!point) return;
-    context.fillText(point.time, xFor(index) - 10, height - 10);
-  });
-  context.fillText(activeSession?.date || replay.date || "최근 1주", padding, 14);
-  context.restore();
-
-  signals.forEach((signal, signalIndex) => {
+function drawSignalMarkers(context, points, xFor, yFor, options) {
+  const signals = options.signals || [];
+  signals.forEach((signal, index) => {
     const pointIndex = Math.max(0, Math.min(points.length - 1, Number(signal.point_index ?? 0)));
-    const point = points[pointIndex] || points[0];
+    const point = points[pointIndex];
+    const value = number(signal.index_value ?? point?.[options.valueKey]);
+    if (value == null) return;
     const x = xFor(pointIndex);
-    const y = yFor(number(signal.index_value) ?? point.value);
-    drawReplayMarker(context, x, y, signal, signalIndex, width);
+    const y = yFor(value);
+    context.fillStyle = signalClass(signal.type) === "buy" ? "#3b8f70" : signalClass(signal.type) === "sell" ? "#a95f59" : "#a97022";
+    context.beginPath();
+    context.arc(x, y, 4.5, 0, Math.PI * 2);
+    context.fill();
+    if (index % 2 === 0) {
+      context.font = "10px Segoe UI, sans-serif";
+      context.textAlign = "center";
+      context.fillText(signal.label || "신호", x, Math.max(12, y - 8));
+    }
   });
 }
 
-function drawReplayMarker(context, x, y, signal, signalIndex, width) {
-  const colors = {
-    watch: "#4069b8",
-    warning: "#d89216",
-    buy: "#2d8f64",
-    sell: "#b6504a",
-    stop: "#b6504a",
-    runner: "#008c8c",
-  };
-  const color = colors[signal.type] || "#637083";
-  const above = signalIndex % 2 === 0;
-  const labelY = above ? Math.max(16, y - 12) : Math.min(y + 20, 340);
-  const align = x > width * 0.74 ? "right" : x < width * 0.22 ? "left" : "center";
+function drawTradeMarkers(context, points, xFor, yFor, options) {
+  const markers = options.tradeMarkers || [];
+  markers.forEach((marker, index) => {
+    const pointIndex = clampIndex(marker.point_index, points.length);
+    const point = points[pointIndex];
+    const value = number(marker.index_value ?? point?.[options.valueKey]);
+    if (value == null) return;
+
+    const x = xFor(pointIndex);
+    const y = yFor(value);
+    const color = marker.color || TRADE_COLORS[marker.kind] || TRADE_COLORS.watch;
+    drawTradeShape(context, x, y, marker.kind, color);
+    drawTradeChip(context, x, y, marker.label || tradeLabel(marker.kind), color, marker.kind, index);
+  });
+}
+
+function drawTradeShape(context, x, y, kind, color) {
   context.save();
   context.fillStyle = color;
   context.strokeStyle = "#ffffff";
   context.lineWidth = 2;
   context.beginPath();
-  context.arc(x, y, 5.2, 0, Math.PI * 2);
+  if (kind === "entry") {
+    context.moveTo(x, y - 9);
+    context.lineTo(x + 8, y + 7);
+    context.lineTo(x - 8, y + 7);
+    context.closePath();
+  } else if (kind === "stop") {
+    context.moveTo(x, y - 8);
+    context.lineTo(x + 8, y);
+    context.lineTo(x, y + 8);
+    context.lineTo(x - 8, y);
+    context.closePath();
+  } else if (kind === "tp1" || kind === "tp2") {
+    context.arc(x, y, 7, 0, Math.PI * 2);
+  } else {
+    context.rect(x - 6, y - 6, 12, 12);
+  }
   context.fill();
   context.stroke();
-  context.font = "10px Segoe UI, sans-serif";
-  context.textAlign = align;
+  context.restore();
+}
+
+function drawTradeChip(context, x, y, label, color, kind, index) {
+  const rect = context.canvas.getBoundingClientRect();
+  const canvasWidth = rect.width || context.canvas.width;
+  const canvasHeight = rect.height || context.canvas.height;
+  const above = kind !== "stop";
+  const laneOffset = (index % 3) * 16;
+  const text = String(label || "SIGNAL");
+
+  context.save();
+  context.font = "bold 11px Segoe UI, sans-serif";
+  const width = Math.ceil(context.measureText(text).width) + 14;
+  const height = 18;
+  const rawY = above ? y - 31 - laneOffset : y + 13 + laneOffset;
+  const chipX = Math.max(4, Math.min(canvasWidth - width - 4, x - width / 2));
+  const chipY = Math.max(4, Math.min(canvasHeight - height - 4, rawY));
+
+  fillRoundRect(context, chipX, chipY, width, height, 5, color);
+  context.fillStyle = "#ffffff";
+  context.textAlign = "center";
+  context.textBaseline = "middle";
+  context.fillText(text, chipX + width / 2, chipY + height / 2 + 0.5);
+  context.restore();
+}
+
+function fillRoundRect(context, x, y, width, height, radius, color) {
   context.fillStyle = color;
-  context.fillText(signal.label || "신호", x, labelY);
-  context.restore();
+  context.beginPath();
+  context.moveTo(x + radius, y);
+  context.lineTo(x + width - radius, y);
+  context.quadraticCurveTo(x + width, y, x + width, y + radius);
+  context.lineTo(x + width, y + height - radius);
+  context.quadraticCurveTo(x + width, y + height, x + width - radius, y + height);
+  context.lineTo(x + radius, y + height);
+  context.quadraticCurveTo(x, y + height, x, y + height - radius);
+  context.lineTo(x, y + radius);
+  context.quadraticCurveTo(x, y, x + radius, y);
+  context.fill();
 }
 
-function renderIndexLegend() {
-  const legend = document.querySelector("#indexChartLegend");
-  legend.innerHTML = [
-    { label: "가격 흐름", color: "#17202a" },
-    { label: "61.8/80.9 진입", color: "#2d8f64" },
-    { label: "100/103 휩소", color: "#d89216" },
-    { label: "105 손절", color: "#b6504a" },
-    { label: "리셋 61.8/중심/100", color: "#6d5bd0" },
-    { label: "전환선 눌림/30이평 청산", color: "#9a4fb5" },
-    { label: "바운딩 목표 61.8→50→38.2", color: "#c7552b" },
-    { label: "50%+50이평 올청", color: "#b6504a" },
-    { label: "400/456이평", color: "#7b8799" },
-    { label: "당일 전구간 피보나치", color: "#4069b8" },
-  ].map((item) => `<span style="color:${item.color}"><i></i>${item.label}</span>`).join("");
-}
-
-function renderWeeklyLegend(visual) {
-  const legend = document.querySelector("#weeklyChartLegend");
-  if (!legend) return;
-  const lines = visual?.lines?.length ? visual.lines : defaultWeeklyOptions.visual_chart.lines;
-  legend.innerHTML = [
-    { label: "예상 프리미엄 흐름", color: "#17202a" },
-    ...lines.map((line) => ({ label: line.label || line.key, color: line.color || "#637083" })),
-  ].map((item) => `<span style="color:${escapeAttr(item.color)}"><i></i>${escapeHtml(item.label)}</span>`).join("");
-}
-
-function drawWeeklyBlueprint(strategy = state.weeklyOptions || defaultWeeklyOptions) {
-  const canvas = document.querySelector("#weeklyChart");
-  if (!canvas) return;
-
-  const visual = strategy.visual_chart || defaultWeeklyOptions.visual_chart;
-  const entry = strategy.entry || {};
-  const exit = strategy.exit || {};
-  const loss = exit.loss_control || {};
-  const money = strategy.money_management || {};
-  const afterLock = money.after_lock || {};
-  const profitScalp = afterLock.profit_collateral_scalp || {};
-  const profitLottery = afterLock.profit_collateral_lottery || {};
-  const switchRule = strategy.position_switch || {};
-  const switchRetry = switchRule.retry_limit || {};
-  const lowFloorExit = switchRule.low_floor_replacement_exit || {};
-  const finalTry = switchRule.final_try || {};
-  const { context, width, height } = setupCanvas(canvas, visual.height || 300);
-  context.clearRect(0, 0, width, height);
-
-  const avgEntry = weeklyAverageEntry(entry, loss);
-  const scope = {
-    avg_entry: avgEntry,
-    average_entry_price: avgEntry,
-    switch_entry: number(lowFloorExit.example_entry_premium) ?? avgEntry,
-    final_entry: number(finalTry.example_entry_premium) ?? avgEntry,
-    scalp_entry: number(profitScalp.example_entry_premium) ?? avgEntry,
-    lottery_entry: number(profitLottery.target_entry_premium) ?? avgEntry,
-    stop_loss_pct: number(loss.hold_until_loss_pct) ?? 30,
-    max_switch_attempts: number(switchRetry.max_switch_attempts),
-  };
-  const switchLabel = switchRetry.allow_consecutive_switches_until_daily_max_loss
-    ? "자리이동 손실한도 전까지"
-    : `자리이동 최대 ${formatNum(scope.max_switch_attempts ?? 2, 0)}회`;
-  const lineConfigs = visual.lines?.length ? visual.lines : defaultWeeklyOptions.visual_chart.lines;
-  const levels = lineConfigs
-    .map((line) => ({
-      ...line,
-      value: number(safeEvaluate(line.formula || "avg_entry", scope, null)),
-    }))
-    .filter((line) => Number.isFinite(line.value));
-  const multipliers = Array.isArray(visual.sample_path_multipliers) && visual.sample_path_multipliers.length > 1
-    ? visual.sample_path_multipliers
-    : defaultWeeklyOptions.visual_chart.sample_path_multipliers;
-  const pathValues = multipliers.map((multiplier) => avgEntry * Number(multiplier));
-  const orderValues = (entry.order_ladder || [])
-    .map((order) => number(order.limit_price))
-    .filter((value) => Number.isFinite(value));
-  const allValues = [...pathValues, ...levels.map((level) => level.value), ...orderValues];
-  if (!allValues.length) {
-    drawEmpty(context, width, height, "전략선 자료가 없습니다.");
-    return;
-  }
-
-  const padding = 26;
-  const rightPadding = 86;
-  const min = Math.min(...allValues) * 0.95;
-  const max = Math.max(...allValues) * 1.05;
-  const span = max - min || 1;
-  const xFor = (index) => padding + index * ((width - padding - rightPadding) / Math.max(pathValues.length - 1, 1));
-  const yFor = (value) => height - padding - ((value - min) / span) * (height - padding * 2);
-  const drawableLevels = [
-    ...orderValues.map((value, index) => ({
-      key: `order_${index + 1}`,
-      label: `${index + 1}차 주문`,
-      value,
-      color: "#95a3b7",
-      dash: [2, 4],
-    })),
-    ...levels,
-  ];
-  const arrangedLevels = arrangeWeeklyLevelLabels(drawableLevels, yFor, height);
-
-  drawGrid(context, width, height, padding);
-  drawWeeklyRiskBand(context, width, padding, rightPadding, levels, yFor);
-  arrangedLevels.forEach((level) => {
-    drawWeeklyLevel(context, width, padding, rightPadding, yFor(level.value), level, level.labelY);
-  });
-
-  drawSeries(context, pathValues, xFor, yFor, "#17202a", 2.8, []);
-  drawWeeklyPoints(context, pathValues, xFor, yFor);
-
-  context.fillStyle = "#637083";
-  context.font = "11px Segoe UI, sans-serif";
-  context.textAlign = "left";
-  context.fillText(`평균 ${formatNum(avgEntry, 2)}`, padding, 15);
-  context.textAlign = "right";
-  context.fillText(switchLabel, width - padding, height - 8);
-}
-
-function weeklyAverageEntry(entry, loss) {
-  const explicitAverage = number(entry.expected_average_if_all_filled);
-  if (explicitAverage) return explicitAverage;
-  const ladder = entry.order_ladder || [];
-  const weighted = ladder.reduce((sum, order) => sum + (number(order.limit_price) || 0) * (number(order.contracts) || 0), 0);
-  const contracts = ladder.reduce((sum, order) => sum + (number(order.contracts) || 0), 0);
-  if (contracts > 0) return weighted / contracts;
-  return number(loss.example_entry_price) || 1.58;
-}
-
-function drawWeeklyRiskBand(context, width, padding, rightPadding, levels, yFor) {
-  const stop = levels.find((level) => level.key === "stop_30");
-  const switchLine = levels.find((level) => level.key === "switch_prepare_25");
-  if (!stop || !switchLine) return;
-  const top = Math.min(yFor(stop.value), yFor(switchLine.value));
-  const bottom = Math.max(yFor(stop.value), yFor(switchLine.value));
-  context.save();
-  context.fillStyle = "rgba(182, 80, 74, 0.08)";
-  context.fillRect(padding, top, Math.max(0, width - padding - rightPadding), bottom - top);
-  context.fillStyle = "#9b3c36";
+function drawAxisLabels(context, width, height, padding, points, values, timeKey) {
+  context.fillStyle = "#657186";
   context.font = "10px Segoe UI, sans-serif";
   context.textAlign = "left";
-  context.fillText("방어/자리이동 구간", padding + 6, Math.min(bottom - 4, top + 13));
+  context.fillText(points[0]?.[timeKey] || "", padding, height - 6);
+  context.textAlign = "right";
+  context.fillText(points[points.length - 1]?.[timeKey] || "", width - padding, height - 6);
+  context.fillText(formatNum(Math.max(...values), 2), width - padding, 13);
+}
+
+function drawGrid(context, width, height, padding) {
+  context.save();
+  context.strokeStyle = "#dfe5ea";
+  context.lineWidth = 1;
+  for (let index = 0; index < 4; index += 1) {
+    const y = padding + index * ((height - padding * 2) / 3);
+    context.beginPath();
+    context.moveTo(padding, y);
+    context.lineTo(width - padding, y);
+    context.stroke();
+  }
   context.restore();
 }
 
-function arrangeWeeklyLevelLabels(levels, yFor, height) {
-  const minGap = 17;
-  const top = 14;
-  const bottom = height - 15;
-  const arranged = levels
-    .map((level) => ({ ...level, lineY: yFor(level.value), labelY: Math.max(top, Math.min(yFor(level.value), bottom)) }))
-    .sort((a, b) => a.labelY - b.labelY);
-  for (let index = 1; index < arranged.length; index += 1) {
-    if (arranged[index].labelY - arranged[index - 1].labelY < minGap) {
-      arranged[index].labelY = arranged[index - 1].labelY + minGap;
-    }
-  }
-  const overflow = arranged.length ? arranged[arranged.length - 1].labelY - bottom : 0;
-  if (overflow > 0) {
-    for (let index = arranged.length - 1; index >= 0; index -= 1) {
-      arranged[index].labelY -= overflow;
-      if (index < arranged.length - 1 && arranged[index + 1].labelY - arranged[index].labelY < minGap) {
-        arranged[index].labelY = arranged[index + 1].labelY - minGap;
-      }
-    }
-  }
-  return arranged.map((level) => ({
-    ...level,
-    labelY: Math.max(top, Math.min(level.labelY, bottom)),
-  }));
-}
-
-function drawWeeklyLevel(context, width, padding, rightPadding, y, level, labelY = y) {
-  const color = level.color || "#637083";
+function drawHorizontalLevel(context, width, padding, y, level, rightPadding) {
+  if (!Number.isFinite(y)) return;
   context.save();
-  context.strokeStyle = color;
-  context.lineWidth = level.key === "entry_average" ? 1.5 : 1.05;
-  context.setLineDash(level.dash || (level.key?.includes("stop") || level.key?.includes("switch") ? [5, 4] : []));
+  context.strokeStyle = level.color || "#657186";
+  context.lineWidth = 1;
+  context.setLineDash(level.label === "105" ? [4, 4] : []);
   context.beginPath();
   context.moveTo(padding, y);
   context.lineTo(width - rightPadding, y);
   context.stroke();
-  context.setLineDash([]);
-  context.fillStyle = color;
-  context.font = "10px Segoe UI, sans-serif";
-  context.textAlign = "left";
-  if (Math.abs(labelY - y) > 7) {
-    context.strokeStyle = "rgba(99, 112, 131, 0.35)";
-    context.lineWidth = 0.8;
-    context.beginPath();
-    context.moveTo(width - rightPadding + 1, y);
-    context.lineTo(width - rightPadding + 4, labelY);
-    context.stroke();
-  }
-  context.fillText(`${level.label || level.key}`, width - rightPadding + 5, labelY - 2);
-  context.fillText(formatNum(level.value, 2), width - rightPadding + 5, labelY + 10);
-  context.restore();
-}
-
-function drawWeeklyPoints(context, values, xFor, yFor) {
-  const labels = {
-    0: "관찰",
-    3: "방어",
-    4: "이동",
-    7: "청산",
-    9: "목표",
-  };
-  context.save();
-  values.forEach((value, index) => {
-    const x = xFor(index);
-    const y = yFor(value);
-    context.fillStyle = index >= 7 ? "#2d8f64" : index >= 3 && index <= 4 ? "#d89216" : "#17202a";
-    context.beginPath();
-    context.arc(x, y, 3.5, 0, Math.PI * 2);
-    context.fill();
-    if (labels[index]) {
-      context.font = "10px Segoe UI, sans-serif";
-      context.textAlign = "center";
-      context.fillText(labels[index], x, Math.max(11, y - 8));
-    }
-  });
-  context.restore();
-}
-
-function drawIndexBlueprint() {
-  const canvas = document.querySelector("#indexChart");
-  if (!canvas) return;
-  const { context, width, height } = setupCanvas(canvas, 280);
-  context.clearRect(0, 0, width, height);
-
-  const high = 1344.55;
-  const low = 1276.8;
-  const levels = {
-    "61.8": high - (high - low) * 0.618,
-    "80.9": high - (high - low) * 0.809,
-    "100": low,
-    "103": high - (high - low) * 1.03,
-    "105": high - (high - low) * 1.05,
-  };
-  const resetRule = (state.indexStrategy || defaultIndexStrategy).fibonacci?.reset_on_break || {};
-  const resetExample = resetRule.example || {};
-  const resetHigh = number(resetExample.reset_high) || 1309.36;
-  const reset618 = number(resetExample.previous_low_reset_618) || levels["100"];
-  const reset100 = number(resetExample.reset_100) || resetHigh - ((resetHigh - reset618) / 0.618);
-  const resetMid = number(resetExample.reset_mid_618_100) || (reset618 + reset100) / 2;
-  const resetLevels = {
-    "리셋 61.8": reset618,
-    "리셋 중심": resetMid,
-    "리셋 100": reset100,
-  };
-  const dayHigh = 1338.2;
-  const dayLow = 1237.5;
-  const dayLevels = {
-    "당일 38.2": dayHigh - (dayHigh - dayLow) * 0.382,
-    "당일 50": dayHigh - (dayHigh - dayLow) * 0.5,
-    "당일 61.8": dayHigh - (dayHigh - dayLow) * 0.618,
-  };
-  const prices = [1298, 1306, 1320, 1332, 1325, 1311, 1301, 1290, 1278, 1274, 1283, 1292, 1300, 1308];
-  const gma30 = prices.map((value, index) => 1286 + index * 1.35);
-  const gma50 = prices.map((value, index) => 1274 + index * 0.82);
-  const tenkan5m = [1290, 1295, 1304, 1312, 1315, 1308, 1298, 1287, 1279, 1274, 1281, 1289, 1297, 1304];
-  const gma400 = prices.map((value, index) => 1238 + index * 0.28);
-  const gma456 = prices.map((value, index) => 1231 + index * 0.22);
-  const allValues = [
-    ...prices,
-    ...gma30,
-    ...gma50,
-    ...tenkan5m,
-    ...gma400,
-    ...gma456,
-    ...Object.values(levels),
-    resetHigh,
-    ...Object.values(resetLevels),
-    ...Object.values(dayLevels),
-  ];
-  const padding = 26;
-  const min = Math.min(...allValues) - 4;
-  const max = Math.max(...allValues) + 4;
-  const span = max - min || 1;
-  const xFor = (index) => padding + index * ((width - padding * 2) / Math.max(prices.length - 1, 1));
-  const yFor = (value) => height - padding - ((value - min) / span) * (height - padding * 2);
-
-  drawGrid(context, width, height, padding);
-  drawHorizontalLevel(context, width, padding, yFor(levels["61.8"]), "61.8", levels["61.8"], "#2d8f64");
-  drawHorizontalLevel(context, width, padding, yFor(levels["80.9"]), "80.9", levels["80.9"], "#2d8f64");
-  drawHorizontalLevel(context, width, padding, yFor(levels["100"]), "100", levels["100"], "#d89216");
-  drawHorizontalLevel(context, width, padding, yFor(levels["103"]), "103", levels["103"], "#d89216");
-  drawHorizontalLevel(context, width, padding, yFor(levels["105"]), "105", levels["105"], "#b6504a");
-  drawHorizontalLevel(context, width, padding, yFor(resetLevels["리셋 61.8"]), "리셋 61.8", resetLevels["리셋 61.8"], "#6d5bd0");
-  drawHorizontalLevel(context, width, padding, yFor(resetLevels["리셋 중심"]), "리셋 중심", resetLevels["리셋 중심"], "#8a63d2");
-  drawHorizontalLevel(context, width, padding, yFor(resetLevels["리셋 100"]), "리셋 100", resetLevels["리셋 100"], "#6d5bd0");
-  drawHorizontalLevel(context, width, padding, yFor(dayLevels["당일 38.2"]), "당일 38.2", dayLevels["당일 38.2"], "#b6504a");
-  drawHorizontalLevel(context, width, padding, yFor(dayLevels["당일 50"]), "당일 50", dayLevels["당일 50"], "#4069b8");
-  drawHorizontalLevel(context, width, padding, yFor(dayLevels["당일 61.8"]), "당일 61.8", dayLevels["당일 61.8"], "#4069b8");
-  drawSeries(context, gma456, xFor, yFor, "#6f8f6b", 2, [4, 5]);
-  drawSeries(context, gma400, xFor, yFor, "#9b8fb0", 2, [7, 4]);
-  drawSeries(context, gma50, xFor, yFor, "#95a3b7", 2, [6, 4]);
-  drawSeries(context, tenkan5m, xFor, yFor, "#d89216", 1.7, [3, 3]);
-  drawSeries(context, gma30, xFor, yFor, "#008c8c", 2.2, []);
-  drawSeries(context, prices, xFor, yFor, "#17202a", 2.8, []);
-  drawResetBlueprint(context, width, padding, xFor, yFor, resetHigh, reset618, resetMid, reset100);
-  drawBottomBounceTargets(context, xFor, yFor, dayLevels, gma50);
-  drawProfitScalpBlueprint(context, xFor, yFor, tenkan5m, gma30);
-
-  const lastX = xFor(prices.length - 1);
-  const lastY = yFor(prices[prices.length - 1]);
-  context.fillStyle = "#008c8c";
-  context.beginPath();
-  context.arc(lastX, lastY, 4, 0, Math.PI * 2);
-  context.fill();
-
-  context.fillStyle = "#637083";
-  context.font = "11px Segoe UI, sans-serif";
-  context.textAlign = "left";
-  context.fillText("샘플 흐름", padding, 15);
-  context.textAlign = "right";
-  context.fillText("실시간 데이터 연결 전", width - padding, height - 8);
-}
-
-function drawProfitScalpBlueprint(context, xFor, yFor, tenkan5m, gma30) {
-  const entryIndex = 10;
-  const exitIndex = 13;
-  const entryX = xFor(entryIndex);
-  const entryY = yFor(tenkan5m[entryIndex]);
-  const exitX = xFor(exitIndex);
-  const exitY = yFor(gma30[exitIndex]);
-  context.save();
-  context.strokeStyle = "rgba(154, 79, 181, 0.72)";
-  context.fillStyle = "#9a4fb5";
-  context.lineWidth = 1.4;
-  context.setLineDash([4, 3]);
-  context.beginPath();
-  context.moveTo(entryX, entryY);
-  context.lineTo(exitX, exitY);
-  context.stroke();
-  context.setLineDash([]);
-
-  [
-    { x: entryX, y: entryY, label: "수익담보 1계약", dy: -11 },
-    { x: exitX, y: exitY, label: "30이평 청산", dy: -11 },
-  ].forEach((point) => {
-    context.beginPath();
-    context.arc(point.x, point.y, 3.8, 0, Math.PI * 2);
-    context.fill();
-    context.font = "10px Segoe UI, sans-serif";
-    context.textAlign = point.x > xFor(11.5) ? "right" : "center";
-    context.fillText(point.label, point.x, Math.max(11, point.y + point.dy));
-  });
-  context.restore();
-}
-
-function drawBottomBounceTargets(context, xFor, yFor, dayLevels, gma50 = []) {
-  const startX = xFor(9);
-  const firstX = xFor(11.2);
-  const secondX = xFor(12.2);
-  const thirdX = xFor(13);
-  const startY = yFor(dayLevels["당일 61.8"] - 2.4);
-  const firstY = yFor(dayLevels["당일 61.8"]);
-  const secondY = yFor(dayLevels["당일 50"]);
-  const thirdY = yFor(dayLevels["당일 38.2"]);
-  const gma50Y = Number.isFinite(gma50[13]) ? yFor(gma50[13]) : secondY;
-  context.save();
-  context.strokeStyle = "rgba(199, 85, 43, 0.76)";
-  context.fillStyle = "#c7552b";
-  context.lineWidth = 1.6;
-  context.setLineDash([6, 3]);
-  context.beginPath();
-  context.moveTo(startX, startY);
-  context.lineTo(firstX, firstY);
-  context.lineTo(secondX, secondY);
-  context.lineTo(thirdX, thirdY);
-  context.stroke();
-  context.setLineDash([]);
-  context.fillStyle = "rgba(97, 123, 156, 0.13)";
-  context.strokeStyle = "rgba(97, 123, 156, 0.45)";
-  context.lineWidth = 1;
-  context.fillRect(thirdX - 54, thirdY - 9, 74, 18);
-  context.strokeRect(thirdX - 54, thirdY - 9, 74, 18);
-  context.strokeStyle = "rgba(182, 80, 74, 0.72)";
-  context.lineWidth = 1.2;
-  context.beginPath();
-  context.moveTo(secondX - 7, secondY);
-  context.lineTo(secondX + 7, gma50Y);
-  context.stroke();
-  [
-    { x: startX, y: startY, label: "바운딩" },
-    { x: firstX, y: firstY, label: "1차 61.8%" },
-    { x: secondX, y: (secondY + gma50Y) / 2, label: "50%+50이평 올청" },
-    { x: thirdX, y: thirdY, label: "38.2%+구름대" },
-  ].forEach((point) => {
-    context.beginPath();
-    context.arc(point.x, point.y, 3.6, 0, Math.PI * 2);
-    context.fill();
-    context.font = "10px Segoe UI, sans-serif";
-    context.textAlign = point.x > xFor(12) ? "right" : "center";
-    context.fillText(point.label, point.x, Math.max(11, point.y - 9));
-  });
-  context.restore();
-}
-
-function drawResetBlueprint(context, width, padding, xFor, yFor, resetHigh, reset618, resetMid, reset100) {
-  const anchorX = xFor(9);
-  const highX = xFor(6);
-  const midX = xFor(10.6);
-  const lowX = xFor(12);
-  context.save();
-  context.strokeStyle = "rgba(109, 91, 208, 0.58)";
-  context.lineWidth = 1.2;
-  context.setLineDash([5, 4]);
-  context.beginPath();
-  context.moveTo(highX, yFor(resetHigh));
-  context.lineTo(anchorX, yFor(reset618));
-  context.lineTo(midX, yFor(resetMid));
-  context.lineTo(lowX, yFor(reset100));
-  context.stroke();
-
-  const wickX = xFor(11.15);
-  const wickTop = yFor(resetMid + 3);
-  const wickLow = yFor(resetMid - 5);
-  const bodyTop = yFor(resetMid + 2);
-  const bodyBottom = yFor(resetMid + 0.3);
-  context.setLineDash([]);
-  context.strokeStyle = "#008c8c";
-  context.lineWidth = 1.5;
-  context.beginPath();
-  context.moveTo(wickX, wickTop);
-  context.lineTo(wickX, wickLow);
-  context.stroke();
-  context.fillStyle = "#008c8c";
-  context.fillRect(wickX - 4, Math.min(bodyTop, bodyBottom), 8, Math.max(4, Math.abs(bodyBottom - bodyTop)));
-  context.fillStyle = "#17202a";
-  context.font = "10px Segoe UI, sans-serif";
-  context.textAlign = "center";
-  context.fillText("밑꼬리 확인", wickX, Math.min(wickTop, bodyTop) - 7);
-
-  context.fillStyle = "#6d5bd0";
-  [
-    { x: highX, y: yFor(resetHigh), label: "새 고가" },
-    { x: anchorX, y: yFor(reset618), label: "직전 저가=61.8" },
-    { x: midX, y: yFor(resetMid), label: "콜 2~3계약" },
-    { x: lowX, y: yFor(reset100), label: "새 100" },
-  ].forEach((point) => {
-    context.beginPath();
-    context.arc(point.x, point.y, 3.5, 0, Math.PI * 2);
-    context.fill();
-    context.font = "10px Segoe UI, sans-serif";
-    context.textAlign = point.x > width * 0.72 ? "right" : "center";
-    context.fillText(point.label, point.x, Math.max(11, point.y - 8));
-  });
-  context.fillStyle = "#637083";
-  context.textAlign = "left";
-  context.fillText("이탈 시 고저 재셋업", padding, 29);
-  context.restore();
-}
-
-function drawHorizontalLevel(context, width, padding, y, label, value, color) {
-  context.save();
-  context.strokeStyle = color;
-  context.lineWidth = 1.1;
-  context.setLineDash(label === "105" ? [4, 4] : []);
-  context.beginPath();
-  context.moveTo(padding, y);
-  context.lineTo(width - padding, y);
-  context.stroke();
-  context.fillStyle = color;
+  context.fillStyle = level.color || "#657186";
   context.font = "10px Segoe UI, sans-serif";
   context.textAlign = "right";
-  context.fillText(`${label} ${formatNum(value, 2)}`, width - padding, Math.max(12, y - 3));
+  context.fillText(level.label || "", width - padding, Math.max(12, y - 3));
   context.restore();
 }
 
@@ -2810,236 +1635,18 @@ function drawSeries(context, values, xFor, yFor, color, width, dash) {
   context.restore();
 }
 
-function pricePointsForRow(row) {
-  if (Array.isArray(row.price_history) && row.price_history.length >= 2) {
-    return row.price_history
-      .map((point, index) => ({
-        date: point.date || `D-${row.price_history.length - index - 1}`,
-        close: number(point.close),
-      }))
-      .filter((point) => point.close != null);
-  }
-  return synthesizePricePoints(row);
-}
-
-function synthesizePricePoints(row) {
-  const lastClose = number(row.last_close ?? row.close) ?? 100;
-  const anchors = [
-    { index: 0, value: historicalClose(lastClose, row.ret_63d ?? row.ret_21d) },
-    { index: 42, value: historicalClose(lastClose, row.ret_21d) },
-    { index: 58, value: historicalClose(lastClose, row.ret_5d) },
-    { index: 62, value: historicalClose(lastClose, row.ret_1d) },
-    { index: 63, value: lastClose },
-  ];
-  const points = [];
-  for (let index = 0; index <= 63; index += 1) {
-    let leftIndex = 0;
-    for (let anchorIndex = 0; anchorIndex < anchors.length; anchorIndex += 1) {
-      if (anchors[anchorIndex].index <= index) leftIndex = anchorIndex;
-    }
-    const left = anchors[leftIndex];
-    const right = anchors[Math.min(leftIndex + 1, anchors.length - 1)];
-    const span = Math.max(1, right.index - left.index);
-    const ratio = Math.min(1, Math.max(0, (index - left.index) / span));
-    const close = left.value + (right.value - left.value) * ratio;
-    points.push({ date: index === 63 ? "현재" : `D-${63 - index}`, close: round(close, 4) });
-  }
-  return points;
-}
-
-function historicalClose(lastClose, returnValue) {
-  const ret = number(returnValue) ?? 0;
-  if (ret <= -0.95) return lastClose;
-  return lastClose / (1 + ret);
-}
-
-function computeChartLines(points, row) {
-  const chart = chartDefinition("stock_price");
-  const close = points.map((point) => point.close);
-  return (chart.lines || defaultChartConfig.charts.stock_price.lines).map((config) => ({
-    ...config,
-    values: valuesForFormula(config.formula, close, row),
-  }));
-}
-
-function valuesForFormula(formula, close, row) {
-  const text = String(formula || "close").trim();
-  if (text === "close") return close;
-
-  const movingAverage = text.match(/^(sma|ema)\(\s*close\s*,\s*(\d+)\s*\)$/i);
-  if (movingAverage) {
-    const windowSize = Number(movingAverage[2]);
-    return movingAverage[1].toLowerCase() === "ema" ? ema(close, windowSize) : sma(close, windowSize);
-  }
-
-  const value = evaluateNumberFormula(text, row);
-  return close.map(() => value);
-}
-
-function sma(values, windowSize) {
-  return values.map((_, index) => {
-    const start = Math.max(0, index - windowSize + 1);
-    const sample = values.slice(start, index + 1).filter((value) => value != null);
-    return sample.length ? sample.reduce((sum, value) => sum + value, 0) / sample.length : null;
-  });
-}
-
-function ema(values, windowSize) {
-  const multiplier = 2 / (windowSize + 1);
-  let previous = values[0] ?? null;
-  return values.map((value) => {
-    if (value == null) return previous;
-    previous = previous == null ? value : value * multiplier + previous * (1 - multiplier);
-    return previous;
-  });
-}
-
-function evaluateChartSignal(row, lines) {
-  if (row.final_action === "unscored" || row.score == null) {
-    return {
-      label: "미분석",
-      className: "neutral",
-      text: "현재 알고리즘 결과가 없는 종목입니다. 데이터가 생성되면 같은 공식선으로 신호를 다시 계산합니다.",
-    };
-  }
-
-  const latest = latestScope(row, lines);
-  const rules = chartDefinition("stock_price").signal_rules || [];
-  const matched = rules.find((rule) => evaluateCondition(rule.condition, latest));
-  if (matched) {
-    return {
-      label: matched.label,
-      className: signalClass(matched.signal),
-      text: matched.text,
-    };
-  }
-
-  const fallback = signalForRow(row);
-  return {
-    label: fallback.label,
-    className: fallback.className,
-    text: `${row.reason || "알고리즘 신호를 확인하세요."} 공식선을 바꾸면 설명도 새 조건 기준으로 달라집니다.`,
-  };
-}
-
-function latestScope(row, lines) {
-  const scope = {
-    score: number(row.score) ?? 0,
-    risk_score: number(row.risk_score) ?? 0,
-    issue_score: number(row.issue_score) ?? 0,
-    momentum_score: number(row.momentum_score) ?? 0,
-    liquidity_score: number(row.liquidity_score) ?? 0,
-    last_close: number(row.last_close ?? row.close) ?? 0,
-  };
-  lines.forEach((line) => {
-    scope[line.key] = latestFinite(line.values) ?? 0;
-  });
-  if (scope.close == null) scope.close = scope.last_close;
-  return scope;
-}
-
-function evaluateNumberFormula(formula, row) {
-  const scope = {
-    last_close: number(row.last_close ?? row.close) ?? 0,
-    score: number(row.score) ?? 0,
-    risk_score: number(row.risk_score) ?? 0,
-    issue_score: number(row.issue_score) ?? 0,
-    momentum_score: number(row.momentum_score) ?? 0,
-    liquidity_score: number(row.liquidity_score) ?? 0,
-  };
-  return safeEvaluate(formula, scope, 0);
-}
-
-function evaluateCondition(condition, scope) {
-  if (!condition) return false;
-  return Boolean(safeEvaluate(condition, scope, false));
-}
-
-function safeEvaluate(expression, scope, fallback) {
-  const normalized = String(expression)
-    .replace(/\band\b/gi, "&&")
-    .replace(/\bor\b/gi, "||");
-  if (!/^[\w\s.<>=!&|()+\-*/%]+$/.test(normalized)) return fallback;
-  try {
-    const keys = Object.keys(scope);
-    const values = keys.map((key) => scope[key]);
-    return Function(...keys, `"use strict"; return (${normalized});`)(...values);
-  } catch (error) {
-    return fallback;
-  }
-}
-
-function drawStockChart(canvas, points, lines) {
+function drawEmptyChart(canvas, message, height = 210) {
   if (!canvas) return;
-  const chart = chartDefinition("stock_price");
-  const { context, width, height } = setupCanvas(canvas, chart.height || 260);
-  context.clearRect(0, 0, width, height);
-  if (!points.length) {
-    drawEmpty(context, width, height, chart.empty_message || "차트 자료가 없습니다.");
-    return;
-  }
-
-  const padding = Number(chart.padding ?? 22);
-  const allValues = lines.flatMap((line) => line.values).filter((value) => Number.isFinite(value));
-  if (!allValues.length) {
-    drawEmpty(context, width, height, chart.empty_message || "차트 자료가 없습니다.");
-    return;
-  }
-  const min = Math.min(...allValues);
-  const max = Math.max(...allValues);
-  const span = max - min || 1;
-  const xFor = (index) => padding + index * ((width - padding * 2) / Math.max(points.length - 1, 1));
-  const yFor = (value) => height - padding - ((value - min) / span) * (height - padding * 2);
-
-  drawGrid(context, width, height, padding);
-  lines.forEach((line) => {
-    context.save();
-    context.strokeStyle = line.color || "#17202a";
-    context.lineWidth = Number(line.width || 1.6);
-    context.setLineDash(line.dash || []);
-    context.beginPath();
-    let started = false;
-    line.values.forEach((value, index) => {
-      if (!Number.isFinite(value)) return;
-      const x = xFor(index);
-      const y = yFor(value);
-      if (!started) {
-        context.moveTo(x, y);
-        started = true;
-      } else {
-        context.lineTo(x, y);
-      }
-    });
-    context.stroke();
-    context.restore();
-  });
-
-  context.fillStyle = paletteColor("text", "#637083");
-  context.font = "11px Segoe UI, sans-serif";
-  context.textAlign = "left";
-  context.fillText(formatNum(min, 0), padding, height - 6);
-  context.textAlign = "right";
-  context.fillText(formatNum(max, 0), width - padding, 14);
+  const { context, width, height: canvasHeight } = setupCanvas(canvas, height);
+  context.clearRect(0, 0, width, canvasHeight);
+  drawEmpty(context, width, canvasHeight, message);
 }
 
-function drawGrid(context, width, height, padding) {
-  context.strokeStyle = paletteColor("grid", "#dfe5ea");
-  context.lineWidth = 1;
-  context.setLineDash([]);
-  for (let index = 0; index < 4; index += 1) {
-    const y = padding + index * ((height - padding * 2) / 3);
-    context.beginPath();
-    context.moveTo(padding, y);
-    context.lineTo(width - padding, y);
-    context.stroke();
-  }
-}
-
-function drawEmptyChart(canvas, message) {
-  if (!canvas) return;
-  const { context, width, height } = setupCanvas(canvas, chartDefinition("stock_price").height || 260);
-  context.clearRect(0, 0, width, height);
-  drawEmpty(context, width, height, message || "차트 자료가 없습니다.");
+function drawEmpty(context, width, height, message) {
+  context.fillStyle = "#657186";
+  context.font = "14px Segoe UI, sans-serif";
+  context.textAlign = "center";
+  context.fillText(message, width / 2, height / 2);
 }
 
 function setupCanvas(canvas, height) {
@@ -3054,59 +1661,52 @@ function setupCanvas(canvas, height) {
   return { context, width: cssWidth, height };
 }
 
-function drawEmpty(context, width, height, message) {
-  context.fillStyle = paletteColor("text", "#637083");
-  context.font = "14px Segoe UI, sans-serif";
-  context.textAlign = "center";
-  context.fillText(message, width / 2, height / 2);
+function redrawCharts() {
+  drawLiveChart();
+  if (state.activeModal === "replay") drawReplayChart(activeReplaySession());
+  if (state.activeModal === "design") drawDesignChart();
 }
 
-function renderLegend(lines) {
-  const legend = document.querySelector("#chartLegend");
-  legend.innerHTML = lines.map((line) => `
-    <span style="color:${escapeAttr(line.color || "#17202a")}"><i></i>${escapeHtml(line.label || line.key)}</span>
-  `).join("");
+function averageEntry(entry) {
+  const ladder = Array.isArray(entry.order_ladder) ? entry.order_ladder : [];
+  const prices = ladder.map((order) => number(order.price)).filter((value) => value != null);
+  if (prices.length) return prices.reduce((sum, value) => sum + value, 0) / prices.length;
+  return number(entry.strike_selection?.target_premium) || 1.6;
 }
 
-function chartDefinition(name) {
-  return state.chartConfig?.charts?.[name] || defaultChartConfig.charts[name] || {};
+function formulaValue(formula, scope) {
+  const text = String(formula || "").trim();
+  if (!text) return null;
+  if (!/^[\w\s.+\-*/()]+$/.test(text)) return null;
+  try {
+    const keys = Object.keys(scope);
+    const values = keys.map((key) => scope[key]);
+    return Function(...keys, `"use strict"; return (${text});`)(...values);
+  } catch (error) {
+    return null;
+  }
 }
 
-function displaySetting(key, fallback) {
-  const value = state.chartConfig?.display?.[key] ?? defaultChartConfig.display[key];
-  return value == null ? fallback : value;
+function setText(selector, value) {
+  const node = document.querySelector(selector);
+  if (node) node.textContent = value ?? "";
 }
 
-function paletteColor(key, fallback) {
-  return state.chartConfig?.palette?.[key] || defaultChartConfig.palette[key] || fallback;
+function setChecked(selector, checked) {
+  const node = document.querySelector(selector);
+  if (node) node.checked = Boolean(checked);
 }
 
-function mergeChartConfig(config) {
-  return {
-    ...defaultChartConfig,
-    ...config,
-    palette: { ...defaultChartConfig.palette, ...(config.palette || {}) },
-    charts: { ...defaultChartConfig.charts, ...(config.charts || {}) },
-    display: { ...defaultChartConfig.display, ...(config.display || {}) },
-  };
-}
-
-function signalClass(signal) {
+function signalClass(type) {
   return {
     buy: "buy",
-    candidate: "buy",
+    candidate: "candidate",
     warning: "warning",
-    watch: "warning",
+    watch: "watch",
     sell: "sell",
-    avoid: "sell",
-  }[signal] || "neutral";
-}
-
-function latestFinite(values) {
-  for (let index = values.length - 1; index >= 0; index -= 1) {
-    if (Number.isFinite(values[index])) return values[index];
-  }
-  return null;
+    stop: "sell",
+    avoid: "avoid",
+  }[type] || "neutral";
 }
 
 function number(value) {
@@ -3115,14 +1715,19 @@ function number(value) {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-function round(value, digits) {
-  return Number(value.toFixed(digits));
+function formatNum(value, digits = 2) {
+  const parsed = number(value);
+  if (parsed == null) return "-";
+  return parsed.toLocaleString("ko-KR", {
+    minimumFractionDigits: digits,
+    maximumFractionDigits: digits,
+  });
 }
 
-function renderError(error) {
-  document.querySelector("#marketSummary").textContent = error.message;
-  document.querySelector("#candidateList").innerHTML = `<button class="stock-row empty" type="button">데이터를 불러오지 못했습니다.</button>`;
-  drawEmptyChart(document.querySelector("#stockChart"), "데이터를 불러오지 못했습니다.");
+function formatWon(value) {
+  const parsed = number(value);
+  if (parsed == null) return "-";
+  return `${parsed.toLocaleString("ko-KR")}원`;
 }
 
 function escapeHtml(value) {
@@ -3137,14 +1742,5 @@ function escapeHtml(value) {
 function escapeAttr(value) {
   return escapeHtml(value);
 }
-
-window.addEventListener("resize", () => {
-  if (state.mode === "index") drawIndexBlueprint();
-  else if (state.mode === "weekly") {
-    drawOptionsMonitorChart();
-    drawWeeklyBlueprint();
-  }
-  else if (state.mode === "stocks") renderSelectedChart();
-});
 
 init();

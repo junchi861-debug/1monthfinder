@@ -12,6 +12,8 @@ from typing import Any
 
 KST = timezone(timedelta(hours=9), "KST")
 YAHOO_CHART_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
+SNAPSHOT_CACHE_SECONDS = 45
+_SNAPSHOT_CACHE: dict[str, Any] = {"created_at": 0.0, "payload": None}
 
 
 @dataclass(frozen=True)
@@ -34,13 +36,17 @@ SECONDARY_INSTRUMENT = MonitorInstrument(
 )
 
 
-def build_options_monitor_snapshot() -> dict[str, Any]:
+def build_options_monitor_snapshot(use_cache: bool = True) -> dict[str, Any]:
     """Build a read-only intraday monitoring snapshot for the options screen."""
+
+    now_ts = datetime.now(KST).timestamp()
+    if use_cache and _SNAPSHOT_CACHE["payload"] and now_ts - float(_SNAPSHOT_CACHE["created_at"]) < SNAPSHOT_CACHE_SECONDS:
+        return _SNAPSHOT_CACHE["payload"]
 
     generated_at = datetime.now(KST)
     main = _build_instrument_snapshot(MAIN_INSTRUMENT, generated_at)
     secondary = _build_instrument_snapshot(SECONDARY_INSTRUMENT, generated_at)
-    return {
+    payload = {
         "ok": bool(main.get("ok")),
         "mode": "monitor_only",
         "generated_at": _iso(generated_at),
@@ -54,6 +60,22 @@ def build_options_monitor_snapshot() -> dict[str, Any]:
         "secondary": secondary,
         "signal": main.get("signal", _empty_signal("neutral", "데이터 대기", "분봉 데이터를 기다리고 있습니다.")),
     }
+    _SNAPSHOT_CACHE["created_at"] = now_ts
+    _SNAPSHOT_CACHE["payload"] = payload
+    return payload
+
+
+def fetch_main_candles(range_value: str = "1mo") -> list[dict[str, Any]]:
+    return _fetch_yahoo_candles(MAIN_INSTRUMENT.symbol, range_value=range_value)
+
+
+def intraday_levels(candles: list[dict[str, Any]]) -> dict[str, float]:
+    return _intraday_levels(candles)
+
+
+def evaluate_candle_signal(candles: list[dict[str, Any]], levels: dict[str, float]) -> dict[str, Any]:
+    latest_time = _parse_iso(candles[-1]["datetime"]) if candles else datetime.now(KST)
+    return _evaluate_signal(candles, levels, latest_time)
 
 
 def _build_instrument_snapshot(instrument: MonitorInstrument, generated_at: datetime) -> dict[str, Any]:
@@ -77,7 +99,7 @@ def _build_instrument_snapshot(instrument: MonitorInstrument, generated_at: date
             ),
         }
 
-    levels = _intraday_levels(candles)
+    levels = _confirmed_levels(candles)
     latest = candles[-1] if candles else None
     signal = _evaluate_signal(candles, levels, generated_at)
     return {
@@ -90,14 +112,15 @@ def _build_instrument_snapshot(instrument: MonitorInstrument, generated_at: date
         "candles": candles[-96:],
         "latest": latest,
         "levels": levels,
+        "raw_levels": _intraday_levels(candles),
         "signal": signal,
     }
 
 
-def _fetch_yahoo_candles(symbol: str) -> list[dict[str, Any]]:
+def _fetch_yahoo_candles(symbol: str, range_value: str = "5d") -> list[dict[str, Any]]:
     query = urllib.parse.urlencode(
         {
-            "range": "5d",
+            "range": range_value,
             "interval": "5m",
             "includePrePost": "false",
             "events": "history",
@@ -176,6 +199,7 @@ def _intraday_levels(candles: list[dict[str, Any]]) -> dict[str, float]:
     return {
         "day_high": round(high, 4),
         "day_low": round(low, 4),
+        "fib_382": round(high - span * 0.382, 4),
         "fib_50": round(high - span * 0.5, 4),
         "fib_618": round(high - span * 0.618, 4),
         "fib_809": round(high - span * 0.809, 4),
@@ -185,6 +209,12 @@ def _intraday_levels(candles: list[dict[str, Any]]) -> dict[str, float]:
         "gma_30": _geometric_average(closes[-30:]),
         "gma_50": _geometric_average(closes[-50:]),
     }
+
+
+def _confirmed_levels(candles: list[dict[str, Any]]) -> dict[str, float]:
+    if len(candles) > 1 and candles[-2].get("date") == candles[-1].get("date"):
+        return _intraday_levels(candles[:-1])
+    return _intraday_levels(candles)
 
 
 def _evaluate_signal(candles: list[dict[str, Any]], levels: dict[str, float], generated_at: datetime) -> dict[str, Any]:
@@ -206,6 +236,8 @@ def _evaluate_signal(candles: list[dict[str, Any]], levels: dict[str, float], ge
     fib_618 = float(levels["fib_618"])
     fib_100 = float(levels["fib_100"])
     fib_105 = float(levels["fib_105"])
+    trend = _trend_context(candles)
+    call_filter_pass = _call_entry_filter_pass(close, trend)
 
     latest_time = _parse_iso(latest["datetime"])
     age_minutes = max(0, int((generated_at - latest_time).total_seconds() // 60))
@@ -230,10 +262,23 @@ def _evaluate_signal(candles: list[dict[str, Any]], levels: dict[str, float], ge
             "alert_level": "strong",
             "rule": "FIB_105_BREAK",
             "time": latest["time"],
-            "metrics": _signal_metrics(close, lower_wick_ratio, age_minutes),
+            "trade_decision": "stop",
+            "metrics": _signal_metrics(close, lower_wick_ratio, age_minutes, trend, call_filter_pass),
         }
 
     if low <= fib_618 <= close and close >= open_ and lower_wick_ratio >= 0.35:
+        if not call_filter_pass:
+            return {
+                "type": "watch",
+                "label": "CALL TEST",
+                "title": "61.8% 테스트 관찰",
+                "message": f"61.8% {fib_618:.2f} 밑꼬리 회복은 나왔지만 30이평/전환선 필터가 약합니다. 풀진입보다 테스트/관찰 후보입니다.",
+                "alert_level": "normal",
+                "rule": "FIB_618_TEST",
+                "time": latest["time"],
+                "trade_decision": "test",
+                "metrics": _signal_metrics(close, lower_wick_ratio, age_minutes, trend, call_filter_pass),
+            }
         return {
             "type": "candidate",
             "label": "콜 후보",
@@ -242,7 +287,8 @@ def _evaluate_signal(candles: list[dict[str, Any]], levels: dict[str, float], ge
             "alert_level": "strong",
             "rule": "FIB_618_LOWER_WICK_RECLAIM",
             "time": latest["time"],
-            "metrics": _signal_metrics(close, lower_wick_ratio, age_minutes),
+            "trade_decision": "entry",
+            "metrics": _signal_metrics(close, lower_wick_ratio, age_minutes, trend, call_filter_pass),
         }
 
     if abs(close - fib_618) <= tolerance:
@@ -254,7 +300,8 @@ def _evaluate_signal(candles: list[dict[str, Any]], levels: dict[str, float], ge
             "alert_level": "normal",
             "rule": "NEAR_FIB_618",
             "time": latest["time"],
-            "metrics": _signal_metrics(close, lower_wick_ratio, age_minutes),
+            "trade_decision": "watch",
+            "metrics": _signal_metrics(close, lower_wick_ratio, age_minutes, trend, call_filter_pass),
         }
 
     if float(previous["close"]) < fib_50 <= close:
@@ -266,7 +313,8 @@ def _evaluate_signal(candles: list[dict[str, Any]], levels: dict[str, float], ge
             "alert_level": "normal",
             "rule": "FIB_50_RECLAIM",
             "time": latest["time"],
-            "metrics": _signal_metrics(close, lower_wick_ratio, age_minutes),
+            "trade_decision": "take_profit",
+            "metrics": _signal_metrics(close, lower_wick_ratio, age_minutes, trend, call_filter_pass),
         }
 
     if close < fib_100:
@@ -278,7 +326,8 @@ def _evaluate_signal(candles: list[dict[str, Any]], levels: dict[str, float], ge
             "alert_level": "normal",
             "rule": "BELOW_FIB_100",
             "time": latest["time"],
-            "metrics": _signal_metrics(close, lower_wick_ratio, age_minutes),
+            "trade_decision": "risk",
+            "metrics": _signal_metrics(close, lower_wick_ratio, age_minutes, trend, call_filter_pass),
         }
 
     return {
@@ -293,12 +342,40 @@ def _evaluate_signal(candles: list[dict[str, Any]], levels: dict[str, float], ge
     }
 
 
-def _signal_metrics(close: float, lower_wick_ratio: float, age_minutes: int) -> dict[str, Any]:
+def _trend_context(candles: list[dict[str, Any]]) -> dict[str, Any]:
+    latest_date = candles[-1]["date"] if candles else None
+    session = [candle for candle in candles if candle.get("date") == latest_date] or candles
+    closes = [float(candle["close"]) for candle in session]
     return {
+        "gma_30": _geometric_average(closes[-30:]),
+        "gma_50": _geometric_average(closes[-50:]),
+        "tenkan": _ichimoku_mid(session, 9),
+        "kijun": _ichimoku_mid(session, 26),
+    }
+
+
+def _call_entry_filter_pass(close: float, trend: dict[str, Any]) -> bool:
+    required = [trend.get("gma_30"), trend.get("tenkan")]
+    return all(value is None or close >= float(value) for value in required)
+
+
+def _signal_metrics(
+    close: float,
+    lower_wick_ratio: float,
+    age_minutes: int,
+    trend: dict[str, Any] | None = None,
+    filter_pass: bool | None = None,
+) -> dict[str, Any]:
+    metrics = {
         "close": round(close, 4),
         "lower_wick_ratio": round(lower_wick_ratio, 3),
         "age_minutes": age_minutes,
     }
+    if trend:
+        metrics.update({key: value for key, value in trend.items() if value is not None})
+    if filter_pass is not None:
+        metrics["call_entry_filter_pass"] = filter_pass
+    return metrics
 
 
 def _empty_signal(type_: str, title: str, message: str) -> dict[str, Any]:
@@ -329,6 +406,15 @@ def _geometric_average(values: list[float]) -> float | None:
     if not sample:
         return None
     return round(math.exp(sum(math.log(value) for value in sample) / len(sample)), 4)
+
+
+def _ichimoku_mid(candles: list[dict[str, Any]], window: int) -> float | None:
+    if len(candles) < window:
+        return None
+    sample = candles[-window:]
+    high = max(float(candle["high"]) for candle in sample)
+    low = min(float(candle["low"]) for candle in sample)
+    return round((high + low) / 2, 4)
 
 
 def _is_market_time(moment: datetime) -> bool:

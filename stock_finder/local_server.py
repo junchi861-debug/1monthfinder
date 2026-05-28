@@ -8,8 +8,10 @@ import threading
 import time
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 
 from stock_finder.market_report import build_market_site_data
+from stock_finder.options_archive import build_options_replay_payload
 from stock_finder.options_monitor import build_options_monitor_snapshot
 
 
@@ -41,8 +43,12 @@ def serve_local_app(args: argparse.Namespace) -> None:
 
 class StockFinderRequestHandler(SimpleHTTPRequestHandler):
     def do_GET(self) -> None:
-        if self.path.split("?", 1)[0] == "/api/options-monitor":
+        parsed = urlparse(self.path)
+        if parsed.path == "/api/options-monitor":
             self._send_options_monitor()
+            return
+        if parsed.path == "/api/options-replay":
+            self._send_options_replay(parsed.query)
             return
         super().do_GET()
 
@@ -67,6 +73,32 @@ class StockFinderRequestHandler(SimpleHTTPRequestHandler):
                     "time": "-",
                     "metrics": {},
                 },
+            }
+
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _send_options_replay(self, query: str) -> None:
+        params = parse_qs(query)
+        date = (params.get("date") or [None])[0]
+        refresh = (params.get("refresh") or ["0"])[0] == "1"
+        try:
+            payload = build_options_replay_payload(date=date, refresh=refresh)
+            status = 200 if payload.get("ok") else 404
+        except Exception as exc:
+            LOGGER.exception("options replay payload failed")
+            status = 500
+            payload = {
+                "ok": False,
+                "status": "error",
+                "error": str(exc),
+                "sessions": [],
+                "active_session": None,
             }
 
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
