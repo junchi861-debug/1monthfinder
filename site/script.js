@@ -7,6 +7,7 @@ const TRADE_COLORS = {
   tp1: "#5275ad",
   tp2: "#315f9d",
   exit: "#657186",
+  mixed: "#b07a2a",
   watch: "#a97022",
   test: "#a97022",
   risk: "#a95f59",
@@ -554,7 +555,18 @@ function emptyReplayTradePlan() {
   return {
     events: [],
     trades: [],
-    stats: { total: 0, entries: 0, tests: 0, takes: 0, risks: 0, stops: 0, bestPremium: null },
+    stats: {
+      total: 0,
+      entries: 0,
+      tests: 0,
+      takes: 0,
+      risks: 0,
+      stops: 0,
+      ambiguous: 0,
+      netProfit: 0,
+      winRate: 0,
+      bestPremium: null,
+    },
   };
 }
 
@@ -565,10 +577,10 @@ function renderLiveTradePlan(plan) {
   root.className = `trade-strip ${current.tone || "neutral"}`;
   const items = [
     { label: "상태", value: current.status || "대기" },
-    { label: "진입프리", value: formatNum(current.entry, 2) },
-    { label: "손절프리", value: formatNum(current.stop, 2) },
-    { label: "1차청산", value: formatNum(current.tp1, 2) },
-    { label: "2차청산", value: formatNum(current.tp2, 2) },
+    { label: "계획진입", value: formatNum(current.entry, 2) },
+    { label: "계획손절", value: formatNum(current.stop, 2) },
+    { label: "계획TP1", value: formatNum(current.tp1, 2) },
+    { label: "계획TP2", value: formatNum(current.tp2, 2) },
   ];
   root.innerHTML = items
     .map((item) => `
@@ -587,10 +599,10 @@ function renderReplayTradeStats(plan, missing) {
   const items = [
     { label: "ENTRY", value: missing ? "-" : `${stats.entries}회`, className: stats.entries ? "good" : "" },
     { label: "TEST", value: missing ? "-" : `${stats.tests}회` },
-    { label: "TP신호", value: missing ? "-" : `${stats.takes}회`, className: stats.takes ? "good" : "" },
-    { label: "위험", value: missing ? "-" : `${stats.risks}회`, className: stats.risks ? "bad" : "" },
+    { label: "순익", value: missing ? "-" : formatSigned(stats.netProfit, 2), className: stats.netProfit > 0 ? "good" : stats.netProfit < 0 ? "bad" : "" },
+    { label: "승률", value: missing ? "-" : `${Math.round(stats.winRate || 0)}%`, className: stats.winRate >= 50 && stats.total ? "good" : "" },
+    { label: "모호", value: missing ? "-" : `${stats.ambiguous}회`, className: stats.ambiguous ? "warn" : "" },
     { label: "손절", value: missing ? "-" : `${stats.stops}회`, className: stats.stops ? "bad" : "" },
-    { label: "최대프리", value: missing ? "-" : formatNum(stats.bestPremium, 2), className: stats.bestPremium ? "good" : "" },
   ];
   root.innerHTML = items
     .map((item) => `
@@ -632,14 +644,15 @@ function buildLiveTradePlan(snapshot) {
   };
   const setup = tradeSetupFromSignal(signalLike, { levels }, close);
   if (setup) {
+    const eventKind = setup.mode === "test" ? "test" : "entry";
     return {
-      tone: "buy",
+      tone: setup.mode === "test" ? "warning" : "buy",
       status: setup.contracts > 1 ? "CALL ENTRY" : "CALL TEST",
       entry: setup.entry,
       stop: setup.stop,
       tp1: setup.tp1,
       tp2: setup.tp2,
-      markers: [tradeEvent("entry", 1, candles[pointIndex] || latest, pointIndex, setup)],
+      markers: [tradeEvent(eventKind, 1, candles[pointIndex] || latest, pointIndex, setup)],
     };
   }
 
@@ -691,13 +704,18 @@ function buildReplayTradePlan(session) {
         const setup = tradeSetupFromSignal(signal, session, number(point?.index));
         if (!setup) return;
         const tradeId = plan.trades.length + 1;
-        const entryEvent = tradeEvent("entry", tradeId, point, index, setup);
+        const entryKind = setup.mode === "test" ? "test" : "entry";
+        const entryEvent = tradeEvent(entryKind, tradeId, point, index, setup);
         plan.events.push(entryEvent);
         activeTrade = {
           id: tradeId,
           setup,
+          mode: setup.mode,
           entryIndex: index,
           tp1Hit: false,
+          openContracts: setup.contracts,
+          realizedProfit: 0,
+          ambiguousCount: 0,
           bestPremium: setup.entry,
         };
         return;
@@ -735,18 +753,33 @@ function updateActiveTradeFromCandle(activeTrade, point, pointIndex, plan) {
   const low = number(point?.low) ?? price;
   if (price == null) return null;
 
-  if (low <= setup.indexStop) {
-    return tradeEvent("stop", activeTrade.id, point, pointIndex, setup, setup.indexStop);
+  const activeStop = activeTrade.tp1Hit ? Math.max(setup.indexStop, setup.indexEntry) : setup.indexStop;
+  const hitStop = low <= activeStop;
+  const hitTp1 = !activeTrade.tp1Hit && high >= setup.indexTp1;
+  const hitTp2 = high >= setup.indexTp2;
+  const mixedPath = hitStop && (hitTp1 || hitTp2);
+  if (mixedPath) {
+    activeTrade.ambiguousCount += 1;
+    plan.events.push(tradeEvent("mixed", activeTrade.id, point, pointIndex, setup, price));
   }
 
-  if (!activeTrade.tp1Hit && high >= setup.indexTp1) {
+  if (hitStop && (!mixedPath || price < setup.indexEntry)) {
+    return tradeEvent("stop", activeTrade.id, point, pointIndex, setup, activeStop);
+  }
+
+  if (hitTp1) {
     activeTrade.tp1Hit = true;
     setup.tp1Hit = true;
+    setup.indexStop = Math.max(setup.indexStop, setup.indexEntry);
+    setup.currentStop = setup.entry;
+    const closedContracts = Math.min(activeTrade.openContracts, setup.tp1Contracts || 0);
+    activeTrade.openContracts = Math.max(0, activeTrade.openContracts - closedContracts);
+    activeTrade.realizedProfit += (setup.tp1 - setup.entry) * closedContracts;
     activeTrade.bestPremium = Math.max(activeTrade.bestPremium, setup.tp1);
     plan.events.push(tradeEvent("tp1", activeTrade.id, point, pointIndex, setup, setup.indexTp1));
   }
 
-  if (high >= setup.indexTp2) {
+  if (hitTp2) {
     activeTrade.bestPremium = Math.max(activeTrade.bestPremium, setup.tp2);
     return tradeEvent("tp2", activeTrade.id, point, pointIndex, setup, setup.indexTp2);
   }
@@ -756,12 +789,19 @@ function updateActiveTradeFromCandle(activeTrade, point, pointIndex, plan) {
 
 function closeReplayTrade(activeTrade, exitEvent, plan) {
   plan.events.push(exitEvent);
+  const exitPremium = number(exitEvent.premium) ?? activeTrade.setup.entry;
+  const openContracts = Math.max(0, activeTrade.openContracts ?? activeTrade.setup.contracts);
+  const netProfit = activeTrade.realizedProfit + (exitPremium - activeTrade.setup.entry) * openContracts;
   plan.trades.push({
     id: activeTrade.id,
+    mode: activeTrade.mode || activeTrade.setup.mode,
+    contracts: activeTrade.setup.contracts,
     entry: activeTrade.setup.entry,
-    exit: exitEvent.premium,
+    exit: exitPremium,
     exitKind: exitEvent.kind,
     hadTake: activeTrade.tp1Hit || exitEvent.kind === "tp1" || exitEvent.kind === "tp2",
+    netProfit,
+    ambiguousCount: activeTrade.ambiguousCount || 0,
     bestPremium: Math.max(activeTrade.bestPremium, exitEvent.premium || 0),
   });
 }
@@ -789,6 +829,9 @@ function optionSignalSetup(signal, point, activeTrade) {
   const indexValue = number(signal.index_value) ?? number(point?.index) ?? 0;
   return {
     ...premium,
+    mode: signal.trade_decision === "test" ? "test" : "signal",
+    currentStop: premium.stop,
+    tp1Contracts: premium.contracts > 1 ? 1 : 0,
     indexEntry: indexValue,
     indexStop: indexValue,
     indexTp1: indexValue,
@@ -826,7 +869,7 @@ function signalTitle(kind, signal, activeTrade) {
 
 function signalDetail(kind, signal, setup, activeTrade) {
   if (kind === "test") {
-    return `테스트 관찰 · 기준프리 ${formatNum(setup.entry, 2)} · ${signal.message || ""}`;
+    return `테스트 관찰 · 계획프리 ${formatNum(setup.entry, 2)} · ${signal.message || ""}`;
   }
   if (kind === "take_profit") {
     return activeTrade
@@ -835,7 +878,7 @@ function signalDetail(kind, signal, setup, activeTrade) {
   }
   if (kind === "risk" || kind === "stop") {
     return activeTrade
-      ? `위험 확인 · 손절프리 ${formatNum(setup.stop, 2)}`
+      ? `위험 확인 · 계획손절 ${formatNum(setup.currentStop ?? setup.stop, 2)}`
       : `위험 신호 · 보유 포지션 없음 · ${signal.message || ""}`;
   }
   return signal.message || signal.alert || "실시간 재생식 관찰 신호";
@@ -846,18 +889,19 @@ function eventPriority(kind) {
     stop: 1,
     tp1: 2,
     tp2: 3,
-    entry: 4,
-    test: 5,
-    take_profit: 6,
-    risk: 7,
-    watch: 8,
-    exit: 9,
+    mixed: 4,
+    entry: 5,
+    test: 6,
+    take_profit: 7,
+    risk: 8,
+    watch: 9,
+    exit: 10,
   }[kind] || 10;
 }
 
 function isEntrySignal(signal) {
   const action = String(signal?.action || signal?.rule || "");
-  if (signal?.trade_decision) return signal.trade_decision === "entry";
+  if (signal?.trade_decision) return signal.trade_decision === "entry" || signal.trade_decision === "test";
   return signal?.type === "candidate" && action.includes("FIB_618") && signal?.filter_pass !== false;
 }
 
@@ -887,14 +931,20 @@ function tradeSetupFromSignal(signal, session, entryOverride = null) {
   const indexTp1 = targetAbove(indexEntry, [levels.fib_50, levels.fib_382, levels.day_high], risk);
   const indexTp2 = targetAbove(indexTp1, [levels.fib_382, levels.day_high], risk * 0.8);
   const premium = optionPremiumPlan(signal);
+  const mode = signal.trade_decision === "test" ? "test" : "entry";
+  const tp1Contracts = premium.contracts > 1 ? 1 : 0;
 
   return {
     direction: "CALL",
+    mode,
     entry: premium.entry,
     stop: premium.stop,
+    currentStop: premium.stop,
     tp1: premium.tp1,
     tp2: premium.tp2,
     contracts: premium.contracts,
+    tp1Contracts,
+    runnerContracts: premium.contracts - tp1Contracts,
     indexEntry,
     indexStop,
     indexTp1,
@@ -956,7 +1006,7 @@ function levelSpan(levels, fallback) {
 
 function tradeEvent(kind, tradeId, point, pointIndex, setup, overridePrice = null) {
   const price = number(overridePrice) ?? number(point?.index) ?? number(point?.close) ?? setup.indexEntry;
-  const premium = premiumForEvent(kind, setup);
+  const premium = premiumForEvent(kind, setup, price);
   return {
     kind,
     trade_id: tradeId,
@@ -971,15 +1021,42 @@ function tradeEvent(kind, tradeId, point, pointIndex, setup, overridePrice = nul
   };
 }
 
-function premiumForEvent(kind, setup) {
+function premiumForEvent(kind, setup, indexPrice = null) {
+  if (kind === "exit") return plannedPremiumAtIndex(setup, indexPrice);
   return {
     entry: setup.entry,
-    stop: setup.stop,
+    test: setup.entry,
+    stop: setup.currentStop ?? setup.stop,
     tp1: setup.tp1,
     tp2: setup.tp2,
-    exit: setup.entry,
+    mixed: plannedPremiumAtIndex(setup, indexPrice),
     watch: setup.entry,
   }[kind] ?? setup.entry;
+}
+
+function plannedPremiumAtIndex(setup, indexPrice) {
+  const price = number(indexPrice);
+  if (price == null) return setup.entry;
+  const anchors = [
+    { index: number(setup.indexStop), premium: number(setup.currentStop ?? setup.stop) },
+    { index: number(setup.indexEntry), premium: number(setup.entry) },
+    { index: number(setup.indexTp1), premium: number(setup.tp1) },
+    { index: number(setup.indexTp2), premium: number(setup.tp2) },
+  ]
+    .filter((anchor) => anchor.index != null && anchor.premium != null)
+    .sort((a, b) => a.index - b.index);
+  if (!anchors.length) return setup.entry;
+  if (price <= anchors[0].index) return anchors[0].premium;
+  for (let index = 1; index < anchors.length; index += 1) {
+    const prev = anchors[index - 1];
+    const next = anchors[index];
+    if (price <= next.index) {
+      const distance = next.index - prev.index || 1;
+      const ratio = (price - prev.index) / distance;
+      return prev.premium + (next.premium - prev.premium) * ratio;
+    }
+  }
+  return anchors[anchors.length - 1].premium;
 }
 
 function tradeLabel(kind) {
@@ -988,6 +1065,7 @@ function tradeLabel(kind) {
     stop: "STOP",
     tp1: "TP1",
     tp2: "TP2",
+    mixed: "MIX",
     exit: "EXIT",
     watch: "WATCH",
     test: "TEST",
@@ -1003,20 +1081,30 @@ function tradeTitle(kind, tradeId) {
     stop: `${prefix} STOP`,
     tp1: `${prefix} TP1`,
     tp2: `${prefix} TP2 EXIT`,
+    mixed: `${prefix} MIXED 5M`,
     exit: `${prefix} TIME EXIT`,
     watch: "WATCH",
-    test: "CALL TEST",
+    test: `${prefix} CALL TEST`,
     risk: "RISK",
     take_profit: "TP CHECK",
   }[kind] || `${prefix} SIGNAL`;
 }
 
 function tradeDetail(kind, setup, outputR) {
-  if (kind === "entry") {
-    return `${setup.contracts}계약 · 손절 ${formatNum(setup.stop, 2)} · 1차 ${formatNum(setup.tp1, 2)} · 2차 ${formatNum(setup.tp2, 2)}`;
+  if (kind === "entry" || kind === "test") {
+    const tp1Text = setup.tp1Contracts ? `TP1 ${setup.tp1Contracts}계약` : "TP1 본전스탑";
+    return `${setup.contracts}계약 · 계획손절 ${formatNum(setup.stop, 2)} · ${tp1Text} · TP2 ${formatNum(setup.tp2, 2)}`;
+  }
+  if (kind === "tp1") {
+    return setup.tp1Contracts
+      ? `계획프리 ${formatNum(outputR, 2)} · ${setup.tp1Contracts}계약 청산 · 잔량 본전스탑`
+      : `계획프리 ${formatNum(outputR, 2)} · 본전스탑 적용`;
+  }
+  if (kind === "mixed") {
+    return "같은 5분봉에서 손절/목표가 함께 닿은 모호 구간 · 종가 기준으로 처리";
   }
   if (kind === "watch") return "진입 전 관찰 구간";
-  return `프리 ${formatNum(outputR, 2)} · 진입 ${formatNum(setup.entry, 2)}`;
+  return `계획프리 ${formatNum(outputR, 2)} · 진입 ${formatNum(setup.entry, 2)}`;
 }
 
 function tradeStats(trades, events = []) {
@@ -1026,8 +1114,12 @@ function tradeStats(trades, events = []) {
   const takes = events.filter((event) => event.kind === "tp1" || event.kind === "tp2" || event.kind === "take_profit").length;
   const risks = events.filter((event) => event.kind === "risk" || (event.kind === "stop" && !event.trade_id)).length;
   const stops = trades.filter((trade) => trade.exitKind === "stop").length;
+  const ambiguous = trades.reduce((sum, trade) => sum + (trade.ambiguousCount || 0), 0) + events.filter((event) => event.kind === "mixed" && !event.trade_id).length;
+  const netProfit = trades.reduce((sum, trade) => sum + (number(trade.netProfit) || 0), 0);
+  const winners = trades.filter((trade) => (number(trade.netProfit) || 0) > 0).length;
+  const winRate = total ? (winners / total) * 100 : 0;
   const bestPremium = trades.length ? Math.max(...trades.map((trade) => number(trade.bestPremium) || number(trade.exit) || 0)) : null;
-  return { total, entries, tests, takes, risks, stops, bestPremium };
+  return { total, entries, tests, takes, risks, stops, ambiguous, netProfit, winRate, bestPremium };
 }
 
 function clampIndex(value, length) {
@@ -1042,6 +1134,7 @@ function renderReplayLegend() {
     { label: "TEST", color: TRADE_COLORS.test },
     { label: "STOP", color: TRADE_COLORS.stop },
     { label: "TP", color: TRADE_COLORS.tp1 },
+    { label: "MIX", color: TRADE_COLORS.mixed },
     { label: "RISK", color: TRADE_COLORS.risk },
   ];
   document.querySelector("#replayLegend").innerHTML = entries.map(legendItem).join("");
@@ -1517,12 +1610,19 @@ function drawTradeShape(context, x, y, kind, color) {
     context.lineTo(x + 8, y + 7);
     context.lineTo(x - 8, y + 7);
     context.closePath();
+  } else if (kind === "test") {
+    context.rect(x - 7, y - 7, 14, 14);
   } else if (kind === "stop") {
     context.moveTo(x, y - 8);
     context.lineTo(x + 8, y);
     context.lineTo(x, y + 8);
     context.lineTo(x - 8, y);
     context.closePath();
+  } else if (kind === "mixed") {
+    context.moveTo(x - 8, y - 8);
+    context.lineTo(x + 8, y + 8);
+    context.moveTo(x + 8, y - 8);
+    context.lineTo(x - 8, y + 8);
   } else if (kind === "tp1" || kind === "tp2") {
     context.arc(x, y, 7, 0, Math.PI * 2);
   } else {
@@ -1652,13 +1752,14 @@ function drawEmpty(context, width, height, message) {
 function setupCanvas(canvas, height) {
   const rect = canvas.getBoundingClientRect();
   const cssWidth = rect.width || canvas.parentElement?.clientWidth || 320;
+  const cssHeight = rect.height && rect.height > 20 ? rect.height : height;
   const scale = window.devicePixelRatio || 1;
   canvas.width = Math.max(1, Math.floor(cssWidth * scale));
-  canvas.height = Math.max(1, Math.floor(height * scale));
-  canvas.setAttribute("height", String(height));
+  canvas.height = Math.max(1, Math.floor(cssHeight * scale));
+  canvas.setAttribute("height", String(Math.round(cssHeight)));
   const context = canvas.getContext("2d");
   context.setTransform(scale, 0, 0, scale, 0, 0);
-  return { context, width: cssWidth, height };
+  return { context, width: cssWidth, height: cssHeight };
 }
 
 function redrawCharts() {
@@ -1722,6 +1823,13 @@ function formatNum(value, digits = 2) {
     minimumFractionDigits: digits,
     maximumFractionDigits: digits,
   });
+}
+
+function formatSigned(value, digits = 2) {
+  const parsed = number(value);
+  if (parsed == null) return "-";
+  const sign = parsed > 0 ? "+" : "";
+  return `${sign}${formatNum(parsed, digits)}`;
 }
 
 function formatWon(value) {

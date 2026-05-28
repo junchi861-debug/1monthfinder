@@ -204,7 +204,12 @@ def _signals_for_candles(candles: list[dict[str, Any]]) -> list[dict[str, Any]]:
         levels = _confirmed_levels_for(partial)
         signal = evaluate_candle_signal(partial, levels)
         rule = signal.get("rule")
-        if not rule or rule == "WAIT" or rule == last_rule:
+        if not rule:
+            continue
+        if rule == "WAIT":
+            last_rule = None
+            continue
+        if rule == last_rule:
             continue
         last_rule = rule
         latest = partial[-1]
