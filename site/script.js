@@ -1568,6 +1568,7 @@ function renderWeeklyPanel() {
   document.querySelector("#weeklyChartSignalText").textContent =
     visual.description || "평균 진입가 기준으로 손실선, 자리이동선, 청산선을 먼저 그립니다.";
   renderWeeklyLegend(visual);
+  renderWeeklyReplay(strategy);
   requestAnimationFrame(() => drawWeeklyBlueprint(strategy));
 }
 
@@ -1579,6 +1580,146 @@ function optionMetricCard(item) {
       <small>${escapeHtml(item.text)}</small>
     </article>
   `;
+}
+
+function renderWeeklyReplay(strategy = state.weeklyOptions || defaultWeeklyOptions) {
+  const replay = strategy.signal_replay || {};
+  const signals = Array.isArray(replay.signals) ? replay.signals : [];
+  const series = Array.isArray(replay.series) ? replay.series : [];
+  const title = document.querySelector("#weeklyReplayTitle");
+  const badge = document.querySelector("#weeklyReplayBadge");
+  const text = document.querySelector("#weeklyReplayText");
+  const list = document.querySelector("#weeklySignalReplay");
+  const legend = document.querySelector("#weeklyReplayLegend");
+  if (!title || !badge || !text || !list || !legend) return;
+
+  title.textContent = replay.label || "어제 신호 차트";
+  badge.textContent = replay.date || "복기";
+  text.textContent = replay.notice || "실제 5분봉 데이터 연결 전에는 알고리즘 기준 복기 레이어로 표시합니다.";
+  legend.innerHTML = [
+    { label: "지수 흐름", color: "#17202a" },
+    { label: "30이평", color: "#008c8c" },
+    { label: "전환선", color: "#d89216" },
+    { label: "피보나치 목표", color: "#4069b8" },
+    { label: "신호 마커", color: "#b6504a" },
+  ].map((item) => `<span style="color:${escapeAttr(item.color)}"><i></i>${escapeHtml(item.label)}</span>`).join("");
+
+  list.innerHTML = signals.length ? signals.map((signal) => `
+    <article class="replay-signal ${escapeAttr(signal.type || "watch")}">
+      <span>${escapeHtml(signal.time || "-")}<br>${escapeHtml(signal.action || "")}</span>
+      <div>
+        <strong>${escapeHtml(signal.label || "신호")}</strong>
+        <small>${escapeHtml(signal.message || "")}</small>
+        <em>${escapeHtml(signal.alert || "")}</em>
+      </div>
+    </article>
+  `).join("") : `
+    <article class="replay-signal watch">
+      <span>대기</span>
+      <div>
+        <strong>복기 신호 없음</strong>
+        <small>어제 하루 기준 신호 데이터가 아직 없습니다.</small>
+      </div>
+    </article>
+  `;
+
+  requestAnimationFrame(() => drawWeeklyReplayChart(replay, series, signals));
+}
+
+function drawWeeklyReplayChart(replay = {}, series = [], signals = []) {
+  const canvas = document.querySelector("#weeklyReplayChart");
+  if (!canvas) return;
+  const { context, width, height } = setupCanvas(canvas, 360);
+  context.clearRect(0, 0, width, height);
+
+  const points = series
+    .map((point, index) => ({ ...point, index, value: number(point.index) }))
+    .filter((point) => Number.isFinite(point.value));
+  if (!points.length) {
+    drawEmpty(context, width, height, "복기 차트 자료가 없습니다.");
+    return;
+  }
+
+  const levels = replay.levels || {};
+  const lineValues = [
+    ...points.map((point) => point.value),
+    ...points.map((point) => number(point.gma30)).filter(Number.isFinite),
+    ...points.map((point) => number(point.gma50)).filter(Number.isFinite),
+    ...points.map((point) => number(point.tenkan)).filter(Number.isFinite),
+    ...["fib_382", "fib_50", "fib_618", "reset_mid_618_100"].map((key) => number(levels[key])).filter(Number.isFinite),
+  ];
+  const padding = 28;
+  const bottomPadding = 34;
+  const min = Math.min(...lineValues) - 4;
+  const max = Math.max(...lineValues) + 4;
+  const span = max - min || 1;
+  const xFor = (index) => padding + index * ((width - padding * 2) / Math.max(points.length - 1, 1));
+  const yFor = (value) => height - bottomPadding - ((value - min) / span) * (height - padding - bottomPadding);
+
+  drawGrid(context, width, height, padding);
+  [
+    { key: "fib_382", label: "38.2%", color: "#b6504a" },
+    { key: "fib_50", label: "50%", color: "#4069b8" },
+    { key: "fib_618", label: "61.8%", color: "#4069b8" },
+    { key: "reset_mid_618_100", label: "리셋 중심", color: "#8a63d2" },
+  ].forEach((level) => {
+    const value = number(levels[level.key]);
+    if (Number.isFinite(value)) drawHorizontalLevel(context, width, padding, yFor(value), level.label, value, level.color);
+  });
+
+  const valuesByKey = (key) => points.map((point) => number(point[key])).filter(Number.isFinite);
+  drawSeries(context, valuesByKey("gma50"), xFor, yFor, "#95a3b7", 1.8, [6, 4]);
+  drawSeries(context, valuesByKey("tenkan"), xFor, yFor, "#d89216", 1.8, [3, 3]);
+  drawSeries(context, valuesByKey("gma30"), xFor, yFor, "#008c8c", 2.1, []);
+  drawSeries(context, points.map((point) => point.value), xFor, yFor, "#17202a", 2.8, []);
+
+  context.save();
+  context.fillStyle = "#637083";
+  context.font = "10px Segoe UI, sans-serif";
+  context.textAlign = "left";
+  [0, 3, 6, 9, 12, 14].forEach((index) => {
+    const point = points[index];
+    if (!point) return;
+    context.fillText(point.time, xFor(index) - 10, height - 10);
+  });
+  context.fillText(replay.date || "어제", padding, 14);
+  context.restore();
+
+  signals.forEach((signal, signalIndex) => {
+    const pointIndex = Math.max(0, Math.min(points.length - 1, Number(signal.point_index ?? 0)));
+    const point = points[pointIndex] || points[0];
+    const x = xFor(pointIndex);
+    const y = yFor(number(signal.index_value) ?? point.value);
+    drawReplayMarker(context, x, y, signal, signalIndex, width);
+  });
+}
+
+function drawReplayMarker(context, x, y, signal, signalIndex, width) {
+  const colors = {
+    watch: "#4069b8",
+    warning: "#d89216",
+    buy: "#2d8f64",
+    sell: "#b6504a",
+    stop: "#b6504a",
+    runner: "#008c8c",
+  };
+  const color = colors[signal.type] || "#637083";
+  const above = signalIndex % 2 === 0;
+  const labelY = above ? Math.max(16, y - 12) : Math.min(y + 20, 340);
+  const align = x > width * 0.74 ? "right" : x < width * 0.22 ? "left" : "center";
+  context.save();
+  context.fillStyle = color;
+  context.strokeStyle = "#ffffff";
+  context.lineWidth = 2;
+  context.beginPath();
+  context.arc(x, y, 5.2, 0, Math.PI * 2);
+  context.fill();
+  context.stroke();
+  context.font = "10px Segoe UI, sans-serif";
+  context.textAlign = align;
+  context.fillStyle = color;
+  context.fillText(signal.label || "신호", x, labelY);
+  context.restore();
 }
 
 function renderIndexLegend() {

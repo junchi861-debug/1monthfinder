@@ -8,7 +8,7 @@
       name="description"
       content="KOSPI200 위클리 옵션 전략과 지수 매매 조건을 모바일에서 빠르게 확인하는 1MonthFinder 신호 화면"
     />
-    <link rel="stylesheet" href="styles.css?v=20260528-weekly-options" />
+    <link rel="stylesheet" href="styles.css?v=20260528-weekly-replay-signals" />
   </head>
   <body>
     <main class="app-shell" aria-live="polite">
@@ -234,6 +234,22 @@
           </p>
         </section>
 
+        <section class="chart-card weekly-replay-card" aria-labelledby="weeklyReplayTitle">
+          <div class="section-head compact">
+            <div>
+              <span>복기</span>
+              <h2 id="weeklyReplayTitle">어제 신호 차트</h2>
+            </div>
+            <span class="signal-badge watch" id="weeklyReplayBadge">리플레이</span>
+          </div>
+          <canvas id="weeklyReplayChart" height="360" aria-label="어제 하루 동안 위클리 옵션 알고리즘 신호 복기 차트"></canvas>
+          <div class="legend-row" id="weeklyReplayLegend"></div>
+          <p class="signal-copy" id="weeklyReplayText">
+            실제 5분봉 원데이터 연결 전에는 알고리즘 기준 복기 레이어로 표시합니다.
+          </p>
+          <div class="signal-replay-list" id="weeklySignalReplay"></div>
+        </section>
+
         <section class="list-card" aria-labelledby="weeklyRiskTitle">
           <div class="section-head">
             <div>
@@ -288,6 +304,6 @@
       </div>
     </main>
 
-    <script src="script.js?v=20260528-weekly-options-default-weekly"></script>
+    <script src="script.js?v=20260528-weekly-replay-signals"></script>
   </body>
 </html>

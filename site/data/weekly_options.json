@@ -276,6 +276,121 @@
       9.3
     ]
   },
+  "signal_replay": {
+    "status": "prototype",
+    "label": "어제 하루 신호 복기",
+    "date": "2026-05-27",
+    "data_basis": "manual_replay_until_intraday_feed_connected",
+    "notice": "실제 증권사 5분봉 원데이터 연결 전에는 지금까지 받은 알고리즘을 기준으로 어제 차트에서 나왔어야 할 신호를 복기 레이어로 표시한다. 원데이터가 연결되면 이 목록은 자동 산출 대상으로 바꾼다.",
+    "levels": {
+      "day_high": 1338.2,
+      "day_low": 1237.5,
+      "fib_382": 1299.73,
+      "fib_50": 1287.85,
+      "fib_618": 1275.97,
+      "reset_mid_618_100": 1266.72
+    },
+    "series": [
+      { "time": "09:00", "index": 1298.0, "gma30": 1286.0, "gma50": 1274.0, "tenkan": 1290.0 },
+      { "time": "09:30", "index": 1306.0, "gma30": 1287.3, "gma50": 1274.8, "tenkan": 1295.0 },
+      { "time": "10:00", "index": 1320.0, "gma30": 1288.7, "gma50": 1275.6, "tenkan": 1304.0 },
+      { "time": "10:30", "index": 1332.0, "gma30": 1290.0, "gma50": 1276.5, "tenkan": 1312.0 },
+      { "time": "11:00", "index": 1325.0, "gma30": 1291.4, "gma50": 1277.3, "tenkan": 1315.0 },
+      { "time": "11:30", "index": 1311.0, "gma30": 1292.8, "gma50": 1278.1, "tenkan": 1308.0 },
+      { "time": "12:00", "index": 1301.0, "gma30": 1294.1, "gma50": 1278.9, "tenkan": 1298.0 },
+      { "time": "12:30", "index": 1290.0, "gma30": 1295.5, "gma50": 1279.7, "tenkan": 1287.0 },
+      { "time": "13:00", "index": 1278.0, "gma30": 1296.8, "gma50": 1280.6, "tenkan": 1279.0 },
+      { "time": "13:20", "index": 1274.0, "gma30": 1298.2, "gma50": 1281.4, "tenkan": 1274.0 },
+      { "time": "13:40", "index": 1283.0, "gma30": 1299.5, "gma50": 1282.2, "tenkan": 1281.0 },
+      { "time": "14:00", "index": 1292.0, "gma30": 1300.9, "gma50": 1283.0, "tenkan": 1289.0 },
+      { "time": "14:20", "index": 1300.0, "gma30": 1302.2, "gma50": 1283.8, "tenkan": 1297.0 },
+      { "time": "14:40", "index": 1308.0, "gma30": 1303.6, "gma50": 1284.7, "tenkan": 1304.0 },
+      { "time": "15:25", "index": 1306.0, "gma30": 1304.9, "gma50": 1285.5, "tenkan": 1302.0 }
+    ],
+    "signals": [
+      {
+        "time": "09:00",
+        "point_index": 0,
+        "type": "watch",
+        "label": "장 시작 관찰",
+        "action": "WAIT",
+        "message": "전일 기준선과 당일 고저가가 아직 확정되지 않았으므로 신규 진입 신호는 내지 않는다.",
+        "alert": "차트 기준선 계산만 시작"
+      },
+      {
+        "time": "10:30",
+        "point_index": 3,
+        "type": "watch",
+        "label": "당일 고점 후보",
+        "action": "ANCHOR_HIGH",
+        "message": "당일 고점 후보가 생기면 이후 하락 구간에서 당일 전구간 피보나치 61.8%, 50%, 38.2% 목표를 미리 계산한다.",
+        "alert": "고점 기준 피보나치 준비"
+      },
+      {
+        "time": "12:30",
+        "point_index": 7,
+        "type": "warning",
+        "label": "하락 압력",
+        "action": "NO_FULL_SIZE",
+        "message": "5분봉이 30이평과 전환선 아래로 밀리면 시장이 아직 눌리는 중이므로 3계약 풀진입을 금지하고 최소 물량만 허용한다.",
+        "alert": "풀진입 금지, 쌍바닥만 감시"
+      },
+      {
+        "time": "13:00",
+        "point_index": 8,
+        "type": "buy",
+        "label": "100% 앞선 자리",
+        "action": "MIN_TRY",
+        "message": "쌍바닥은 딱 100% 자리까지 기다리지 않고 우측 바닥이 더 높게 돌 수 있으므로 앞선 자리에서 1계약 테스트 신호를 낸다.",
+        "alert": "최소 1계약 콜 트라이 후보"
+      },
+      {
+        "time": "13:20",
+        "point_index": 9,
+        "type": "buy",
+        "label": "밑꼬리 확인",
+        "action": "CALL_RETRY_2_3",
+        "message": "원하는 자리 근처에서 밑꼬리가 나오면 리셋 중심라인 콜 2~3계약 재시작 후보로 올린다. 프리미엄은 1.5~1.8 구간을 우선 찾는다.",
+        "alert": "콜 2~3계약 재시작 준비"
+      },
+      {
+        "time": "13:40",
+        "point_index": 10,
+        "type": "sell",
+        "label": "61.8% 목표",
+        "action": "TAKE_1",
+        "message": "저점권 바운딩 후 61.8% 목표에 접근하면 최소 1계약, 또는 급반등 20~30% 수익 물량을 먼저 청산해 안전마진을 만든다.",
+        "alert": "1차 부분청산"
+      },
+      {
+        "time": "14:00",
+        "point_index": 11,
+        "type": "sell",
+        "label": "50%+50이평",
+        "action": "EXIT_RUNNER",
+        "message": "당일 50% 피보나치와 5분봉 50이평이 겹치는 구간은 수익극대화 잔량 올청 후보로 본다.",
+        "alert": "잔량 올청 및 당일 종료 후보"
+      },
+      {
+        "time": "14:20",
+        "point_index": 12,
+        "type": "runner",
+        "label": "38.2%+구름대",
+        "action": "RUNNER_ONLY",
+        "message": "50%를 넘기는 초강세 흐름이면 38.2%와 구름대 근접까지 볼 수 있지만, 만기일에는 줄먹과 트레일링을 병행한다.",
+        "alert": "남은 1계약만 러너 가능"
+      },
+      {
+        "time": "15:25",
+        "point_index": 14,
+        "type": "stop",
+        "label": "만기 20분 전",
+        "action": "LOTTERY_CAP_OR_SKIP",
+        "message": "만기 20분 전부터 복권 플레이는 오늘 수익금 10% 이하만 가능하다. 수익이 넉넉하지 않거나 예산을 넘으면 스킵한다.",
+        "alert": "복권 플레이 제한"
+      }
+    ]
+  },
   "index_reset_reference": {
     "source": "index_trading.fibonacci.reset_on_break",
     "label": "지수 피보나치 리셋",
