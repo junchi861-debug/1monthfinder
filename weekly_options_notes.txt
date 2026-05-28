@@ -827,3 +827,43 @@ DAILY_STOP
 51. 수익담보 1계약 청산의 30이평 터치 기준이 가격 터치인지, 5분봉 종가 도달인지
 52. 수익담보 스캘프의 허용 손실선과 미체결 주문 취소 기준
 53. +55.40% 수익률은 목표값인지, 30이평 터치가 항상 우선인지
+
+20. 후반 수익극대화/만기일 줄먹 병행
+
+대화 20은 위클리 옵션의 후반부 목표 관리와 잔량 전략이다.
+
+해석:
+- 지수가 강하게 바운딩되면 61.8%, 50% 이후 다음 상단 목표로 당일 전구간 38.2% 라인과 일목 구름대 근접 구간을 볼 수 있다.
+- 다만 옵션 만기일에는 프리미엄 시간가치가 빠르게 빠지므로, 목표를 길게 보더라도 중간 줄먹을 병행해야 한다.
+- 2.2 부근에서 잡은 콜옵션 잔량이 20.5까지 가면 약 9~10배 수익이다. 3계약 중 1계약만 끝까지 끌고 가도 계약당 약 500만원 수익이 가능했던 예시다.
+- 주요 포지션을 올청한 뒤에도 초강세장이 이어지면, 당일 수익을 담보로 1.0 근처 옵션 1계약을 버리는 마음으로 남겨두는 추가 수익 전략이 가능하다. 예시상 1.0 옵션 1계약은 약 25만원 투입, 4.0 도달 시 약 100만원 규모의 추가 수익 후보가 된다.
+- KODEX200 ETF는 옵션과 메커니즘이 다르다. 옵션 프리미엄 폭발과 시간가치 감소가 없으므로, 손절하고 재진입하는 대응을 철저히 병행하는 별도 전략으로 분리해야 한다.
+
+공식 후보:
+
+late_index_target =
+  intraday_full_fib_382
+  AND ichimoku_cloud_nearby
+
+expiry_day_management =
+  hold_runner_to_late_target
+  AND take_partial_profit_along_the_way
+
+moonshot_runner =
+  entry_premium = 2.2
+  current_premium = 20.5
+  profit_multiple = current_premium / entry_premium = 9.3
+
+profit_collateral_lottery =
+  daily_profit_locked == true
+  AND main_position_exited == true
+  AND market_is_super_strong == true
+  AND option_premium around 1.0
+  => allow 1 contract inside locked profit
+
+추가 문의:
+- 38.2%+구름대 목표에서는 잔량 올청인지, 일부 청산 후 트레일링을 이어갈지 확인 필요
+- 만기일 줄먹 비율을 20~30%, 50%, 100% 중 어떤 단계에 얼마씩 둘지 확인 필요
+- 10배 러너 후보에서 트레일링 스탑을 옵션 고점 대비 몇 퍼센트 또는 지수 어떤 선 이탈로 볼지 확인 필요
+- 올청 후 수익담보 1.0 옵션의 최대 허용 금액과 손절 여부 확인 필요
+- KODEX200 ETF 전략은 별도 탭인지 지수 매매 탭의 ETF 모드인지 확인 필요

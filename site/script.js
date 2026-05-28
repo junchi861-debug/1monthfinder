@@ -1179,6 +1179,7 @@ function renderWeeklyHero() {
   const profitLock = money.daily_profit_lock || {};
   const afterLock = money.after_lock || {};
   const profitScalp = afterLock.profit_collateral_scalp || {};
+  const profitLottery = afterLock.profit_collateral_lottery || {};
   const pressureFilter = money.downside_pressure_filter || {};
   const entry = strategy.entry || {};
   const date = (state.report?.generated_at || "").slice(0, 10) || "공식 정리";
@@ -1204,6 +1205,7 @@ function renderWeeklyPanel() {
   const profitLock = money.daily_profit_lock || {};
   const afterLock = money.after_lock || {};
   const profitScalp = afterLock.profit_collateral_scalp || {};
+  const profitLottery = afterLock.profit_collateral_lottery || {};
   const pressureFilter = money.downside_pressure_filter || {};
   const entry = strategy.entry || {};
   const rolePlan = strategy.position_roles || {};
@@ -1233,6 +1235,11 @@ function renderWeeklyPanel() {
   const intradayReview = strategy.intraday_full_fibonacci_review || {};
   const indexBounce = strategy.index_bounce_target_reference || {};
   const indexBounceFullExit = indexBounce.runner_full_exit || {};
+  const lateExtension = strategy.late_session_extension || {};
+  const cloudTarget = lateExtension.index_target || {};
+  const expiryScalpReason = lateExtension.expiry_scalp_reason || {};
+  const moonshotRunner = lateExtension.moonshot_runner || {};
+  const etfSeparation = lateExtension.kodex200_etf_separation || {};
   const perStopRange = Array.isArray(risk.per_stop_loss_krw_range)
     ? `${formatWon(risk.per_stop_loss_krw_range[0])}~${formatWon(risk.per_stop_loss_krw_range[1])}`
     : "300,000~500,000원";
@@ -1260,6 +1267,7 @@ function renderWeeklyPanel() {
     { label: "수익 잠금", value: profitLockRange, text: profitLock.description || "당일 수익 달성 후 보수 모드로 전환합니다." },
     { label: "이후 진입", value: `${afterLock.max_contracts || 1}계약만`, text: afterLock.description || "급소자리 외에는 진입하지 않고 수익담보 내에서만 운용합니다." },
     { label: "수익담보 눌림", value: `${profitScalp.max_contracts || 1}계약`, text: profitScalp.description || "전환선 눌림에서 1계약만 진입하고 30이평 터치 시 청산합니다." },
+    { label: profitLottery.label || "수익담보 소액 옵션", value: `${formatNum(profitLottery.target_entry_premium || 1, 1)} → ${formatNum(profitLottery.example_target_premium || 4, 1)}`, text: profitLottery.description || "올청 후에도 강한 장이면 당일 수익담보 안에서 소액 옵션을 버려두는 후보로 봅니다." },
     { label: "하락 압력", value: `${pressureFilter.max_contracts || 1}계약`, text: pressureFilter.description || "5분봉이 30이평, 전환선, 기준선 아래이면 최소 물량만 시도합니다." },
     { label: "100% 앞선 자리", value: "최소 물량", text: entryTiming.description || "우측 바닥이 더 높게 돌 수 있어 100%를 딱 기다리지 않고 앞선 자리도 봅니다." },
     { label: "만기 12시 후", value: `${formatNum(afterNoonPlan.strike_offset_pct || 1.5, 1)}% / ${afterNoonPremiumRange}`, text: afterNoonPlan.description || "프리미엄 급감 구간에서는 더 가까운 행사가와 낮은 프리미엄으로 재선정합니다." },
@@ -1270,7 +1278,11 @@ function renderWeeklyPanel() {
     { label: "마지막 트라이", value: `${formatNum(finalTry.example_strike || 1260, 0)}콜 ${formatNum(finalTry.example_entry_premium || 2.4, 1)}`, text: finalTry.description || "400/456이평 라인대에서 마지막 트라이 후보를 봅니다." },
     { label: "전구간 피보나치", value: "위치 재점검", text: intradayReview.description || "포지션 변화 후 당일 전체 고저 피보나치로 현재 위치를 다시 봅니다." },
     { label: indexBounce.label || "바운딩 목표", value: "61.8% → 50%", text: indexBounce.description || "저점권 바운딩 후 지수 목표는 61.8%, 이후 50% 라인까지 순서대로 봅니다." },
+    { label: cloudTarget.label || "후반 목표", value: "38.2%+구름대", text: cloudTarget.description || "후반 반등이 강하면 구름대와 38.2% 라인을 다음 목표로 봅니다." },
+    { label: "만기일 줄먹", value: "목표+부분청산", text: expiryScalpReason.description || "만기일 프리미엄 감소를 감안해 상단 목표와 줄먹을 병행합니다." },
     { label: "잔량 올청", value: "50%+50이평", text: indexBounceFullExit.description || runnerFullExit.description || "수익극대화 잔량은 50% 피보나치와 50이평이 겹치는 자리에서 전량 청산 후보로 봅니다." },
+    { label: "10배 러너", value: `${formatNum(moonshotRunner.example_entry_premium || 2.2, 1)} → ${formatNum(moonshotRunner.example_current_premium || 20.5, 1)}`, text: moonshotRunner.description || "초강세장에서는 남은 1계약을 끝까지 끌고 가는 수익극대화 가치가 커집니다." },
+    { label: "KODEX200 ETF", value: "별도 규칙", text: etfSeparation.description || "ETF는 옵션과 메커니즘이 달라 손절과 재진입 중심으로 별도 설계합니다." },
     { label: "도달 시", value: "오늘 중단", text: "신규 진입과 추가 진입을 멈춥니다." },
     { label: "초기 계약", value: `${entry.initial_contracts || 3}계약`, text: "1계약씩 3분할 주문을 기본값으로 둡니다." },
     { label: "기준 신호", value: "지수 매매", text: "지수 탭의 신규 진입 위치를 옵션 선택의 출발점으로 씁니다." },
@@ -1313,6 +1325,21 @@ function renderWeeklyPanel() {
       <span>수익담보 스캘프</span>
       <strong>전환선 눌림 ${formatNum(profitScalp.max_contracts || 1, 0)}계약</strong>
       <small>30이평 터치 청산 · 예시 ${escapeHtml(profitScalp.example_option || "콜 2605 1275.0 4W")} +${formatNum(profitScalp.example_profit_pct || 55.4, 1)}%</small>
+    </article>
+    <article class="option-summary-card">
+      <span>후반 목표</span>
+      <strong>38.2%+구름대</strong>
+      <small>${escapeHtml(cloudTarget.description || "강한 반등은 구름대와 38.2% 라인까지 목표로 보되 만기일에는 부분청산을 병행합니다.")}</small>
+    </article>
+    <article class="option-summary-card">
+      <span>10배 러너</span>
+      <strong>${formatNum(moonshotRunner.example_entry_premium || 2.2, 1)} → ${formatNum(moonshotRunner.example_current_premium || 20.5, 1)}</strong>
+      <small>잔량 1계약을 끝까지 끌고 가는 초강세장 수익극대화 후보</small>
+    </article>
+    <article class="option-summary-card">
+      <span>수익담보 소액</span>
+      <strong>${formatNum(profitLottery.target_entry_premium || 1, 1)}짜리 1계약</strong>
+      <small>${escapeHtml(profitLottery.description || "올청 후 당일 수익담보 안에서 버려두는 추가 수익 후보입니다.")}</small>
     </article>
     <article class="option-summary-card">
       <span>쌍바닥 타이밍</span>
@@ -1386,6 +1413,34 @@ function renderWeeklyPanel() {
       <span>50%+50이평 올청</span>
       <strong>수익극대화 잔량 전량 청산</strong>
       <small>${escapeHtml(indexBounceFullExit.description || runnerFullExit.description || "50% 피보나치 목표와 50이평이 겹치면 잔량 올청 후 당일 매매를 종료합니다.")}</small>
+    </article>
+  ` : "";
+
+  const lateExtensionItems = lateExtension.status ? `
+    <article class="target-item quick">
+      <span>후반 상단 목표</span>
+      <strong>38.2% · 구름대 근접</strong>
+      <small>${escapeHtml(cloudTarget.description || "강한 반등은 38.2% 라인과 구름대 근접까지 목표로 봅니다.")}</small>
+    </article>
+    <article class="target-item quick">
+      <span>만기일 줄먹 병행</span>
+      <strong>목표 추적 + 부분 청산</strong>
+      <small>${escapeHtml(expiryScalpReason.description || "만기일에는 프리미엄 감소가 빠르므로 목표 보유와 중간 청산을 같이 봅니다.")}</small>
+    </article>
+    <article class="target-item runner">
+      <span>10배 러너 후보</span>
+      <strong>${formatNum(moonshotRunner.example_entry_premium || 2.2, 1)} → ${formatNum(moonshotRunner.example_current_premium || 20.5, 1)}</strong>
+      <small>${escapeHtml(moonshotRunner.description || "초강세장에서는 남은 1계약을 끝까지 끌고 가는 위클리 옵션 전략의 가치가 커집니다.")}</small>
+    </article>
+    <article class="target-item quick">
+      <span>수익담보 소액 옵션</span>
+      <strong>${formatNum(profitLottery.target_entry_premium || 1, 1)} → ${formatNum(profitLottery.example_target_premium || 4, 1)}</strong>
+      <small>${escapeHtml(profitLottery.description || "주요 포지션 올청 후 당일 수익담보 안에서 소액 옵션을 버려두는 후보입니다.")}</small>
+    </article>
+    <article class="target-item switch">
+      <span>KODEX200 ETF 분리</span>
+      <strong>손절+재진입 별도 메커니즘</strong>
+      <small>${escapeHtml(etfSeparation.description || "ETF는 옵션 프리미엄 구조와 달라 별도 전략으로 분리합니다.")}</small>
     </article>
   ` : "";
 
@@ -1471,7 +1526,7 @@ function renderWeeklyPanel() {
   `;
   }).join("");
 
-  document.querySelector("#weeklyTargetList").innerHTML = lossItem + roleItems + quickReboundItems + bounceTargetItems + profitScalpItems + switchItems + targetItems + `
+  document.querySelector("#weeklyTargetList").innerHTML = lossItem + roleItems + quickReboundItems + bounceTargetItems + lateExtensionItems + profitScalpItems + switchItems + targetItems + `
     <article class="target-item runner">
       <span>잔량 운용</span>
       <strong>${formatNum(runner.contracts || 1, 0)}계약</strong>
@@ -1521,7 +1576,7 @@ function renderIndexLegend() {
     { label: "105 손절", color: "#b6504a" },
     { label: "리셋 61.8/중심/100", color: "#6d5bd0" },
     { label: "전환선 눌림/30이평 청산", color: "#9a4fb5" },
-    { label: "바운딩 목표 61.8→50", color: "#c7552b" },
+    { label: "바운딩 목표 61.8→50→38.2", color: "#c7552b" },
     { label: "50%+50이평 올청", color: "#b6504a" },
     { label: "400/456이평", color: "#7b8799" },
     { label: "당일 전구간 피보나치", color: "#4069b8" },
@@ -1549,6 +1604,7 @@ function drawWeeklyBlueprint(strategy = state.weeklyOptions || defaultWeeklyOpti
   const money = strategy.money_management || {};
   const afterLock = money.after_lock || {};
   const profitScalp = afterLock.profit_collateral_scalp || {};
+  const profitLottery = afterLock.profit_collateral_lottery || {};
   const switchRule = strategy.position_switch || {};
   const switchRetry = switchRule.retry_limit || {};
   const lowFloorExit = switchRule.low_floor_replacement_exit || {};
@@ -1563,6 +1619,7 @@ function drawWeeklyBlueprint(strategy = state.weeklyOptions || defaultWeeklyOpti
     switch_entry: number(lowFloorExit.example_entry_premium) ?? avgEntry,
     final_entry: number(finalTry.example_entry_premium) ?? avgEntry,
     scalp_entry: number(profitScalp.example_entry_premium) ?? avgEntry,
+    lottery_entry: number(profitLottery.target_entry_premium) ?? avgEntry,
     stop_loss_pct: number(loss.hold_until_loss_pct) ?? 30,
     max_switch_attempts: number(switchRetry.max_switch_attempts) ?? 2,
   };
@@ -1756,6 +1813,7 @@ function drawIndexBlueprint() {
   const dayHigh = 1338.2;
   const dayLow = 1237.5;
   const dayLevels = {
+    "당일 38.2": dayHigh - (dayHigh - dayLow) * 0.382,
     "당일 50": dayHigh - (dayHigh - dayLow) * 0.5,
     "당일 61.8": dayHigh - (dayHigh - dayLow) * 0.618,
   };
@@ -1793,6 +1851,7 @@ function drawIndexBlueprint() {
   drawHorizontalLevel(context, width, padding, yFor(resetLevels["리셋 61.8"]), "리셋 61.8", resetLevels["리셋 61.8"], "#6d5bd0");
   drawHorizontalLevel(context, width, padding, yFor(resetLevels["리셋 중심"]), "리셋 중심", resetLevels["리셋 중심"], "#8a63d2");
   drawHorizontalLevel(context, width, padding, yFor(resetLevels["리셋 100"]), "리셋 100", resetLevels["리셋 100"], "#6d5bd0");
+  drawHorizontalLevel(context, width, padding, yFor(dayLevels["당일 38.2"]), "당일 38.2", dayLevels["당일 38.2"], "#b6504a");
   drawHorizontalLevel(context, width, padding, yFor(dayLevels["당일 50"]), "당일 50", dayLevels["당일 50"], "#4069b8");
   drawHorizontalLevel(context, width, padding, yFor(dayLevels["당일 61.8"]), "당일 61.8", dayLevels["당일 61.8"], "#4069b8");
   drawSeries(context, gma456, xFor, yFor, "#6f8f6b", 2, [4, 5]);
@@ -1855,10 +1914,12 @@ function drawProfitScalpBlueprint(context, xFor, yFor, tenkan5m, gma30) {
 function drawBottomBounceTargets(context, xFor, yFor, dayLevels, gma50 = []) {
   const startX = xFor(9);
   const firstX = xFor(11.2);
-  const secondX = xFor(13);
+  const secondX = xFor(12.2);
+  const thirdX = xFor(13);
   const startY = yFor(dayLevels["당일 61.8"] - 2.4);
   const firstY = yFor(dayLevels["당일 61.8"]);
   const secondY = yFor(dayLevels["당일 50"]);
+  const thirdY = yFor(dayLevels["당일 38.2"]);
   const gma50Y = Number.isFinite(gma50[13]) ? yFor(gma50[13]) : secondY;
   context.save();
   context.strokeStyle = "rgba(199, 85, 43, 0.76)";
@@ -1869,8 +1930,14 @@ function drawBottomBounceTargets(context, xFor, yFor, dayLevels, gma50 = []) {
   context.moveTo(startX, startY);
   context.lineTo(firstX, firstY);
   context.lineTo(secondX, secondY);
+  context.lineTo(thirdX, thirdY);
   context.stroke();
   context.setLineDash([]);
+  context.fillStyle = "rgba(97, 123, 156, 0.13)";
+  context.strokeStyle = "rgba(97, 123, 156, 0.45)";
+  context.lineWidth = 1;
+  context.fillRect(thirdX - 54, thirdY - 9, 74, 18);
+  context.strokeRect(thirdX - 54, thirdY - 9, 74, 18);
   context.strokeStyle = "rgba(182, 80, 74, 0.72)";
   context.lineWidth = 1.2;
   context.beginPath();
@@ -1881,6 +1948,7 @@ function drawBottomBounceTargets(context, xFor, yFor, dayLevels, gma50 = []) {
     { x: startX, y: startY, label: "바운딩" },
     { x: firstX, y: firstY, label: "1차 61.8%" },
     { x: secondX, y: (secondY + gma50Y) / 2, label: "50%+50이평 올청" },
+    { x: thirdX, y: thirdY, label: "38.2%+구름대" },
   ].forEach((point) => {
     context.beginPath();
     context.arc(point.x, point.y, 3.6, 0, Math.PI * 2);

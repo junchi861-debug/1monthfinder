@@ -78,6 +78,18 @@
       "role": "밑꼬리가 전체 5분봉 범위에서 차지하는 비율로, 진입 확인 강도를 판단한다."
     },
     {
+      "key": "intraday_full_fib_382",
+      "label": "당일 전구간 38.2%",
+      "formula": "day_high - (day_high - day_low) * 0.382",
+      "role": "강한 바닥 바운딩 이후 50%를 넘어서면 구름대 근접과 함께 후반 상단 목표로 본다."
+    },
+    {
+      "key": "ichimoku_cloud_nearby",
+      "label": "일목 구름대 근접",
+      "formula": "abs(current_index - ichimoku_cloud_lower_5m) <= confluence_tolerance OR abs(current_index - ichimoku_cloud_upper_5m) <= confluence_tolerance",
+      "role": "38.2% 목표와 구름대가 가까우면 위클리 옵션 잔량 청산/줄먹 판단의 상단 목표로 쓴다."
+    },
+    {
       "key": "intraday_full_fib_50",
       "label": "당일 전구간 50%",
       "formula": "day_high - (day_high - day_low) * 0.5",
@@ -100,6 +112,12 @@
       "label": "바닥 바운딩 2차 목표 50%",
       "formula": "intraday_full_fib_50",
       "role": "61.8% 회복 후 힘이 이어지면 다음 도전 목표선으로 본다."
+    },
+    {
+      "key": "bottom_bounce_target_382_cloud",
+      "label": "바닥 바운딩 3차 목표 38.2%+구름대",
+      "formula": "intraday_full_fib_382 AND ichimoku_cloud_nearby",
+      "role": "50%를 넘긴 초강세 반등에서는 구름대 근접 38.2% 라인을 후반 목표로 보되 옵션은 만기일 줄먹을 병행한다."
     },
     {
       "key": "fib50_gma50_confluence",
@@ -202,9 +220,10 @@
         "trigger": "bottom_zone_rebound_confirmed",
         "sequence": [
           "intraday_full_fib_618",
-          "intraday_full_fib_50"
+          "intraday_full_fib_50",
+          "intraday_full_fib_382_if_super_strong"
         ],
-        "description": "저점권에서 바운딩이 나오면 목표는 먼저 당일 전구간 61.8% 라인, 이후 반등 힘이 유지되면 50% 라인까지 도전하는 구조로 본다.",
+        "description": "저점권에서 바운딩이 나오면 목표는 먼저 당일 전구간 61.8% 라인, 이후 반등 힘이 유지되면 50% 라인까지 도전한다. 50%를 넘어서는 초강세장에서는 구름대 근접 38.2% 라인을 다음 목표로 보되 옵션 만기일에는 줄먹을 병행한다.",
         "runner_full_exit": {
           "status": "draft",
           "trigger": "fib50_gma50_confluence",
@@ -286,6 +305,11 @@
       "key": "BOTTOM_BOUNCE_TARGET_50",
       "label": "바운딩 50% 도전",
       "description": "61.8% 라인을 회복하고 반등 힘이 유지되면 당일 전구간 50% 라인까지 도전 후보로 본다."
+    },
+    {
+      "key": "BOTTOM_BOUNCE_TARGET_382_CLOUD",
+      "label": "바운딩 38.2%+구름대",
+      "description": "50%를 넘긴 초강세 바운딩에서는 당일 전구간 38.2%와 일목 구름대 근접 구간을 후반 목표로 본다."
     },
     {
       "key": "RUNNER_FULL_EXIT_50_CONFLUENCE",
@@ -448,9 +472,10 @@
         "bottom_zone_rebound_confirmed == true",
         "current_index < intraday_full_fib_618",
         "target_1 = intraday_full_fib_618",
-        "target_2 = intraday_full_fib_50 if rebound_strength_holds"
+        "target_2 = intraday_full_fib_50 if rebound_strength_holds",
+        "target_3 = intraday_full_fib_382 if super_strong_rebound AND ichimoku_cloud_nearby"
       ],
-      "message": "저점권에서 바운딩이 나오면 1차 목표는 당일 전구간 61.8%, 이후 힘이 유지되면 50% 라인까지 도전 후보로 본다."
+      "message": "저점권에서 바운딩이 나오면 1차 목표는 당일 전구간 61.8%, 이후 힘이 유지되면 50%, 초강세장에서는 구름대 근접 38.2% 라인까지 목표 후보로 본다."
     },
     {
       "key": "runner_full_exit_50_confluence",
@@ -558,6 +583,8 @@
     "바닥 바운딩 확인 기준을 저점권 밑꼬리, 전환선 회복, 30이평 회복 중 무엇으로 볼지 확인이 필요하다.",
     "61.8% 1차 목표 도달 시 일부 청산인지 전량 청산인지, 50% 도전은 어떤 강도 조건에서 허용할지 확인이 필요하다.",
     "50% 피보나치와 50이평이 겹쳤다고 보는 허용 오차를 지수 포인트 또는 퍼센트로 정해야 한다.",
+    "38.2%와 구름대 근접을 목표로 볼 때 구름 상단/하단 중 어느 선을 우선할지 확인이 필요하다.",
+    "50% 이후 38.2% 도전을 허용하는 초강세 조건을 전환선, 30/50이평, 거래량, 옵션 프리미엄 중 무엇으로 판단할지 정해야 한다.",
     "잔량 올청 후 당일 매매 종료를 항상 적용할지, 당일 목표 수익 달성 시에만 적용할지 확인이 필요하다.",
     "수익담보 전환선 눌림 진입의 눌림 판정은 전환선 터치인지, 이탈 후 회복인지, 근접 허용폭인지 확인이 필요하다.",
     "수익담보 1계약의 30이평 청산은 터치 기준인지, 5분봉 종가 기준인지 확인이 필요하다."
