@@ -8,10 +8,20 @@ const state = {
   selectedSymbol: null,
   holdings: [],
   weeklyReplaySessionId: null,
+  weeklyReplayDate: null,
+  optionsMonitor: null,
+  optionsMonitorTimer: null,
+  optionsAlertsEnabled: false,
+  optionsAlertPermission: "default",
+  lastOptionsAlertKey: null,
+  optionsAudioContext: null,
+  serviceWorkerRegistration: null,
   mode: initialMode(),
 };
 
 const STORAGE_KEY = "1monthfinder.holdings";
+const OPTIONS_MONITOR_POLL_MS = 60000;
+const OPTIONS_MONITOR_ALERT_TYPES = new Set(["candidate", "sell", "warning", "watch"]);
 
 const defaultChartConfig = {
   palette: {
@@ -758,6 +768,9 @@ async function init() {
     renderDashboard();
   });
   document.querySelector("#holdingForm")?.addEventListener("submit", addHolding);
+  bindOptionsMonitorControls();
+  bindWeeklyReplayControls();
+  registerServiceWorker();
 
   state.holdings = loadHoldings();
 
@@ -774,6 +787,7 @@ async function init() {
     state.indexStrategy = indexStrategy || defaultIndexStrategy;
     state.weeklyOptions = mergeWeeklyPublicReplay(weeklyOptions || defaultWeeklyOptions, publicWeeklyReplay);
     state.weeklyReplaySessionId = state.weeklyOptions.signal_replay?.active_session_id || null;
+    state.weeklyReplayDate = state.weeklyReplaySessionId;
     renderDashboard();
     setupSectionAccordions();
   } catch (error) {
@@ -785,6 +799,8 @@ async function init() {
   }
 
   setMode(state.mode, false);
+  loadOptionsMonitor();
+  startOptionsMonitorPolling();
 }
 
 function mergeWeeklyPublicReplay(strategy, publicReplay) {
@@ -799,9 +815,354 @@ function mergeWeeklyPublicReplay(strategy, publicReplay) {
   };
 }
 
+async function registerServiceWorker() {
+  if (!("serviceWorker" in navigator)) return;
+  try {
+    state.serviceWorkerRegistration = await navigator.serviceWorker.register("sw.js");
+  } catch (error) {
+    state.serviceWorkerRegistration = null;
+  }
+}
+
+function bindOptionsMonitorControls() {
+  document.querySelector("#enableOptionsAlerts")?.addEventListener("click", enableOptionsAlerts);
+  document.querySelector("#testOptionsAlert")?.addEventListener("click", () => {
+    state.optionsAlertsEnabled = true;
+    fireOptionsAlert(
+      {
+        type: "candidate",
+        title: "테스트 알림",
+        message: "소리, 진동, 알림센터 전달 상태를 확인합니다.",
+        rule: "TEST_ALERT",
+        time: "-",
+      },
+      true,
+    );
+    updateOptionsAlertStatus("테스트 알림을 보냈습니다.");
+  });
+  document.querySelector("#refreshOptionsMonitor")?.addEventListener("click", () => loadOptionsMonitor(true));
+  updateOptionsAlertStatus();
+}
+
+function bindWeeklyReplayControls() {
+  document.querySelector("#weeklyReplayDate")?.addEventListener("change", (event) => {
+    state.weeklyReplayDate = event.target.value || null;
+    state.weeklyReplaySessionId = event.target.value || null;
+    renderWeeklyReplay();
+  });
+}
+
+async function enableOptionsAlerts() {
+  state.optionsAlertsEnabled = true;
+  unlockOptionsAudio();
+
+  if ("Notification" in window) {
+    try {
+      if (Notification.permission === "default") {
+        state.optionsAlertPermission = await Notification.requestPermission();
+      } else {
+        state.optionsAlertPermission = Notification.permission;
+      }
+    } catch (error) {
+      state.optionsAlertPermission = "denied";
+    }
+  } else {
+    state.optionsAlertPermission = "unsupported";
+  }
+
+  updateOptionsAlertStatus();
+  fireOptionsAlert(
+    {
+      type: "watch",
+      title: "알림 준비",
+      message: "옵션 감시 신호가 뜨면 이 폰에서 소리와 진동을 먼저 울립니다.",
+      rule: "ALERT_READY",
+      time: "-",
+    },
+    true,
+  );
+}
+
+function startOptionsMonitorPolling() {
+  if (state.optionsMonitorTimer) window.clearInterval(state.optionsMonitorTimer);
+  state.optionsMonitorTimer = window.setInterval(() => loadOptionsMonitor(), OPTIONS_MONITOR_POLL_MS);
+}
+
+async function loadOptionsMonitor(manual = false) {
+  const badge = document.querySelector("#optionsMonitorBadge");
+  if (manual && badge) {
+    badge.className = "signal-badge neutral";
+    badge.textContent = "조회중";
+  }
+
+  try {
+    const response = await fetch("/api/options-monitor", { cache: "no-store" });
+    const snapshot = await response.json();
+    state.optionsMonitor = snapshot;
+    renderOptionsMonitor();
+    maybeFireOptionsAlert(snapshot);
+  } catch (error) {
+    state.optionsMonitor = {
+      ok: false,
+      signal: {
+        type: "warning",
+        label: "연결 실패",
+        title: "로컬 서버 연결 실패",
+        message: "로컬 서버의 옵션 감시 API를 읽지 못했습니다. 서버 실행 상태를 확인하세요.",
+        rule: "LOCAL_API_FAILED",
+        time: "-",
+      },
+      main: { candles: [], latest: null, levels: {} },
+    };
+    renderOptionsMonitor();
+  }
+}
+
+function renderOptionsMonitor() {
+  const snapshot = state.optionsMonitor || {};
+  const signal = snapshot.signal || snapshot.main?.signal || {};
+  const badge = document.querySelector("#optionsMonitorBadge");
+  if (badge) {
+    badge.className = `signal-badge ${signalClass(signal.type)}`;
+    badge.textContent = signal.label || "대기";
+  }
+
+  const source = document.querySelector("#optionsMonitorSource");
+  if (source) {
+    source.textContent = snapshot.source?.key_required === false ? "키 없는 5분봉" : "5분봉 감시";
+  }
+
+  const text = document.querySelector("#optionsMonitorSignal");
+  if (text) {
+    const title = signal.title ? `${signal.title}: ` : "";
+    text.textContent = `${title}${signal.message || "분봉 데이터를 기다리고 있습니다."}`;
+  }
+
+  renderOptionsMonitorMetrics(snapshot);
+  renderOptionsMonitorLegend(snapshot);
+  drawOptionsMonitorChart();
+}
+
+function renderOptionsMonitorMetrics(snapshot) {
+  const metrics = document.querySelector("#optionsMonitorMetrics");
+  if (!metrics) return;
+
+  const main = snapshot.main || {};
+  const secondary = snapshot.secondary || {};
+  const latest = main.latest || {};
+  const secondaryLatest = secondary.latest || {};
+  const age = snapshot.signal?.metrics?.age_minutes;
+  metrics.innerHTML = [
+    {
+      label: "메인",
+      value: formatNum(latest.close, 2),
+      text: main.ok === false ? "조회 실패" : main.label || "KOSPI200",
+    },
+    {
+      label: "보조",
+      value: formatNum(secondaryLatest.close, 2),
+      text: secondary.ok === false ? "보조 조회 실패" : secondary.label || "KODEX200",
+    },
+    {
+      label: "최신봉",
+      value: latest.time || "-",
+      text: Number.isFinite(age) ? `${age}분 지연` : snapshot.generated_at ? "방금 갱신" : "대기",
+    },
+  ]
+    .map(
+      (item) => `
+        <article>
+          <span>${escapeHtml(item.label)}</span>
+          <strong>${escapeHtml(item.value)}</strong>
+          <small>${escapeHtml(item.text)}</small>
+        </article>
+      `,
+    )
+    .join("");
+}
+
+function renderOptionsMonitorLegend(snapshot) {
+  const legend = document.querySelector("#optionsMonitorLegend");
+  if (!legend) return;
+  const levels = snapshot.main?.levels || {};
+  const entries = [
+    { label: "KOSPI200", color: "#17202a" },
+    { label: "61.8%", color: "#2d8f64", value: levels.fib_618 },
+    { label: "50%", color: "#4069b8", value: levels.fib_50 },
+    { label: "105%", color: "#b6504a", value: levels.fib_105 },
+  ];
+  legend.innerHTML = entries
+    .map((entry) => {
+      const suffix = Number.isFinite(number(entry.value)) ? ` ${formatNum(entry.value, 2)}` : "";
+      return `<span style="color:${escapeAttr(entry.color)}"><i></i>${escapeHtml(entry.label + suffix)}</span>`;
+    })
+    .join("");
+}
+
+function drawOptionsMonitorChart() {
+  const canvas = document.querySelector("#optionsMonitorChart");
+  if (!canvas) return;
+
+  const snapshot = state.optionsMonitor || {};
+  const main = snapshot.main || {};
+  const candles = Array.isArray(main.candles) ? main.candles.slice(-72) : [];
+  if (!candles.length) {
+    drawEmptyChart(canvas, "KOSPI200 5분봉 데이터를 기다리고 있습니다.");
+    return;
+  }
+
+  const { context, width, height } = setupCanvas(canvas, 230);
+  context.clearRect(0, 0, width, height);
+
+  const padding = 24;
+  const rightPadding = 48;
+  const closes = candles.map((candle) => number(candle.close)).filter((value) => value != null);
+  const levelEntries = [
+    { key: "fib_618", label: "61.8", color: "#2d8f64" },
+    { key: "fib_50", label: "50", color: "#4069b8" },
+    { key: "fib_100", label: "100", color: "#d89216" },
+    { key: "fib_105", label: "105", color: "#b6504a" },
+  ]
+    .map((level) => ({ ...level, value: number(main.levels?.[level.key]) }))
+    .filter((level) => level.value != null);
+  const allValues = closes.concat(levelEntries.map((level) => level.value));
+  const min = Math.min(...allValues);
+  const max = Math.max(...allValues);
+  const span = max - min || 1;
+  const xFor = (index) => padding + index * ((width - padding - rightPadding) / Math.max(candles.length - 1, 1));
+  const yFor = (value) => height - padding - ((value - min) / span) * (height - padding * 2);
+
+  drawGrid(context, width, height, padding);
+  levelEntries.forEach((level) => {
+    drawHorizontalLevel(context, width, padding, yFor(level.value), level.label, level.value, level.color);
+  });
+  drawSeries(context, candles.map((candle) => number(candle.close)), xFor, yFor, "#17202a", 2.7, []);
+
+  const latest = candles[candles.length - 1];
+  const latestClose = number(latest?.close);
+  if (latest && latestClose != null) {
+    const latestX = xFor(candles.length - 1);
+    const latestY = yFor(latestClose);
+    context.fillStyle = "#008c8c";
+    context.beginPath();
+    context.arc(latestX, latestY, 4, 0, Math.PI * 2);
+    context.fill();
+    context.fillStyle = "#17202a";
+    context.font = "11px Segoe UI, sans-serif";
+    context.textAlign = "right";
+    context.fillText(`${latest.time} ${formatNum(latestClose, 2)}`, width - padding, Math.max(14, latestY - 8));
+  }
+}
+
+function maybeFireOptionsAlert(snapshot) {
+  if (!state.optionsAlertsEnabled) return;
+  const signal = snapshot.signal || snapshot.main?.signal || {};
+  if (!OPTIONS_MONITOR_ALERT_TYPES.has(signal.type)) return;
+  if (signal.alert_level === "silent") return;
+
+  const latest = snapshot.main?.latest || {};
+  const alertKey = `${signal.rule}:${signal.time}:${latest.datetime || ""}:${latest.close || ""}`;
+  if (state.lastOptionsAlertKey === alertKey) return;
+  state.lastOptionsAlertKey = alertKey;
+  fireOptionsAlert(signal);
+}
+
+async function fireOptionsAlert(signal, force = false) {
+  if (!force && !state.optionsAlertsEnabled) return;
+  playOptionsTone(signal.type);
+  vibrateOptionsSignal(signal.type);
+
+  const title = `옵션 감시: ${signal.title || signal.label || "신호"}`;
+  const body = signal.message || "KOSPI200 5분봉 신호를 확인하세요.";
+  try {
+    if (state.serviceWorkerRegistration && "Notification" in window && Notification.permission === "granted") {
+      await state.serviceWorkerRegistration.showNotification(title, {
+        body,
+        tag: `options-monitor-${signal.rule || "signal"}`,
+        renotify: true,
+        requireInteraction: signal.type === "candidate" || signal.type === "sell",
+      });
+    } else if ("Notification" in window && Notification.permission === "granted") {
+      new Notification(title, { body, tag: `options-monitor-${signal.rule || "signal"}` });
+    }
+  } catch (error) {
+    // Sound and vibration are still the primary path while the monitor page is open.
+  }
+}
+
+function unlockOptionsAudio() {
+  const AudioContext = window.AudioContext || window.webkitAudioContext;
+  if (!AudioContext) return;
+  if (!state.optionsAudioContext) state.optionsAudioContext = new AudioContext();
+  if (state.optionsAudioContext.state === "suspended") {
+    state.optionsAudioContext.resume();
+  }
+}
+
+function playOptionsTone(type) {
+  const AudioContext = window.AudioContext || window.webkitAudioContext;
+  if (!AudioContext) return;
+  if (!state.optionsAudioContext) state.optionsAudioContext = new AudioContext();
+  const context = state.optionsAudioContext;
+  if (context.state === "suspended") context.resume();
+
+  const pattern =
+    type === "sell"
+      ? [760, 520, 760, 520]
+      : type === "candidate"
+        ? [880, 880, 660]
+        : type === "warning"
+          ? [620, 620]
+          : [520];
+
+  pattern.forEach((frequency, index) => {
+    const start = context.currentTime + index * 0.18;
+    const oscillator = context.createOscillator();
+    const gain = context.createGain();
+    oscillator.frequency.value = frequency;
+    oscillator.type = "sine";
+    gain.gain.setValueAtTime(0.0001, start);
+    gain.gain.exponentialRampToValueAtTime(0.14, start + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.13);
+    oscillator.connect(gain).connect(context.destination);
+    oscillator.start(start);
+    oscillator.stop(start + 0.14);
+  });
+}
+
+function vibrateOptionsSignal(type) {
+  if (!navigator.vibrate) return;
+  const pattern =
+    type === "sell"
+      ? [260, 90, 260, 90, 420]
+      : type === "candidate"
+        ? [220, 80, 220, 80, 220]
+        : type === "warning"
+          ? [150, 70, 150]
+          : [90];
+  navigator.vibrate(pattern);
+}
+
+function updateOptionsAlertStatus(extraMessage = "") {
+  const status = document.querySelector("#optionsMonitorAlertStatus");
+  const button = document.querySelector("#enableOptionsAlerts");
+  if (!status) return;
+
+  const secureText = window.isSecureContext
+    ? "알림센터 권한을 사용할 수 있는 환경입니다."
+    : "현재 주소는 보안 컨텍스트가 아니라 알림센터 권한이 제한될 수 있습니다. 그래도 열린 화면의 소리/진동은 사용합니다.";
+  const permission =
+    "Notification" in window
+      ? `브라우저 알림: ${Notification.permission}`
+      : "브라우저 알림: 미지원";
+  status.textContent = extraMessage || `${state.optionsAlertsEnabled ? "알림 켜짐" : "알림 꺼짐"} · ${permission} · ${secureText}`;
+  if (button) button.textContent = state.optionsAlertsEnabled ? "알림 켜짐" : "알림 켜기";
+}
+
 function setupSectionAccordions() {
   document.querySelectorAll(".mode-panel .chart-card, .mode-panel .list-card, .mode-panel .metrics-card").forEach((section, index) => {
     if (section.dataset.accordionReady === "true") return;
+    if (section.dataset.accordion === "skip") return;
     const head = section.querySelector(":scope > .section-head");
     if (!head) return;
 
@@ -858,6 +1219,7 @@ function setAccordionState(section, open) {
 function redrawCurrentModeCharts() {
   if (state.mode === "index") drawIndexBlueprint();
   else if (state.mode === "weekly") {
+    drawOptionsMonitorChart();
     drawWeeklyBlueprint();
     renderWeeklyReplay();
   } else if (state.mode === "stocks") {
@@ -1278,15 +1640,16 @@ function renderWeeklyHero() {
   document.querySelector("#asOfDate").textContent = date;
   document.querySelector("#appTitle").textContent = "위클리 옵션";
   document.querySelector("#marketSummary").textContent =
-    `지수 매매 진입 위치를 ${entry.initial_contracts || 3}계약 분할 주문과 부분 청산 계획으로 바꿉니다.`;
+    `${entry.initial_contracts || 3}계약 분할 · 알림 전용 · 주문 없음`;
   document.querySelector("#topSignalCard").innerHTML = `
-    <span class="signal-badge sell">손실 제한</span>
-    <strong>${formatWon(risk.daily_max_loss_krw || 3000000)} 도달 시 중단</strong>
-    <small>이 탭은 실제 주문 실행 전 전략 확인용입니다. 자동 주문은 아직 연결하지 않습니다.</small>
+    <span class="signal-badge sell">중단</span>
+    <strong>손실한도 ${formatWon(risk.daily_max_loss_krw || 3000000)}</strong>
+    <small>신호 확인 후 다른 폰에서 직접 매매합니다.</small>
   `;
 }
 
 function renderWeeklyPanel() {
+  renderOptionsMonitor();
   const strategy = state.weeklyOptions || defaultWeeklyOptions;
   const risk = strategy.risk_limits || {};
   const availability = strategy.availability || {};
@@ -1753,13 +2116,20 @@ function renderWeeklyReplay(strategy = state.weeklyOptions || defaultWeeklyOptio
   const replay = strategy.signal_replay || {};
   const availability = strategy.availability || {};
   const sessions = Array.isArray(replay.sessions) ? replay.sessions : [];
-  const activeSession =
+  const requestedDate = state.weeklyReplayDate || state.weeklyReplaySessionId || replay.active_session_id || null;
+  const requestedSession = sessions.find((session) => session.date === requestedDate || session.id === requestedDate) || null;
+  const requestedSessionMissing = Boolean(requestedDate && !requestedSession);
+  const fallbackSession =
     sessions.find((session) => session.id === state.weeklyReplaySessionId) ||
     sessions.find((session) => session.id === replay.active_session_id) ||
     sessions.find((session) => session.status === "public_reviewed" || session.status === "reviewed") ||
     null;
+  const activeSession = requestedSessionMissing ? null : requestedSession || fallbackSession;
   if (activeSession && state.weeklyReplaySessionId !== activeSession.id) {
     state.weeklyReplaySessionId = activeSession.id;
+  }
+  if (activeSession && state.weeklyReplayDate !== activeSession.date) {
+    state.weeklyReplayDate = activeSession.date || activeSession.id || null;
   }
   const signals = Array.isArray(activeSession?.signals)
     ? activeSession.signals
@@ -1776,11 +2146,24 @@ function renderWeeklyReplay(strategy = state.weeklyOptions || defaultWeeklyOptio
   const text = document.querySelector("#weeklyReplayText");
   const list = document.querySelector("#weeklySignalReplay");
   const legend = document.querySelector("#weeklyReplayLegend");
+  const dateInput = document.querySelector("#weeklyReplayDate");
   if (!title || !badge || !text || !list || !legend) return;
 
-  title.textContent = replay.label || "최근 1주 신호 차트";
-  badge.textContent = activeSession?.profile?.label || availability.label || "공개 복기";
-  text.textContent = activeSession?.trade_plan?.text || replay.notice || "실제 5분봉 데이터 연결 전에는 알고리즘 기준 복기 레이어로 표시합니다.";
+  if (dateInput) {
+    const sessionDates = sessions.map((session) => session.date || session.id).filter(Boolean).sort();
+    dateInput.value = state.weeklyReplayDate || "";
+    if (sessionDates.length) {
+      dateInput.min = sessionDates[0];
+      dateInput.max = sessionDates[sessionDates.length - 1];
+    }
+  }
+
+  title.textContent = activeSession?.label || replay.label || "최근 1주 신호 차트";
+  badge.textContent = requestedSessionMissing ? "자료 없음" : activeSession?.profile?.label || availability.label || "공개 복기";
+  badge.className = `signal-badge ${requestedSessionMissing ? "warning" : "watch"}`;
+  text.textContent = requestedSessionMissing
+    ? `${requestedDate} 복기 데이터가 아직 없습니다. 저장된 날짜를 선택하면 해당 차트와 신호가 표시됩니다.`
+    : activeSession?.trade_plan?.text || replay.notice || "실제 5분봉 데이터 연결 전에는 알고리즘 기준 복기 레이어로 표시합니다.";
   legend.innerHTML = [
     { label: "지수 흐름", color: "#17202a" },
     { label: "30이평", color: "#008c8c" },
@@ -1810,7 +2193,8 @@ function renderWeeklyReplay(strategy = state.weeklyOptions || defaultWeeklyOptio
     `;
   }).join("");
 
-  const signalCards = signals.length ? signals.map((signal) => `
+  const visibleSignals = requestedSessionMissing ? [] : signals;
+  const signalCards = visibleSignals.length ? visibleSignals.map((signal) => `
     <article class="replay-signal ${escapeAttr(signal.type || "watch")}">
       <span>${escapeHtml(signal.time || "-")}<br>${escapeHtml(signal.action || "")}</span>
       <div>
@@ -1821,28 +2205,30 @@ function renderWeeklyReplay(strategy = state.weeklyOptions || defaultWeeklyOptio
     </article>
   `).join("") : `
     <article class="replay-signal watch">
-      <span>대기</span>
+      <span>${escapeHtml(requestedDate || "대기")}</span>
       <div>
-        <strong>복기 신호 없음</strong>
-        <small>어제 하루 기준 신호 데이터가 아직 없습니다.</small>
+        <strong>${requestedSessionMissing ? "선택 날짜 자료 없음" : "복기 신호 없음"}</strong>
+        <small>${requestedSessionMissing ? "저장된 공개 복기 날짜를 선택하세요." : "선택한 날짜 기준 신호 데이터가 아직 없습니다."}</small>
       </div>
     </article>
   `;
-  list.innerHTML = sessionCards + signalCards;
+  list.innerHTML = sessionCards ? `<div class="replay-session-strip">${sessionCards}</div>${signalCards}` : signalCards;
   list.querySelectorAll("[data-replay-session]").forEach((button) => {
     button.addEventListener("click", () => {
       state.weeklyReplaySessionId = button.dataset.replaySession;
+      const selected = sessions.find((session) => session.id === state.weeklyReplaySessionId);
+      state.weeklyReplayDate = selected?.date || state.weeklyReplaySessionId;
       renderWeeklyReplay(strategy);
     });
   });
 
-  requestAnimationFrame(() => drawWeeklyReplayChart(replay, series, signals, activeSession));
+  requestAnimationFrame(() => drawWeeklyReplayChart(replay, requestedSessionMissing ? [] : series, visibleSignals, requestedSessionMissing ? null : activeSession));
 }
 
 function drawWeeklyReplayChart(replay = {}, series = [], signals = [], activeSession = null) {
   const canvas = document.querySelector("#weeklyReplayChart");
   if (!canvas) return;
-  const { context, width, height } = setupCanvas(canvas, 360);
+  const { context, width, height } = setupCanvas(canvas, 320);
   context.clearRect(0, 0, width, height);
 
   const points = series
@@ -2754,7 +3140,10 @@ function escapeAttr(value) {
 
 window.addEventListener("resize", () => {
   if (state.mode === "index") drawIndexBlueprint();
-  else if (state.mode === "weekly") drawWeeklyBlueprint();
+  else if (state.mode === "weekly") {
+    drawOptionsMonitorChart();
+    drawWeeklyBlueprint();
+  }
   else if (state.mode === "stocks") renderSelectedChart();
 });
 

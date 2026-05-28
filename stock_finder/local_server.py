@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import functools
+import json
 import logging
 import threading
 import time
@@ -9,6 +10,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from stock_finder.market_report import build_market_site_data
+from stock_finder.options_monitor import build_options_monitor_snapshot
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -25,7 +27,7 @@ def serve_local_app(args: argparse.Namespace) -> None:
         thread = threading.Thread(target=_refresh_loop, args=(args,), daemon=True)
         thread.start()
 
-    handler = functools.partial(SimpleHTTPRequestHandler, directory=str(PROJECT_ROOT))
+    handler = functools.partial(StockFinderRequestHandler, directory=str(PROJECT_ROOT))
     server = ThreadingHTTPServer((args.host, args.port), handler)
     LOGGER.info("serving 1MonthFinder at http://%s:%s/site/", args.host, args.port)
     LOGGER.info("same Wi-Fi phone URL is usually http://<computer-ip>:%s/site/", args.port)
@@ -35,6 +37,45 @@ def serve_local_app(args: argparse.Namespace) -> None:
         LOGGER.info("stopping local server")
     finally:
         server.server_close()
+
+
+class StockFinderRequestHandler(SimpleHTTPRequestHandler):
+    def do_GET(self) -> None:
+        if self.path.split("?", 1)[0] == "/api/options-monitor":
+            self._send_options_monitor()
+            return
+        super().do_GET()
+
+    def _send_options_monitor(self) -> None:
+        try:
+            payload = build_options_monitor_snapshot()
+            status = 200 if payload.get("ok") else 502
+        except Exception as exc:
+            LOGGER.exception("options monitor snapshot failed")
+            status = 500
+            payload = {
+                "ok": False,
+                "mode": "monitor_only",
+                "error": str(exc),
+                "signal": {
+                    "type": "warning",
+                    "label": "서버 오류",
+                    "title": "서버 오류",
+                    "message": "옵션 감시 데이터를 계산하지 못했습니다.",
+                    "alert_level": "normal",
+                    "rule": "SERVER_ERROR",
+                    "time": "-",
+                    "metrics": {},
+                },
+            }
+
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
 
 def _refresh_loop(args: argparse.Namespace) -> None:
