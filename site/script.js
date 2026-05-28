@@ -1212,6 +1212,11 @@ function renderWeeklyPanel() {
   const lotteryFinalRule = profitLottery.final_20_minutes || {};
   const pressureFilter = money.downside_pressure_filter || {};
   const entry = strategy.entry || {};
+  const orderPolicy = entry.order_ladder_policy || {};
+  const partialFill = entry.partial_fill_policy || {};
+  const partialFillOne = partialFill.one_contract || {};
+  const partialFillTwo = partialFill.two_contracts || {};
+  const unfilledOrder = entry.unfilled_order_management || {};
   const rolePlan = strategy.position_roles || {};
   const safetyRole = rolePlan.safety_margin || {};
   const profitRole = rolePlan.profit_runner || {};
@@ -1228,6 +1233,8 @@ function renderWeeklyPanel() {
   const minTake = quickRebound.minimum_take_profit || {};
   const freeRunner = quickRebound.free_runner_plan || {};
   const runner = exit.runner || {};
+  const trailingMethod = runner.trailing_stop_method || {};
+  const conflictResolution = exit.conflict_resolution || {};
   const runnerFullExit = runner.full_exit_on_index_50_confluence || {};
   const switchRule = strategy.position_switch || {};
   const switchTrigger = switchRule.trigger || {};
@@ -1265,13 +1272,22 @@ function renderWeeklyPanel() {
   const afterNoonPremiumRange = formatPremiumRange(afterNoonPlan.target_premium_range);
   const resetPremiumRange = formatPremiumRange(resetPrepare.target_premium_range || resetPrepare.premium_range);
   const resetContractRange = formatContractRange(resetPrepare.contracts_range, resetPrepare.contracts || 3);
+  const entryPremiumRange = formatPremiumRange(strike.target_premium_range);
+  const acceptedPremiumRange = formatPremiumRange(orderPolicy.acceptable_fill_premium_range || strike.target_premium_range);
+  const switchLimitValue = switchRetry.allow_consecutive_switches_until_daily_max_loss
+    ? "손실한도 전까지"
+    : `최대 ${formatNum(switchRetry.max_switch_attempts || 2, 0)}회`;
+  const switchLimitDescription = switchRetry.description || "당일 손실 한도를 최상위 제한으로 두고 자리이동 여부를 판단합니다.";
 
   document.querySelector("#weeklyStopBadge").textContent = formatWon(risk.daily_max_loss_krw || 3000000);
   document.querySelector("#weeklyRiskGrid").innerHTML = [
     { label: availability.label || "요일/만기별 분기", value: "월~금", text: availability.description || "큰 지수 자리 판단은 요일 공통으로 두고, 옵션 행사가와 프리미엄은 만기 잔존일별로 조정합니다." },
     { label: weekdayPlan.label || "요일별 옵션 선택값", value: "D-2 · D-1 · 만기", text: weekdayPlan.description || "프리미엄이 붙어 있는 정도에 따라 행사가 거리와 목표 프리미엄을 바꿉니다." },
     { label: "당일 최대 손실", value: formatWon(risk.daily_max_loss_krw || 3000000), text: risk.description || "" },
+    { label: "손실 계산", value: risk.loss_basis_label || "실현+평가+수수료", text: "평가손익, 실현손익, 수수료를 모두 더한 누적 손실 기준으로 중단 여부를 봅니다." },
     { label: "1회 손절 비용", value: perStopRange, text: risk.per_stop_loss_description || "손절과 자리이동을 감수해 반등 시 수익 회수를 빠르게 노립니다." },
+    { label: "계약 기준", value: entry.contract_scope_label || `신호당 ${entry.initial_contracts || 3}계약`, text: entry.contract_scope_description || "초기 계약수는 하루 총량이 아니라 지수 신호 1회당 기준 물량입니다." },
+    { label: "일시 노출", value: `최대 ${formatNum(switchExecution.max_temporary_contracts || entry.initial_contracts * 2 || 6, 0)}계약`, text: switchExecution.description || "자리이동 체결 과정에서는 새 3계약과 기존 3계약이 잠시 겹칠 수 있습니다." },
     { label: "수익 잠금", value: profitLockRange, text: profitLock.description || "당일 수익 달성 후 보수 모드로 전환합니다." },
     { label: "이후 진입", value: `${afterLock.max_contracts || 1}계약만`, text: afterLock.description || "급소자리 외에는 진입하지 않고 수익담보 내에서만 운용합니다." },
     { label: "수익담보 눌림", value: `${profitScalp.max_contracts || 1}계약`, text: profitScalp.description || "전환선 눌림에서 1계약만 진입하고 30이평 터치 시 청산합니다." },
@@ -1282,8 +1298,8 @@ function renderWeeklyPanel() {
     { label: "100% 앞선 자리", value: "최소 물량", text: entryTiming.description || "우측 바닥이 더 높게 돌 수 있어 100%를 딱 기다리지 않고 앞선 자리도 봅니다." },
     { label: "만기 12시 후", value: `${formatNum(afterNoonPlan.strike_offset_pct || 1.5, 1)}% / ${afterNoonPremiumRange}`, text: afterNoonPlan.description || "프리미엄 급감 구간에서는 더 가까운 행사가와 낮은 프리미엄으로 재선정합니다." },
     { label: "12시 후 손절", value: `-${formatNum(afterNoonPlan.stop_loss_pct || 40, 0)}%`, text: afterNoonPlan.position_switch_required ? "손절 범위를 40%로 두고 자리이동을 전제로 운용합니다." : "손절 기준 확인이 필요합니다." },
-    { label: "자리이동 한도", value: `${formatNum(switchRetry.max_switch_attempts || 2, 0)}회`, text: switchRetry.description || "핵심 자리 이탈 구간에서는 자리이동을 최대 두 번까지만 허용합니다." },
-    { label: "이후 대기", value: "약손실 후 중단", text: criticalBreakdown.description || "방어해야 할 자리가 무너지면 추가 하락이 커질 수 있어 무한 재진입하지 않습니다." },
+    { label: "자리이동 한도", value: switchLimitValue, text: switchLimitDescription },
+    { label: "이후 대기", value: "핵심 이탈 시 수동 판단", text: criticalBreakdown.description || "방어해야 할 자리가 무너지면 추가 하락이 커질 수 있어 수동 대기 후보로 봅니다." },
     { label: "저점 자리이동", value: `${formatNum(lowFloorExit.example_strike || 1270, 0)}콜 ${formatNum(lowFloorExit.example_entry_premium || 2.2, 1)}`, text: lowFloorExit.description || "저점 자리이동 포지션은 빠른 70% 청산 후 잔량만 가져갑니다." },
     { label: "마지막 트라이", value: `${formatNum(finalTry.example_strike || 1260, 0)}콜 ${formatNum(finalTry.example_entry_premium || 2.4, 1)}`, text: finalTry.description || "400/456이평 라인대에서 마지막 트라이 후보를 봅니다." },
     { label: "전구간 피보나치", value: "위치 재점검", text: intradayReview.description || "포지션 변화 후 당일 전체 고저 피보나치로 현재 위치를 다시 봅니다." },
@@ -1294,7 +1310,7 @@ function renderWeeklyPanel() {
     { label: "10배 러너", value: `${formatNum(moonshotRunner.example_entry_premium || 2.2, 1)} → ${formatNum(moonshotRunner.example_current_premium || 20.5, 1)}`, text: moonshotRunner.description || "초강세장에서는 남은 1계약을 끝까지 끌고 가는 수익극대화 가치가 커집니다." },
     { label: "KODEX200 ETF", value: "별도 규칙", text: etfSeparation.description || "ETF는 옵션과 메커니즘이 달라 손절과 재진입 중심으로 별도 설계합니다." },
     { label: "도달 시", value: "오늘 중단", text: "신규 진입과 추가 진입을 멈춥니다." },
-    { label: "초기 계약", value: `${entry.initial_contracts || 3}계약`, text: "1계약씩 3분할 주문을 기본값으로 둡니다." },
+    { label: "초기 계약", value: entry.contract_scope_label || `${entry.initial_contracts || 3}계약`, text: "1계약씩 3분할 주문을 기본값으로 둡니다." },
     { label: "기준 신호", value: "지수 매매", text: "지수 탭의 신규 진입 위치를 옵션 선택의 출발점으로 씁니다." },
     { label: indexReset.label || "지수 피보나치 리셋", value: indexReset.value || "중심라인 콜 2~3계약 재시작", text: indexReset.description || "핵심 자리가 무너지면 리셋 중심라인에서 프리미엄 1.5~1.8 콜을 2~3계약 재시작 후보로 봅니다." },
     { label: resetWick.label || "원하는 자리 밑꼬리", value: "확인 강도 상승", text: resetWick.description || "거의 원하는 자리에서 밑꼬리가 나오면 중심라인 콜 재시작 후보의 신뢰도를 높입니다." },
@@ -1321,6 +1337,26 @@ function renderWeeklyPanel() {
       <span>장초 선택</span>
       <strong>중심가격 +${formatNum(strike.call_strike_offset_pct, 1)}%</strong>
       <small>예: 지수 ${formatNum(strike.example_index, 0)}이면 콜 ${escapeHtml(strike.example_call_strike_zone || "-")} 구간, 만기일 장초 프리미엄 ${morningPremiumRange} 근처를 찾습니다.</small>
+    </article>
+    <article class="option-summary-card">
+      <span>자동 주문가</span>
+      <strong>프리미엄 ${entryPremiumRange || acceptedPremiumRange}</strong>
+      <small>${escapeHtml(orderPolicy.description || "1.6 근처를 중심으로 분할 주문가를 자동 재계산하고 1.4~1.8 범위 체결을 허용합니다.")}</small>
+    </article>
+    <article class="option-summary-card">
+      <span>부분 체결</span>
+      <strong>1계약=러너 · 2계약=+30% 1계약</strong>
+      <small>${escapeHtml(partialFillOne.description || "1계약만 체결되면 트레일링 스탑으로 운용합니다.")} ${escapeHtml(partialFillTwo.description || "")}</small>
+    </article>
+    <article class="option-summary-card">
+      <span>하방 풋 후보</span>
+      <strong>2.5~3% · 프리 2.0</strong>
+      <small>${escapeHtml(entry.direction_rule?.put || "하방 신호는 아직 임시 규칙입니다.")}</small>
+    </article>
+    <article class="option-summary-card">
+      <span>미체결 관리</span>
+      <strong>반등 시 하단 주문 취소</strong>
+      <small>${escapeHtml(unfilledOrder.description || "일부 체결 뒤 시장이 날아가면 아래 받쳐둔 미체결 주문은 취소합니다.")}</small>
     </article>
     <article class="option-summary-card">
       <span>12시 이후</span>
@@ -1494,6 +1530,24 @@ function renderWeeklyPanel() {
     </article>
   ` : "";
 
+  const dynamicExitItems = `
+    <article class="target-item runner">
+      <span>동적 트레일링</span>
+      <strong>전환선 · 기준선 · 30이평</strong>
+      <small>${escapeHtml(trailingMethod.description || "고정 퍼센트가 아니라 5분봉 주요 선과 현재 수익 상황으로 잔량 보유/청산을 판단합니다.")}</small>
+    </article>
+    <article class="target-item runner">
+      <span>감마 청산 정정</span>
+      <strong>높은 호가부터 정정</strong>
+      <small>${escapeHtml(conflictResolution.description || "지수 청산 신호와 옵션 프리미엄 청산이 충돌하면 감마 스퀴즈 가능성을 보며 청산 호가를 단계적으로 정정합니다.")}</small>
+    </article>
+    <article class="target-item stop">
+      <span>미체결 주문 취소</span>
+      <strong>반등 확인 시 하단 주문 제거</strong>
+      <small>${escapeHtml(unfilledOrder.description || "일부 체결 뒤 시장이 반등하면 아래 받쳐둔 미체결 주문은 취소합니다.")}</small>
+    </article>
+  `;
+
   const switchLossRange = Array.isArray(switchTrigger.loss_prepare_pct_range)
     ? `-${formatNum(switchTrigger.loss_prepare_pct_range[0], 0)}~-${formatNum(switchTrigger.loss_prepare_pct_range[1], 0)}%`
     : "-20~-25%";
@@ -1511,8 +1565,8 @@ function renderWeeklyPanel() {
     </article>
     <article class="target-item switch">
       <span>실행 순서</span>
-      <strong>새 ${formatNum(switchExecution.new_contracts, 0)}계약 체결 후 기존 ${formatNum(switchExecution.old_contracts_to_close, 0)}계약 청산</strong>
-      <small>기존 포지션이 약 -${formatNum(switchExecution.old_position_exit_loss_pct, 0)}% 손실권이면 자리이동 확정 시 즉시 정리</small>
+      <strong>일시 최대 ${formatNum(switchExecution.max_temporary_contracts || 6, 0)}계약 허용</strong>
+      <small>새 ${formatNum(switchExecution.new_contracts, 0)}계약 체결 후 기존 ${formatNum(switchExecution.old_contracts_to_close, 0)}계약 청산 · 기존 포지션이 약 -${formatNum(switchExecution.old_position_exit_loss_pct, 0)}% 손실권이면 즉시 정리</small>
     </article>
     <article class="target-item switch">
       <span>저점 자리이동 회수</span>
@@ -1536,8 +1590,8 @@ function renderWeeklyPanel() {
     </article>
     <article class="target-item switch">
       <span>자리이동 제한</span>
-      <strong>최대 ${formatNum(switchRetry.max_switch_attempts || 2, 0)}회</strong>
-      <small>${escapeHtml(switchRetry.description || "핵심 자리 이탈 구간에서는 자리이동을 최대 두 번까지만 허용합니다.")}</small>
+      <strong>${escapeHtml(switchLimitValue)}</strong>
+      <small>${escapeHtml(switchLimitDescription)}</small>
     </article>
     <article class="target-item switch">
       <span>약손실 후 대기</span>
@@ -1563,7 +1617,7 @@ function renderWeeklyPanel() {
   `;
   }).join("");
 
-  document.querySelector("#weeklyTargetList").innerHTML = lossItem + roleItems + quickReboundItems + bounceTargetItems + lateExtensionItems + profitScalpItems + switchItems + targetItems + `
+  document.querySelector("#weeklyTargetList").innerHTML = lossItem + roleItems + quickReboundItems + bounceTargetItems + lateExtensionItems + profitScalpItems + dynamicExitItems + switchItems + targetItems + `
     <article class="target-item runner">
       <span>잔량 운용</span>
       <strong>${formatNum(runner.contracts || 1, 0)}계약</strong>
@@ -1820,8 +1874,11 @@ function drawWeeklyBlueprint(strategy = state.weeklyOptions || defaultWeeklyOpti
     scalp_entry: number(profitScalp.example_entry_premium) ?? avgEntry,
     lottery_entry: number(profitLottery.target_entry_premium) ?? avgEntry,
     stop_loss_pct: number(loss.hold_until_loss_pct) ?? 30,
-    max_switch_attempts: number(switchRetry.max_switch_attempts) ?? 2,
+    max_switch_attempts: number(switchRetry.max_switch_attempts),
   };
+  const switchLabel = switchRetry.allow_consecutive_switches_until_daily_max_loss
+    ? "자리이동 손실한도 전까지"
+    : `자리이동 최대 ${formatNum(scope.max_switch_attempts ?? 2, 0)}회`;
   const lineConfigs = visual.lines?.length ? visual.lines : defaultWeeklyOptions.visual_chart.lines;
   const levels = lineConfigs
     .map((line) => ({
@@ -1875,7 +1932,7 @@ function drawWeeklyBlueprint(strategy = state.weeklyOptions || defaultWeeklyOpti
   context.textAlign = "left";
   context.fillText(`평균 ${formatNum(avgEntry, 2)}`, padding, 15);
   context.textAlign = "right";
-  context.fillText(`자리이동 최대 ${formatNum(scope.max_switch_attempts, 0)}회`, width - padding, height - 8);
+  context.fillText(switchLabel, width - padding, height - 8);
 }
 
 function weeklyAverageEntry(entry, loss) {

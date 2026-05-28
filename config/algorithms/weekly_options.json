@@ -22,10 +22,16 @@
       300000,
       500000
     ],
-    "per_stop_loss_description": "1회 손절당 30~50만원 손실이 날 수 있으나, 손절 및 자리이동을 통해 반등 시 더 빠르게 수익을 회수하는 구조로 본다.",
+    "per_stop_loss_description": "1회 손절 비용은 자리이동 1회 기준으로 본다. 수수료는 1차적으로 너무 민감하게 보지 않고, 대략 20~35% 손절 및 자리이동 개념으로 운용한다. 실제 금액은 30~50만원에서 벗어날 수 있다.",
     "on_breach": "STOP_TRADING_FOR_DAY",
-    "description": "당일 최대 손실 300만원에 걸리면 그날은 신규 진입과 추가 진입을 중단한다.",
-    "loss_basis": "TODO: 실현손익만 볼지, 평가손익과 수수료까지 포함할지 확인 필요"
+    "description": "당일 최대 손실 300만원은 평가손익, 실현손익, 수수료를 모두 포함한 누적 손실 기준으로 본다. 이 기준에 걸리면 그날은 신규 진입과 추가 진입을 중단한다.",
+    "loss_basis": "realized_pnl + unrealized_pnl + fees_cumulative",
+    "loss_components": [
+      "realized_pnl",
+      "unrealized_pnl",
+      "fees"
+    ],
+    "loss_basis_label": "실현+평가+수수료"
   },
   "money_management": {
     "status": "draft",
@@ -60,9 +66,9 @@
         "label": "수익담보 버리는 옵션",
         "direction": "call",
         "max_contracts": 1,
-        "target_entry_premium": 1.0,
+        "target_entry_premium": 1,
         "example_cost_krw": 250000,
-        "example_target_premium": 4.0,
+        "example_target_premium": 4,
         "example_profit_krw": 1000000,
         "description": "주요 포지션을 올청한 뒤에도 초강세 흐름이 이어질 때는 당일 수익을 담보로 다른 1.0 근처 옵션 1계약을 버린다는 마음으로 남겨두는 추가 수익 전략을 고려한다. 손실나도 당일 수익 안에서 감당 가능한 소액이어야 한다.",
         "final_20_minutes": {
@@ -101,7 +107,7 @@
     "entry_source": "index_trading.new_entry_zone",
     "direction_rule": {
       "call": "지수 매매 상방 신규 진입 위치에서 콜옵션을 선택한다.",
-      "put": "TODO: 하방 진입 시 풋옵션 행사가 산정 방식을 확인한다."
+      "put": "하방 풋 진입은 아직 본 전략의 주 대상은 아니지만, 하방 신호를 쓴다면 중심가격에서 약 2.5~3% 라인대의 풋 중 프리미엄 약 2.0 근처를 우선 후보로 본다. 풋은 콜보다 상대적으로 프리미엄이 더 비싸다는 점을 반영한다."
     },
     "strike_selection": {
       "call_strike_offset_pct": 2.5,
@@ -109,10 +115,12 @@
       "example_call_strike_zone": "1312~1320",
       "target_premium": 1.6,
       "target_premium_range": [
-        1.5,
-        1.7
+        1.4,
+        1.8
       ],
-      "description": "현재 중심가격에서 약 2.5% 위 행사가 중 프리미엄이 1.6 근처인 콜옵션을 찾는다."
+      "description": "현재 중심가격에서 약 2.5% 위 행사가 중 프리미엄이 1.6 근처인 콜옵션을 찾는다. 실제 허용 범위는 1.4~1.8이며, 1.2 근처는 손절 또는 자리이동을 준비할 가격대로 본다.",
+      "target_premium_range_label": "1.4~1.8",
+      "stop_replacement_premium": 1.2
     },
     "double_bottom_entry_timing": {
       "status": "draft",
@@ -149,7 +157,7 @@
             "range_point_offset": 50,
             "target_premium_range": [
               2.5,
-              3.0
+              3
             ],
             "description": "만기 D-1은 프리가 더 붙어 있으므로 현재 레인지에서 약 50p 위 콜 중 2.5~3.0짜리 트라이를 우선 후보로 본다."
           },
@@ -161,7 +169,7 @@
             "range_point_offset": 70,
             "target_premium_range": [
               2.5,
-              3.0
+              3
             ],
             "description": "만기 D-2는 레인지에서 약 70p 위 콜 중 2.5~3.0짜리 트라이를 우선 후보로 본다."
           },
@@ -173,7 +181,7 @@
             "range_point_offset": "TODO",
             "target_premium_range": [
               2.5,
-              3.0
+              3
             ],
             "description": "금요일도 큰 기조는 같지만 어떤 만기물을 기준으로 볼지와 레인지 p값은 추가 확인이 필요하다. 임시로 2.5~3.0 프리미엄 후보군만 표시한다."
           }
@@ -193,7 +201,7 @@
         "strike_offset_pct": 1.5,
         "target_premium_range": [
           0.6,
-          1.0
+          1
         ],
         "stop_loss_pct": 40,
         "position_switch_required": true,
@@ -204,21 +212,52 @@
       {
         "contracts": 1,
         "limit_price": 1.7,
-        "label": "1차 매수"
+        "label": "1차 매수",
+        "formula": "target_premium + 0.10"
       },
       {
         "contracts": 1,
         "limit_price": 1.6,
-        "label": "2차 매수"
+        "label": "2차 매수",
+        "formula": "target_premium"
       },
       {
         "contracts": 1,
         "limit_price": 1.45,
-        "label": "3차 매수"
+        "label": "3차 매수",
+        "formula": "target_premium - 0.15"
       }
     ],
     "expected_average_if_all_filled": 1.58,
-    "partial_fill_policy": "TODO: 1~2계약만 체결됐을 때 청산 주문을 어떻게 배분할지 확인 필요"
+    "partial_fill_policy": {
+      "one_contract": {
+        "action": "RUNNER_ONLY_TRAILING_STOP",
+        "description": "1계약만 체결되면 부분청산 주문을 나누지 않고 수익극대화 물량으로 보고 트레일링 스탑으로 자른다."
+      },
+      "two_contracts": {
+        "first_exit_profit_pct": 30,
+        "first_exit_contracts": 1,
+        "runner_contracts": 1,
+        "description": "2계약만 체결되면 +30% 자리에서 1계약을 청산하고, 남은 1계약은 트레일링 스탑 개념으로 운용한다."
+      }
+    },
+    "contract_scope": "per_index_signal",
+    "contract_scope_label": "신호당 3계약",
+    "contract_scope_description": "초기 3계약은 하루 전체 총량이 아니라 한 번의 지수 진입 신호당 기본 진입 물량이다.",
+    "order_ladder_policy": {
+      "auto_recalculate_from_target_premium": true,
+      "target_premium": 1.6,
+      "acceptable_fill_premium_range": [
+        1.4,
+        1.8
+      ],
+      "stop_replacement_premium": 1.2,
+      "description": "1.70, 1.60, 1.45는 고정값이 아니라 프리미엄 1.6 근처를 기준으로 자동 재계산할 수 있는 예시 분할가다. 대략 1.4~1.8 범위에서 적당히 잡히면 허용한다."
+    },
+    "unfilled_order_management": {
+      "cancel_lower_resting_orders_after_partial_fill_and_rebound": true,
+      "description": "주문 중 일부가 체결된 뒤 시장이 다시 반등해 날아가면, 아래에 받쳐 둔 미체결 물량은 안전을 위해 취소한다."
+    }
   },
   "visual_chart": {
     "title": "옵션 프리미엄 전략선",
@@ -401,21 +440,111 @@
       "reset_mid_618_100": 1266.72
     },
     "series": [
-      { "time": "09:00", "index": 1298.0, "gma30": 1286.0, "gma50": 1274.0, "tenkan": 1290.0 },
-      { "time": "09:30", "index": 1306.0, "gma30": 1287.3, "gma50": 1274.8, "tenkan": 1295.0 },
-      { "time": "10:00", "index": 1320.0, "gma30": 1288.7, "gma50": 1275.6, "tenkan": 1304.0 },
-      { "time": "10:30", "index": 1332.0, "gma30": 1290.0, "gma50": 1276.5, "tenkan": 1312.0 },
-      { "time": "11:00", "index": 1325.0, "gma30": 1291.4, "gma50": 1277.3, "tenkan": 1315.0 },
-      { "time": "11:30", "index": 1311.0, "gma30": 1292.8, "gma50": 1278.1, "tenkan": 1308.0 },
-      { "time": "12:00", "index": 1301.0, "gma30": 1294.1, "gma50": 1278.9, "tenkan": 1298.0 },
-      { "time": "12:30", "index": 1290.0, "gma30": 1295.5, "gma50": 1279.7, "tenkan": 1287.0 },
-      { "time": "13:00", "index": 1278.0, "gma30": 1296.8, "gma50": 1280.6, "tenkan": 1279.0 },
-      { "time": "13:20", "index": 1274.0, "gma30": 1298.2, "gma50": 1281.4, "tenkan": 1274.0 },
-      { "time": "13:40", "index": 1283.0, "gma30": 1299.5, "gma50": 1282.2, "tenkan": 1281.0 },
-      { "time": "14:00", "index": 1292.0, "gma30": 1300.9, "gma50": 1283.0, "tenkan": 1289.0 },
-      { "time": "14:20", "index": 1300.0, "gma30": 1302.2, "gma50": 1283.8, "tenkan": 1297.0 },
-      { "time": "14:40", "index": 1308.0, "gma30": 1303.6, "gma50": 1284.7, "tenkan": 1304.0 },
-      { "time": "15:25", "index": 1306.0, "gma30": 1304.9, "gma50": 1285.5, "tenkan": 1302.0 }
+      {
+        "time": "09:00",
+        "index": 1298,
+        "gma30": 1286,
+        "gma50": 1274,
+        "tenkan": 1290
+      },
+      {
+        "time": "09:30",
+        "index": 1306,
+        "gma30": 1287.3,
+        "gma50": 1274.8,
+        "tenkan": 1295
+      },
+      {
+        "time": "10:00",
+        "index": 1320,
+        "gma30": 1288.7,
+        "gma50": 1275.6,
+        "tenkan": 1304
+      },
+      {
+        "time": "10:30",
+        "index": 1332,
+        "gma30": 1290,
+        "gma50": 1276.5,
+        "tenkan": 1312
+      },
+      {
+        "time": "11:00",
+        "index": 1325,
+        "gma30": 1291.4,
+        "gma50": 1277.3,
+        "tenkan": 1315
+      },
+      {
+        "time": "11:30",
+        "index": 1311,
+        "gma30": 1292.8,
+        "gma50": 1278.1,
+        "tenkan": 1308
+      },
+      {
+        "time": "12:00",
+        "index": 1301,
+        "gma30": 1294.1,
+        "gma50": 1278.9,
+        "tenkan": 1298
+      },
+      {
+        "time": "12:30",
+        "index": 1290,
+        "gma30": 1295.5,
+        "gma50": 1279.7,
+        "tenkan": 1287
+      },
+      {
+        "time": "13:00",
+        "index": 1278,
+        "gma30": 1296.8,
+        "gma50": 1280.6,
+        "tenkan": 1279
+      },
+      {
+        "time": "13:20",
+        "index": 1274,
+        "gma30": 1298.2,
+        "gma50": 1281.4,
+        "tenkan": 1274
+      },
+      {
+        "time": "13:40",
+        "index": 1283,
+        "gma30": 1299.5,
+        "gma50": 1282.2,
+        "tenkan": 1281
+      },
+      {
+        "time": "14:00",
+        "index": 1292,
+        "gma30": 1300.9,
+        "gma50": 1283,
+        "tenkan": 1289
+      },
+      {
+        "time": "14:20",
+        "index": 1300,
+        "gma30": 1302.2,
+        "gma50": 1283.8,
+        "tenkan": 1297
+      },
+      {
+        "time": "14:40",
+        "index": 1308,
+        "gma30": 1303.6,
+        "gma50": 1284.7,
+        "tenkan": 1304
+      },
+      {
+        "time": "15:25",
+        "index": 1306,
+        "gma30": 1304.9,
+        "gma50": 1285.5,
+        "tenkan": 1302
+      }
     ],
     "signals": [
       {
@@ -596,28 +725,43 @@
     "runner": {
       "contracts": 1,
       "management": "trailing_stop_or_index_exit_signal",
-      "description": "남은 1계약은 수익극대화 물량으로 두고 트레일링 스탑 또는 지수 청산 신호 전까지 끌고 간다.",
-      "trailing_stop_formula": "TODO",
+      "description": "남은 1계약은 수익극대화 물량으로 두고, 5분봉 전환선/기준선/30이평과 현재 수익 상황을 기준으로 동적으로 끌고 간다.",
+      "trailing_stop_formula": "dynamic_5m_lines_and_profit_context",
       "full_exit_on_index_50_confluence": {
         "status": "draft",
         "trigger": "index.current_index_near_intraday_full_fib_50 AND index.current_index_near_gma_50_5m",
         "action": "EXIT_ALL_REMAINING",
         "after_action": "DAILY_DONE_NO_MORE_TRY",
         "description": "수익극대화 잔량이 남아 있고 지수가 당일 전구간 50% 자리이면서 50이평 자리와 겹치면 잔량은 올청 후보로 본다. 당일 수익을 확보했다면 이후 더 트라이하지 않고 매매를 종료한다."
+      },
+      "trailing_stop_method": {
+        "fixed_pct": false,
+        "management_lines": [
+          "tenkan_5m",
+          "kijun_5m",
+          "gma_30_5m"
+        ],
+        "description": "트레일링 스탑은 고점 대비 고정 퍼센트가 아니라 5분봉 전환선, 기준선, 30이평 위에서 버티는지와 현재 수익 상황을 함께 보고 더 끌고 갈지 확정할지 판단한다."
       }
+    },
+    "conflict_resolution": {
+      "index_vs_option_exit_priority": "contextual_option_premium_execution",
+      "gamma_squeeze_watch": true,
+      "description": "지수 청산 신호와 옵션 프리미엄 청산 신호가 충돌하면 기계적으로 지수 음봉에서 바로 콜을 던지지 않는다. 강한 양봉 연속으로 감마 스퀴즈가 날 수 있는 자리에서는 높은 프리미엄 청산가를 먼저 대고, 미체결이면 4.80 -> 4.65 -> 4.50 -> 4.30처럼 가격을 정정해 고프리를 유지하며 청산을 시도한다."
     }
   },
   "position_switch": {
     "status": "draft",
     "rationale": "손절 및 자리이동을 하면서 더 안쪽 콜옵션으로 당겨와야 시장이 반등할 때 프리미엄 회복과 수익 전환을 빠르게 가져올 수 있다.",
     "trigger": {
-      "index_push_points": "5~10",
+      "index_push_points": "5~10p",
       "fibonacci_zone": "100%~103%",
       "loss_prepare_pct_range": [
         20,
         25
       ],
-      "description": "시장이 피보나치 진입 구간 이후 5~10포인트 더 밀려 100%~103% 위치로 가고, 기존 옵션이 20~25% 손실권이면 자리이동을 준비한다."
+      "description": "시장이 피보나치 진입 구간 이후 KOSPI200 지수 기준 5~10포인트 더 밀려 100%~103% 위치로 가고, 기존 옵션이 20~25% 손실권이면 자리이동을 준비한다.",
+      "index_push_unit": "KOSPI200_index_points"
     },
     "replacement_selection": {
       "direction": "call",
@@ -628,33 +772,40 @@
       "target_premium_max": 2.2,
       "preferred_entry_price": 2.1,
       "avoid_market_order": true,
-      "description": "초기 진입이 1315콜이었다면 더 안쪽인 1310~1305 사이 콜옵션 중 프리미엄 1.8~2.2 상품을 찾고, 2.1처럼 프리가 저렴한 구간에서 지정가 진입을 노린다."
+      "description": "초기 진입이 1315콜이었다면 더 안쪽인 1310~1305 사이 콜옵션 중 프리미엄 1.8~2.2 상품을 찾는다. 행사가 근접과 프리미엄을 함께 보되, 만기 당일 구조에서는 적절한 가격을 더 우선한다.",
+      "priority": "premium_price_first_then_strike_proximity"
     },
     "execution": {
       "new_contracts": 3,
       "old_contracts_to_close": 3,
       "old_position_exit_loss_pct": 25,
       "sequence": "fill_replacement_then_close_existing",
-      "description": "새 안쪽 콜옵션 3계약이 지정가로 체결되면 기존 -25% 손실권 콜옵션 3계약을 즉시 청산해 자리이동한다."
+      "description": "자리이동 시에는 일시적으로 6계약 노출을 허용한다. 새 안쪽 콜옵션 3계약이 동시에 체결되면 기존 손실권 콜옵션 3계약을 즉시 청산한다.",
+      "allow_temporary_double_exposure": true,
+      "max_temporary_contracts": 6
     },
     "retry_limit": {
-      "max_switch_attempts": 2,
-      "after_limit_action": "WAIT_NO_MORE_TRY",
-      "loss_after_limit": "small_loss",
-      "description": "핵심 자리가 무너지면 크게 무너질 수 있으므로 자리이동은 최대 2번까지만 시도한다. 두 번 이후 약손실 상태면 더 트라이하지 않고 대기한다."
+      "max_switch_attempts": null,
+      "allow_consecutive_switches_until_daily_max_loss": true,
+      "observed_consecutive_switches_range": [
+        6,
+        7
+      ],
+      "after_limit_action": "STOP_ONLY_WHEN_DAILY_MAX_LOSS_REACHED_OR_MANUAL_CRITICAL_WAIT",
+      "description": "자리이동과 손절은 고정 2회 제한이 아니라 당일 최대 손실 기준 전까지 연속 허용한다. 경험상 6~7회 연속 손절도 가능하므로, 앱에서는 당일 손실 한도를 최상위 제한으로 둔다."
     },
     "critical_breakdown": {
       "trigger": "critical_spot_breakdown",
       "risk": "large_breakdown_possible",
-      "action": "stop_retry_and_wait_after_two_switches",
-      "description": "현재 방어해야 할 자리가 무너지면 추가 하락이 커질 수 있어 무한 재진입하지 않는다."
+      "action": "manual_wait_if_critical_break_or_daily_loss_limit",
+      "description": "핵심 자리가 무너지면 수동 판단으로 대기할 수 있지만, 기본 기계 제한은 당일 최대 손실 기준을 우선한다."
     },
     "low_floor_replacement_exit": {
       "status": "draft",
       "example_strike": 1270,
       "example_entry_premium": 2.2,
       "take_profit_premium_range": [
-        3.0,
+        3,
         3.3
       ],
       "take_profit_pct_range": [
@@ -760,12 +911,12 @@
     {
       "key": "SELECT_OPTION",
       "label": "옵션 선택",
-      "description": "현재 중심가격 기준 약 2.5% 위 콜 행사가와 프리미엄 1.6 근처 상품을 찾는다."
+      "description": "현재 중심가격 기준 약 2.5% 위 콜 중 프리미엄 1.4~1.8, 중심 1.6 근처 상품을 찾는다. 하방 풋은 별도 신호가 있을 때 2.5~3%와 프리미엄 2.0 근처를 임시 후보로 둔다."
     },
     {
       "key": "PLACE_ENTRY_LADDER",
       "label": "3분할 주문",
-      "description": "1.70, 1.60, 1.45에 각 1계약씩 총 3계약 매수 주문을 낸다."
+      "description": "프리미엄 1.6을 중심으로 1.70, 1.60, 1.45 예시 분할가를 자동 재계산해 1계약씩 총 3계약 주문한다."
     },
     {
       "key": "PLACE_TARGETS",
@@ -795,12 +946,12 @@
     {
       "key": "SWITCH_EXECUTE",
       "label": "자리이동 실행",
-      "description": "새 안쪽 콜옵션 3계약이 지정가로 체결되면 기존 손실 포지션 3계약을 즉시 청산한다."
+      "description": "새 안쪽 콜옵션 3계약을 먼저 체결하고, 일시적 최대 6계약 노출을 허용한 뒤 기존 손실권 3계약을 즉시 청산한다."
     },
     {
-      "key": "SWITCH_LIMIT_2",
-      "label": "자리이동 2회 제한",
-      "description": "핵심 자리 이탈 구간에서는 자리이동을 최대 두 번까지만 허용한다."
+      "key": "SWITCH_UNTIL_DAILY_LIMIT",
+      "label": "손실한도 전까지 자리이동",
+      "description": "자리이동은 고정 2회 제한이 아니라 당일 최대 손실 300만원에 걸리기 전까지 연속 허용한다."
     },
     {
       "key": "WAIT_AFTER_SMALL_LOSS",
@@ -890,7 +1041,7 @@
     {
       "key": "RUNNER_MANAGE",
       "label": "잔량 운용",
-      "description": "남은 1계약은 트레일링 스탑 또는 지수 청산 신호까지 보유한다."
+      "description": "잔량 1계약은 고정 퍼센트 트레일링이 아니라 5분봉 전환선/기준선/30이평과 현재 수익 상황으로 더 끌고 갈지 확정할지 판단한다."
     },
     {
       "key": "DOWNSIDE_PRESSURE_MIN_TRY",
@@ -934,20 +1085,6 @@
     }
   ],
   "questions": [
-    "당일 최대 손실 300만원은 실현손익 기준인지, 평가손익과 수수료 포함 기준인지 확인이 필요하다.",
-    "초기 3계약은 한 번의 지수 신호당 3계약인지, 하루 전체 총량인지 확인이 필요하다.",
-    "1~2계약만 부분 체결됐을 때 +35%, +45%, 잔량 운용을 어떻게 배분할지 확인이 필요하다.",
-    "1.70, 1.60, 1.45 주문가는 항상 고정인지, 목표 프리미엄 1.6을 중심으로 자동 재계산하는지 확인이 필요하다.",
-    "프리미엄 1.6 근처의 허용 범위가 얼마인지 확인이 필요하다.",
-    "콜 기준 2.5% 위 행사가처럼 하방 풋 진입은 중심가격에서 2.5% 아래 행사가를 쓰는지 확인이 필요하다.",
-    "주문 후 미체결 상태가 얼마나 지속되면 취소하거나 가격을 수정할지 확인이 필요하다.",
-    "트레일링 스탑은 고점 대비 몇 퍼센트 또는 몇 틱 하락으로 볼지 확인이 필요하다.",
-    "지수 청산 신호와 옵션 프리미엄 청산 신호가 충돌할 때 어느 쪽을 우선할지 확인이 필요하다.",
-    "시장이 5~10 더 밀린다는 기준이 KOSPI200 지수 포인트인지, 옵션 프리미엄 틱인지 확인이 필요하다.",
-    "자리이동 시 새 3계약 체결 후 기존 3계약 청산 순서가 맞는지, 일시적으로 6계약 노출을 허용하는지 확인이 필요하다.",
-    "안쪽 콜옵션 1310~1305 선택에서 행사가 근접과 프리미엄 1.8~2.2 중 무엇을 우선할지 확인이 필요하다.",
-    "1회 손절 30~50만원 범위가 수수료 포함인지, 자리이동 1회 기준인지 확인이 필요하다.",
-    "하루에 허용할 자리이동 횟수 또는 연속 손절 제한이 필요한지 확인이 필요하다.",
     "급반등 20~30% 수익권에서 1계약 청산은 터치 즉시인지, 호가 안정 또는 1분/5분봉 확인 후인지 확인이 필요하다.",
     "2계약을 +30%에 청산하면 남은 1계약이 실제로 무위험이 되는 산식과 수수료/슬리피지 포함 여부 확인이 필요하다.",
     "3계약이 아닌 계약수로 확장할 때 70% 안전마진 물량과 30% 수익극대화 물량의 반올림 기준 확인이 필요하다.",
@@ -962,7 +1099,6 @@
     "12시 이후 프리미엄 0.6~1.0, 행사가 1.5% 기준을 콜과 풋에 동일하게 적용할지 확인이 필요하다.",
     "12시 이후 40% 손절은 터치 기준인지, 체결 평균가 대비 종가/호가 기준인지 확인이 필요하다.",
     "약손실의 기준을 금액, 프리미엄 퍼센트, 계약당 손실 중 무엇으로 정의할지 확인이 필요하다.",
-    "자리이동 2회가 최초 진입 이후 교체 2회인지, 총 진입 시도 2회인지 확인이 필요하다.",
     "무너지는 핵심 자리 기준이 쌍바닥 저점, 피보나치 100%, 103%, 105%, 전환선/기준선 중 무엇인지 확인이 필요하다.",
     "리셋 중심라인에서 2계약과 3계약을 나누는 기준이 하락 압력, 수익 잠금 여부, 전환선 회복 중 무엇인지 확인이 필요하다.",
     "리셋 중심라인 콜 프리미엄 1.5~1.8 기준이 만기일 12시 이후에도 유지되는지 확인이 필요하다.",
@@ -970,7 +1106,6 @@
     "밑꼬리 길이와 중심라인 근접 허용 범위를 포인트 또는 퍼센트로 정해야 한다.",
     "1270콜과 1260콜은 예시 행사가인지, 시장 상황에 따라 자동 선택할 행사가 규칙인지 확인이 필요하다.",
     "저점 자리이동 후 3.0~3.3에서 70% 물량 청산은 터치 즉시인지, 호가 안정 또는 5분봉 확인 후인지 확인이 필요하다.",
-    "마지막 트라이가 기존 자리이동 2회 제한 안에 포함되는지, 예외적으로 허용되는 별도 시도인지 확인이 필요하다.",
     "마지막 트라이에서 2계약만 진입했을 때 +40~50%와 +100% 청산 물량 배분을 어떻게 할지 확인이 필요하다.",
     "400/456이평 라인대 접근 허용 폭과 이평 산식, 적용 시간프레임을 확인해야 한다.",
     "당일 전구간 피보나치의 고가/저가 기준과 현재 지수 위치별 행동 규칙을 더 구체화해야 한다.",
@@ -980,13 +1115,13 @@
     "잔량 올청 후 당일 매매 종료를 자동 상태로 둘지, 사용자가 수동으로 종료 체크할지 확인이 필요하다.",
     "수익담보 전환선 눌림 진입에서 전환선 터치, 이탈 후 회복, 근접 중 어떤 조건을 진입 기준으로 볼지 확인이 필요하다.",
     "수익담보 1계약 청산의 30이평 터치 기준이 가격 터치인지, 5분봉 종가 도달인지 확인이 필요하다.",
-    "수익담보 스캘프의 허용 손실선과 미체결 주문 취소 기준을 별도로 정해야 한다.",
+    "수익담보 스캘프의 허용 손실선을 별도로 정해야 한다.",
     "38.2%+구름대 목표에서는 잔량 올청인지, 일부만 청산하고 트레일링을 이어갈지 확인이 필요하다.",
     "만기일 줄먹 병행 비율을 20~30%, 50%, 100% 중 어떤 단계에 얼마씩 둘지 확인이 필요하다.",
-    "10배 러너 후보에서 트레일링 스탑을 옵션 고점 대비 몇 퍼센트 또는 지수 어떤 선 이탈로 볼지 확인이 필요하다.",
     "올청 후 수익담보 1.0 옵션을 허용할 때 최대 금액과 손절 여부를 확정해야 한다.",
     "만기 20분 전 복권 플레이의 오늘 수익금 10% 한도를 실현손익 기준으로 볼지, 수수료 차감 후 순수익 기준으로 볼지 확인이 필요하다.",
     "복권 플레이 적중 확률 10% 이내를 앱에서 경고 점수로 표시할지, 단순 안내 문구로만 둘지 정해야 한다.",
-    "KODEX200 ETF 전략은 옵션 전략과 별도 탭으로 분리할지, 지수 매매 탭 안에 ETF 모드로 둘지 확인이 필요하다."
+    "KODEX200 ETF 전략은 옵션 전략과 별도 탭으로 분리할지, 지수 매매 탭 안에 ETF 모드로 둘지 확인이 필요하다.",
+    "마지막 트라이를 연속 자리이동 허용 구조에서 별도 수동 대기 조건으로 볼지 확인이 필요하다."
   ]
 }
