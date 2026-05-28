@@ -1218,6 +1218,8 @@ function renderWeeklyPanel() {
   const strike = entry.strike_selection || {};
   const entryTiming = entry.double_bottom_entry_timing || {};
   const expiryTiming = entry.expiry_day_time_adjustments || {};
+  const weekdayPlan = expiryTiming.weekday_premium_profiles || {};
+  const weekdayProfiles = Array.isArray(weekdayPlan.profiles) ? weekdayPlan.profiles : [];
   const morningPlan = expiryTiming.morning || {};
   const afterNoonPlan = expiryTiming.after_noon || {};
   const exit = strategy.exit || {};
@@ -1266,7 +1268,8 @@ function renderWeeklyPanel() {
 
   document.querySelector("#weeklyStopBadge").textContent = formatWon(risk.daily_max_loss_krw || 3000000);
   document.querySelector("#weeklyRiskGrid").innerHTML = [
-    { label: availability.label || "월/목 전용", value: "월 · 목", text: availability.description || "현재 위클리 옵션 전략은 월요일과 목요일 차트에서만 복기 및 신호 산출 대상으로 사용합니다." },
+    { label: availability.label || "요일/만기별 분기", value: "월~금", text: availability.description || "큰 지수 자리 판단은 요일 공통으로 두고, 옵션 행사가와 프리미엄은 만기 잔존일별로 조정합니다." },
+    { label: weekdayPlan.label || "요일별 옵션 선택값", value: "D-2 · D-1 · 만기", text: weekdayPlan.description || "프리미엄이 붙어 있는 정도에 따라 행사가 거리와 목표 프리미엄을 바꿉니다." },
     { label: "당일 최대 손실", value: formatWon(risk.daily_max_loss_krw || 3000000), text: risk.description || "" },
     { label: "1회 손절 비용", value: perStopRange, text: risk.per_stop_loss_description || "손절과 자리이동을 감수해 반등 시 수익 회수를 빠르게 노립니다." },
     { label: "수익 잠금", value: profitLockRange, text: profitLock.description || "당일 수익 달성 후 보수 모드로 전환합니다." },
@@ -1297,6 +1300,22 @@ function renderWeeklyPanel() {
     { label: resetWick.label || "원하는 자리 밑꼬리", value: "확인 강도 상승", text: resetWick.description || "거의 원하는 자리에서 밑꼬리가 나오면 중심라인 콜 재시작 후보의 신뢰도를 높입니다." },
   ].map(optionMetricCard).join("");
 
+  const weekdayProfileCards = weekdayProfiles.map((profile) => {
+    const premiumText = formatPremiumRange(profile.target_premium_range);
+    const rangeText = Number.isFinite(number(profile.range_point_offset))
+      ? `레인지 +${formatNum(profile.range_point_offset, 0)}p`
+      : profile.strike_offset_pct
+        ? `중심 +${formatNum(profile.strike_offset_pct, 1)}%`
+        : "거리 확인 필요";
+    return `
+      <article class="option-summary-card">
+        <span>${escapeHtml(profile.label || "요일 프로필")}</span>
+        <strong>${escapeHtml(rangeText)} · ${escapeHtml(premiumText)}</strong>
+        <small>${escapeHtml(profile.description || "")}</small>
+      </article>
+    `;
+  }).join("");
+
   document.querySelector("#weeklyEntrySummary").innerHTML = `
     <article class="option-summary-card">
       <span>장초 선택</span>
@@ -1308,6 +1327,7 @@ function renderWeeklyPanel() {
       <strong>중심가격 +${formatNum(afterNoonPlan.strike_offset_pct || 1.5, 1)}%</strong>
       <small>프리미엄 ${afterNoonPremiumRange} 구간 · 손절 ${formatNum(afterNoonPlan.stop_loss_pct || 40, 0)}% · 자리이동 전제</small>
     </article>
+    ${weekdayProfileCards}
     <article class="option-summary-card">
       <span>리셋 중심라인</span>
       <strong>콜 ${resetContractRange}</strong>
