@@ -83,6 +83,18 @@ const defaultIndexStrategy = {
       role: "30봉 기하이평과 함께 진입 위치 판단",
     },
     {
+      key: "gma_400",
+      label: "400봉 기하이평",
+      formula: "exp(avg(log(close), 400))",
+      role: "마지막 트라이에서 장기 지지 라인 후보로 봅니다.",
+    },
+    {
+      key: "gma_456",
+      label: "456봉 기하이평",
+      formula: "exp(avg(log(close), 456))",
+      role: "400봉 기하이평과 함께 마지막 트라이 지지 라인 후보로 봅니다.",
+    },
+    {
       key: "tenkan_5m",
       label: "5분봉 전환선",
       formula: "(highest(high, 9) + lowest(low, 9)) / 2",
@@ -123,6 +135,36 @@ const defaultIndexStrategy = {
       label: "밑꼬리 비율",
       formula: "lower_wick_5m / max(high_5m - low_5m, tick_size)",
       role: "밑꼬리가 전체 5분봉 범위에서 차지하는 비율로, 진입 확인 강도를 판단한다.",
+    },
+    {
+      key: "intraday_full_fib_50",
+      label: "당일 전구간 50%",
+      formula: "day_high - (day_high - day_low) * 0.5",
+      role: "당일 전체 고가/저가 기준으로 현재 지수의 중간 위치를 재점검합니다.",
+    },
+    {
+      key: "intraday_full_fib_618",
+      label: "당일 전구간 61.8%",
+      formula: "day_high - (day_high - day_low) * 0.618",
+      role: "자리이동 또는 마지막 트라이 후 당일 전체 피보나치 위치를 다시 확인합니다.",
+    },
+    {
+      key: "bottom_bounce_target_618",
+      label: "바닥 바운딩 1차 목표 61.8%",
+      formula: "intraday_full_fib_618",
+      role: "저점권에서 바운딩이 나오면 우선 도전할 1차 목표선으로 봅니다.",
+    },
+    {
+      key: "bottom_bounce_target_50",
+      label: "바닥 바운딩 2차 목표 50%",
+      formula: "intraday_full_fib_50",
+      role: "61.8% 회복 후 힘이 이어지면 다음 도전 목표선으로 봅니다.",
+    },
+    {
+      key: "fib50_gma50_confluence",
+      label: "50%+50이평 겹침",
+      formula: "abs(intraday_full_fib_50 - gma_50_5m) <= confluence_tolerance",
+      role: "수익극대화 잔량이 있을 때 올청을 검토하는 강한 목표 자리로 봅니다.",
     },
   ],
   fibonacci: {
@@ -167,6 +209,26 @@ const defaultIndexStrategy = {
         },
       },
     },
+    intraday_full_range_check: {
+      status: "draft",
+      trigger: "after_position_switch_or_final_try",
+      anchor: "day_high_day_low",
+      levels: ["0", "23.6", "38.2", "50", "61.8", "100"],
+      description: "자리이동 또는 마지막 트라이 이후 당일 전체 고가/저가 기준 피보나치를 다시 그려 현재 지수 위치를 체크합니다.",
+      bottom_bounce_targets: {
+        status: "draft",
+        trigger: "bottom_zone_rebound_confirmed",
+        sequence: ["intraday_full_fib_618", "intraday_full_fib_50"],
+        description: "저점권에서 바운딩이 나오면 목표는 먼저 당일 전구간 61.8% 라인, 이후 반등 힘이 유지되면 50% 라인까지 도전하는 구조로 봅니다.",
+        runner_full_exit: {
+          status: "draft",
+          trigger: "fib50_gma50_confluence",
+          position: "profit_runner",
+          action: "EXIT_ALL_REMAINING_AND_END_DAY",
+          description: "현재 자리가 당일 전구간 50% 라인이면서 5분봉 50이평 자리와 겹치면, 수익극대화 잔량은 올청 후보로 봅니다. 당일 목표 수익을 확보했다면 이후 더 트라이하지 않고 매매를 종료합니다.",
+        },
+      },
+    },
   },
   position_sizing: {
     first_entry_pct: 70,
@@ -184,6 +246,14 @@ const defaultIndexStrategy = {
     { key: "FIBONACCI_RESET", label: "피보나치 리셋", description: "핵심 자리가 무너지면 고가와 저가를 다시 셋업하고, 직전 저가를 새 61.8% 라인으로 맞춘 뒤 100% 자리를 다시 계산한다." },
     { key: "RESET_MID_CALL_PREPARE", label: "리셋 중심 콜 재시작", description: "리셋된 61.8%~100% 사이의 중심라인에서 프리미엄 1.5~1.8 콜옵션을 2~3계약으로 새 초기 진입처럼 검토한다." },
     { key: "RESET_MID_WICK_CONFIRM", label: "중심 밑꼬리 확인", description: "거의 원하는 리셋 중심라인에서 밑꼬리가 나오면 콜 재시작 후보의 확인 강도가 높아진다." },
+    { key: "LONG_MA_FINAL_TRY_LINE", label: "400/456이평 마지막 라인", description: "마지막 트라이에서는 400봉과 456봉 기하이평 라인대를 장기 지지 후보로 보고 콜 트라이 위치를 확인합니다." },
+    { key: "INTRADAY_FULL_FIB_CHECK", label: "당일 전구간 피보나치", description: "자리이동 또는 마지막 트라이 후에는 당일 전체 고가와 저가로 피보나치를 다시 그려 현재 지수 위치를 재점검합니다." },
+    { key: "BOTTOM_BOUNCE_TARGET_618", label: "바운딩 61.8% 목표", description: "저점권에서 바운딩이 확인되면 당일 전구간 61.8% 라인을 1차 목표로 봅니다." },
+    { key: "BOTTOM_BOUNCE_TARGET_50", label: "바운딩 50% 도전", description: "61.8% 라인을 회복하고 반등 힘이 유지되면 당일 전구간 50% 라인까지 도전 후보로 봅니다." },
+    { key: "RUNNER_FULL_EXIT_50_CONFLUENCE", label: "50%+50이평 잔량 올청", description: "수익극대화 잔량이 남아 있고 현재 자리가 당일 전구간 50%와 50이평이 겹치는 자리면 잔량 전량 청산 후보로 봅니다." },
+    { key: "DAILY_DONE_NO_MORE_TRY", label: "당일 매매 종료", description: "목표 수익을 확보하고 잔량까지 정리했으면 더 트라이하지 않고 당일 매매를 종료합니다." },
+    { key: "PROFIT_COLLATERAL_TENKAN_PULLBACK", label: "수익담보 전환선 눌림", description: "당일 수익이 담보된 보수 모드에서는 5분봉 전환선 눌림을 1계약 짧은 진입 후보로 봅니다." },
+    { key: "PROFIT_COLLATERAL_GMA30_EXIT", label: "수익담보 30이평 청산", description: "수익담보 1계약 포지션은 5분봉 30이평에 닿으면 청산 후보로 봅니다." },
     { key: "ENTRY_70", label: "70% 1차 진입", description: "전환선 회복 확인 후 70%만 먼저 진입한다." },
     { key: "WICK_WATCH", label: "밑꼬리 감시", description: "100~103% 휩소 여부를 감시한다." },
     { key: "ADD_30", label: "30% 추가 진입", description: "말아올림 확인 후 잔여 30%를 추가한다." },
@@ -235,6 +305,42 @@ const defaultIndexStrategy = {
       conditions: ["price near reset_mid_618_100", "low_5m pierces_or_touches reset_mid_618_100", "close_5m reclaims reset_mid_618_100", "lower_wick_ratio_5m >= configured_threshold"],
       message: "원하는 자리 근처에서 밑꼬리가 나오면 콜 재시작 후보의 신뢰도를 높이고, 2~3계약 진입 준비를 강화합니다.",
     },
+    {
+      key: "long_ma_final_try_line",
+      label: "400/456이평 마지막 트라이",
+      conditions: ["final_try_context == true", "price near gma_400 or price near gma_456", "direction == call", "option_replacement_context == true"],
+      message: "마지막 트라이에서는 400봉·456봉 기하이평 라인대를 장기 지지 후보로 보고 콜옵션 재진입 위치를 확인합니다.",
+    },
+    {
+      key: "intraday_full_fib_check",
+      label: "당일 전구간 피보나치 재점검",
+      conditions: ["position_switch_or_final_try == true", "day_high is confirmed", "day_low is confirmed", "current_index_position recalculated"],
+      message: "자리이동 또는 마지막 트라이 이후 당일 전체 고가/저가 피보나치를 다시 그려 현재 지수가 어느 구간에 있는지 체크합니다.",
+    },
+    {
+      key: "bottom_bounce_target_ladder",
+      label: "바닥 바운딩 목표 순서",
+      conditions: ["bottom_zone_rebound_confirmed == true", "current_index < intraday_full_fib_618", "target_1 = intraday_full_fib_618", "target_2 = intraday_full_fib_50 if rebound_strength_holds"],
+      message: "저점권에서 바운딩이 나오면 1차 목표는 당일 전구간 61.8%, 이후 힘이 유지되면 50% 라인까지 도전 후보로 봅니다.",
+    },
+    {
+      key: "runner_full_exit_50_confluence",
+      label: "50%+50이평 잔량 올청",
+      conditions: ["profit_runner_position == true", "current_index near intraday_full_fib_50", "current_index near gma_50_5m", "unrealized_profit > 0"],
+      message: "현재 자리가 당일 전구간 50%이면서 50이평 자리와 겹치면 수익극대화 잔량은 올청 후보로 보고, 목표 수익 확보 후에는 당일 매매를 종료합니다.",
+    },
+    {
+      key: "profit_collateral_tenkan_pullback_entry",
+      label: "수익담보 전환선 눌림 1계약",
+      conditions: ["profit_lock_active == true", "position_contracts == 1", "price pulls back to tenkan_5m", "close_5m does not break critical_low"],
+      message: "당일 수익이 담보된 뒤에는 전환선 눌림 자리에서 1계약만 짧게 진입하는 후보로 봅니다.",
+    },
+    {
+      key: "profit_collateral_gma30_exit",
+      label: "수익담보 30이평 청산",
+      conditions: ["profit_collateral_position == true", "high_5m touches gma_30_5m or close_5m >= gma_30_5m", "position_contracts == 1"],
+      message: "수익담보 1계약 포지션은 30이평에 닿으면 청산해 당일 수익을 지키는 쪽을 우선합니다.",
+    },
   ],
   questions: [
     "105% 손절 확정은 터치 기준인지, 5분봉 종가 이탈 기준인지 확인이 필요하다.",
@@ -248,6 +354,16 @@ const defaultIndexStrategy = {
     "리셋 중심라인에서 2계약과 3계약을 나누는 기준, 지정가 가격, 5분봉 전환선 회복 확인 여부가 필요하다.",
     "원하는 자리 밑꼬리 확인은 저가 터치만 볼지, 5분봉 종가가 중심라인 위로 회복해야 하는지 확인이 필요하다.",
     "밑꼬리 비율 임계값과 원하는 자리 근처 허용 오차를 포인트 또는 퍼센트로 정해야 한다.",
+    "400봉과 456봉 이평이 기하이평인지 단순이평인지, 5분봉 기준인지 확인이 필요하다.",
+    "마지막 트라이에서 400/456이평 접근 허용 폭을 지수 포인트 또는 퍼센트로 정해야 한다.",
+    "당일 전구간 피보나치의 고가/저가는 터치 고저인지 5분봉 종가 기준인지 확인이 필요하다.",
+    "당일 전구간 피보나치를 정규장 전체 기준으로 볼지, 전략 시작 이후 구간 기준으로 볼지 확인이 필요하다.",
+    "바닥 바운딩 확인 기준을 저점권 밑꼬리, 전환선 회복, 30이평 회복 중 무엇으로 볼지 확인이 필요하다.",
+    "61.8% 1차 목표 도달 시 일부 청산인지 전량 청산인지, 50% 도전은 어떤 강도 조건에서 허용할지 확인이 필요하다.",
+    "50% 피보나치와 50이평이 겹쳤다고 보는 허용 오차를 지수 포인트 또는 퍼센트로 정해야 한다.",
+    "잔량 올청 후 당일 매매 종료를 항상 적용할지, 당일 목표 수익 달성 시에만 적용할지 확인이 필요하다.",
+    "수익담보 전환선 눌림 진입의 눌림 판정은 전환선 터치인지, 이탈 후 회복인지, 근접 허용폭인지 확인이 필요하다.",
+    "수익담보 1계약의 30이평 청산은 터치 기준인지, 5분봉 종가 기준인지 확인이 필요하다.",
   ],
 };
 
@@ -279,6 +395,17 @@ const defaultWeeklyOptions = {
       avoid_full_size_contracts: 3,
       use_profit_as_safety_margin: true,
       description: "수익 잠금 이후에는 아주 급소자리 외에는 진입하지 않고, 하더라도 당일 수익금을 담보로 1계약만 안전하게 운용합니다.",
+      profit_collateral_scalp: {
+        status: "draft",
+        label: "수익담보 전환선 눌림 1계약",
+        direction: "call",
+        max_contracts: 1,
+        entry_trigger: "tenkan_pullback_5m",
+        exit_trigger: "gma_30_5m_touch",
+        example_option: "콜 2605 1275.0 4W",
+        example_profit_pct: 55.4,
+        description: "당일 수익이 담보된 뒤에는 전환선 눌림 자리에서 1계약만 진입하고, 30이평에 닿으면 청산하는 짧은 보수 플레이를 허용합니다.",
+      },
     },
     downside_pressure_filter: {
       status: "draft",
@@ -347,8 +474,13 @@ const defaultWeeklyOptions = {
       { key: "safe_margin_30", label: "+30% 안전마진", formula: "avg_entry * 1.30", color: "#008c8c", role: "2계약 청산 후 잔량 운용" },
       { key: "target_35", label: "+35% 1차 청산", formula: "avg_entry * 1.35", color: "#2d8f64", role: "첫 목표 청산선" },
       { key: "target_45", label: "+45% 2차 청산", formula: "avg_entry * 1.45", color: "#006f73", role: "두 번째 목표 청산선" },
+      { key: "switch_take_70_low", label: "자리이동 +36%", formula: "switch_entry * 1.36", color: "#2d8f64", role: "1270콜 2.2 진입 후 3.0 부근 70% 청산 하단 후보" },
+      { key: "switch_take_70_high", label: "자리이동 +50%", formula: "switch_entry * 1.50", color: "#008c8c", role: "1270콜 2.2 진입 후 3.3 부근 70% 청산 상단 후보" },
+      { key: "final_take_50", label: "마지막 +50%", formula: "final_entry * 1.50", color: "#8a63d2", role: "마지막 트라이 40~50% 수익권 1계약 청산 후보" },
+      { key: "final_take_100", label: "마지막 +100%", formula: "final_entry * 2.00", color: "#6d5bd0", role: "마지막 트라이 100% 수익권 1계약 추가 청산 후보" },
+      { key: "profit_scalp_55", label: "수익담보 +55%", formula: "scalp_entry * 1.554", color: "#9a4fb5", role: "수익담보 1계약 전환선 눌림 진입 후 30이평 터치 청산 예시" },
     ],
-    sample_path_multipliers: [1.08, 1, 0.92, 0.78, 0.75, 0.86, 1.03, 1.2, 1.32, 1.45, 1.38],
+    sample_path_multipliers: [1.08, 1, 0.92, 0.78, 0.75, 0.86, 1.03, 1.2, 1.32, 1.45, 1.38, 1.55],
   },
   index_reset_reference: {
     source: "index_trading.fibonacci.reset_on_break",
@@ -423,6 +555,13 @@ const defaultWeeklyOptions = {
       management: "trailing_stop_or_index_exit_signal",
       description: "남은 1계약은 수익극대화 물량으로 두고 트레일링 스탑 또는 지수 청산 신호까지 운용합니다.",
       trailing_stop_formula: "TODO",
+      full_exit_on_index_50_confluence: {
+        status: "draft",
+        trigger: "index.current_index_near_intraday_full_fib_50 AND index.current_index_near_gma_50_5m",
+        action: "EXIT_ALL_REMAINING",
+        after_action: "DAILY_DONE_NO_MORE_TRY",
+        description: "수익극대화 잔량이 남아 있고 지수가 당일 전구간 50% 자리이면서 50이평 자리와 겹치면 잔량은 올청 후보로 봅니다. 당일 수익을 확보했다면 이후 더 트라이하지 않고 매매를 종료합니다.",
+      },
     },
   },
   position_switch: {
@@ -464,6 +603,53 @@ const defaultWeeklyOptions = {
       action: "stop_retry_and_wait_after_two_switches",
       description: "방어해야 할 자리가 무너지면 추가 하락이 커질 수 있어 무한 재진입하지 않습니다.",
     },
+    low_floor_replacement_exit: {
+      status: "draft",
+      example_strike: 1270,
+      example_entry_premium: 2.2,
+      take_profit_premium_range: [3.0, 3.3],
+      take_profit_pct_range: [36, 50],
+      exit_position_pct: 70,
+      runner_position_pct: 30,
+      description: "저점 바닥에서 자리이동해 1270콜을 2.2 근처에서 잡았다면 3.0~3.3에서 약 70% 물량을 청산하고 나머지만 수익극대화로 가져갑니다.",
+    },
+    final_try: {
+      status: "draft",
+      label: "마지막 트라이",
+      example_strike: 1260,
+      example_entry_premium: 2.4,
+      support_lines: ["gma_400", "gma_456"],
+      description: "다시 자리 바꾸면서 마지막 트라이라고 보고 1260콜을 2.4 근처에서 시도합니다. 400/456이평 라인대를 트라이 라인으로 봅니다.",
+      exit_plan: {
+        avoid_fast_70pct_exit: true,
+        purpose: "recent_loss_recovery",
+        targets: [
+          { contracts: 1, profit_pct_range: [40, 50], premium_range: [3.36, 3.6], description: "마지막 트라이에서는 급하게 70% 물량을 청산하지 않고 40~50% 수익권에서 1계약을 청산합니다." },
+          { contracts: 1, profit_pct: 100, premium: 4.8, description: "100% 수익권에서 1계약을 추가 청산해 최근 손절분을 일부 회수합니다." },
+        ],
+        runner_contracts: 1,
+        description: "마지막 트라이는 빠른 70% 청산보다 단계 청산으로 최근 손절분 일부 회수를 우선합니다.",
+      },
+    },
+  },
+  intraday_full_fibonacci_review: {
+    source: "index_trading.fibonacci.intraday_full_range_check",
+    trigger: "after_final_try_or_profit_extension",
+    description: "포지션 변화 후 당일 전구간 피보나치를 다시 그려 현재 지수 위치를 체크합니다.",
+  },
+  index_bounce_target_reference: {
+    source: "index_trading.fibonacci.intraday_full_range_check.bottom_bounce_targets",
+    status: "draft",
+    label: "바닥 바운딩 목표",
+    sequence: ["intraday_full_fib_618", "intraday_full_fib_50"],
+    option_use: "runner_or_partial_exit_reference",
+    description: "저점권에서 바운딩이 나오면 지수 목표는 먼저 당일 전구간 61.8% 라인, 이후 힘이 이어지면 50% 라인까지 도전으로 봅니다. 옵션은 해당 지수 목표 도달 구간을 부분 청산 또는 잔량 운용 판단에 참조합니다.",
+    runner_full_exit: {
+      status: "draft",
+      target: "intraday_full_fib_50 + gma_50_5m",
+      action: "EXIT_ALL_REMAINING_AND_END_DAY",
+      description: "50% 피보나치 목표와 50이평이 겹치는 자리는 수익극대화 잔량 올청 후보로 봅니다. 당일 매매를 이미 끝낼 수 있는 수익이면 추가 트라이는 하지 않습니다.",
+    },
   },
   states: [
     { key: "WAIT_INDEX_SIGNAL", label: "지수 신호 대기", description: "지수 매매 탭의 신규 진입 위치를 기다립니다." },
@@ -477,6 +663,14 @@ const defaultWeeklyOptions = {
     { key: "SWITCH_EXECUTE", label: "자리이동 실행", description: "새 안쪽 콜 3계약 체결 후 기존 3계약을 청산합니다." },
     { key: "SWITCH_LIMIT_2", label: "자리이동 2회 제한", description: "핵심 자리 이탈 구간에서는 자리이동을 최대 두 번까지만 허용합니다." },
     { key: "WAIT_AFTER_SMALL_LOSS", label: "약손실 후 대기", description: "두 번 자리이동 후 약손실이면 더 트라이하지 않고 대기합니다." },
+    { key: "SWITCH_TAKE_PROFIT_70", label: "저점 자리이동 70% 청산", description: "1270콜을 2.2 근처에서 잡은 자리이동 포지션은 3.0~3.3에서 약 70% 물량을 청산하고 잔량만 수익극대화로 가져갑니다." },
+    { key: "FINAL_LONG_MA_TRY", label: "400/456이평 마지막 트라이", description: "다시 자리이동할 때 마지막 트라이라고 보고 400/456이평 라인대에서 1260콜 2.4 근처 진입을 검토합니다." },
+    { key: "FINAL_TRY_STAGED_EXIT", label: "마지막 트라이 단계 청산", description: "마지막 트라이에서는 +40~50%에서 1계약, +100%에서 1계약을 청산해 최근 손절분을 일부 회수합니다." },
+    { key: "INTRADAY_FULL_FIB_REVIEW", label: "당일 전구간 피보나치 확인", description: "수익을 조금 더 늘리거나 포지션을 바꾼 뒤에는 당일 전체 고가/저가 피보나치를 다시 그려 현재 지수 위치를 확인합니다." },
+    { key: "BOTTOM_BOUNCE_TARGET_618", label: "바운딩 61.8% 목표", description: "저점권에서 바운딩이 나오면 옵션 잔량 운용의 1차 지수 목표를 당일 전구간 61.8% 라인으로 둡니다." },
+    { key: "BOTTOM_BOUNCE_TARGET_50", label: "바운딩 50% 도전", description: "61.8% 목표를 넘고 반등 힘이 유지되면 남은 옵션 잔량은 당일 전구간 50% 라인까지 도전 후보로 봅니다." },
+    { key: "RUNNER_FULL_EXIT_50_CONFLUENCE", label: "50%+50이평 잔량 올청", description: "수익극대화 잔량이 남아 있고 지수가 당일 전구간 50%와 50이평이 겹치는 자리면 옵션 잔량을 전량 청산하는 후보로 봅니다." },
+    { key: "DAILY_DONE_NO_MORE_TRY", label: "당일 매매 종료", description: "잔량까지 정리하고 당일 수익을 확보했으면 더 트라이하지 않고 매매를 종료합니다." },
     { key: "RESET_MID_RESTART_ENTRY", label: "중심라인 재시작", description: "리셋 중심라인에서 프리미엄 1.5~1.8 콜옵션을 2~3계약으로 새 초기 진입처럼 다시 시작하는 후보로 봅니다." },
     { key: "RESET_MID_WICK_CONFIRM", label: "중심 밑꼬리 확인", description: "거의 원하는 자리에서 밑꼬리가 나오면 중심라인 콜 재시작 후보의 신뢰도를 높입니다." },
     { key: "RUNNER_MANAGE", label: "잔량 운용", description: "남은 1계약은 추세를 따라갑니다." },
@@ -485,6 +679,8 @@ const defaultWeeklyOptions = {
     { key: "EXPIRY_AFTER_NOON_REPRICE", label: "만기일 12시 후 재선정", description: "12시 이후에는 1.5% 위치, 프리미엄 0.6~1.0 옵션으로 낮추고 손절 40% 기준으로 자리이동합니다." },
     { key: "PROFIT_LOCK", label: "당일 수익 잠금", description: "3계약 운용으로 당일 50~100만원 수익을 내면 보수 모드로 전환합니다." },
     { key: "REDUCED_SIZE_PLAY", label: "1계약 보수 플레이", description: "수익 잠금 이후에는 급소자리에서만 수익담보 내 1계약으로 진입합니다." },
+    { key: "PROFIT_COLLATERAL_TENKAN_ENTRY", label: "수익담보 전환선 눌림 진입", description: "당일 수익이 담보된 뒤 전환선 눌림 자리에서는 1계약만 짧게 진입합니다." },
+    { key: "SCALP_GMA30_EXIT", label: "30이평 터치 청산", description: "수익담보 1계약 포지션은 30이평에 닿으면 욕심내지 않고 청산합니다." },
     { key: "DAILY_STOP", label: "당일 중단", description: "손실 300만원 도달 시 중단합니다." },
   ],
   questions: [
@@ -500,6 +696,19 @@ const defaultWeeklyOptions = {
     "약손실 기준, 자리이동 2회 카운트 방식, 핵심 자리 이탈 기준을 확인해야 합니다.",
     "리셋 중심라인에서 2계약과 3계약을 나누는 기준과 프리미엄 1.5~1.8 주문가 분할 기준을 확인해야 합니다.",
     "거의 원하는 자리에서 밑꼬리가 나왔을 때 바로 진입할지, 다음 5분봉 확인 후 들어갈지 확인해야 합니다.",
+    "400봉과 456봉 이평이 기하이평인지 단순이평인지, 5분봉 기준인지 확인해야 합니다.",
+    "당일 전구간 피보나치의 고가/저가 기준과 적용 구간을 확인해야 합니다.",
+    "1270콜과 1260콜은 예시 행사가인지, 시장 상황에 따라 자동 선택할 행사가 규칙인지 확인해야 합니다.",
+    "마지막 트라이가 기존 자리이동 2회 제한 안에 포함되는지, 예외적으로 허용되는 별도 시도인지 확인해야 합니다.",
+    "저점 자리이동 후 3.0~3.3에서 70% 물량 청산은 터치 즉시인지, 호가 안정 또는 5분봉 확인 후인지 확인해야 합니다.",
+    "당일 전구간 피보나치의 현재 지수 위치별 행동 규칙을 더 구체화해야 합니다.",
+    "바닥 바운딩 후 지수 61.8% 라인에서는 옵션을 몇 계약 또는 몇 퍼센트 청산할지 확인이 필요합니다.",
+    "61.8% 이후 50% 라인 도전은 전환선/30이평/거래량 중 어떤 힘 유지 조건을 필수로 볼지 확인이 필요합니다.",
+    "50% 피보나치와 50이평이 겹치는 자리에서 잔량 올청을 터치 즉시 할지, 5분봉 확인 후 할지 확인이 필요합니다.",
+    "잔량 올청 후 당일 매매 종료를 자동 상태로 둘지, 사용자가 수동으로 종료 체크할지 확인이 필요합니다.",
+    "수익담보 전환선 눌림 진입에서 전환선 터치, 이탈 후 회복, 근접 중 어떤 조건을 진입 기준으로 볼지 확인해야 합니다.",
+    "수익담보 1계약 청산의 30이평 터치 기준이 가격 터치인지, 5분봉 종가 도달인지 확인해야 합니다.",
+    "수익담보 스캘프의 허용 손실선과 미체결 주문 취소 기준을 별도로 정해야 합니다.",
   ],
 };
 
@@ -905,7 +1114,7 @@ function renderIndexPanel() {
   document.querySelector("#indexScope").textContent = strategy.asset_scope || "KOSPI200 지수/선물";
   document.querySelector("#indexStatusBadge").textContent = strategy.status === "active" ? "활성" : "설계중";
   document.querySelector("#indexChartSignalText").textContent =
-    `현재 공식은 ${sizing.first_entry_pct || 70}% 1차 진입, ${sizing.add_entry_pct || 30}% 추가 진입, 핵심 이탈 시 직전 저가를 새 61.8%로 맞추는 리셋 구조입니다.`;
+    `현재 공식은 ${sizing.first_entry_pct || 70}% 1차 진입, ${sizing.add_entry_pct || 30}% 추가 진입, 핵심 이탈 리셋, 바닥 바운딩 후 61.8%→50% 목표 순서입니다.`;
 
   const formulas = [
     ...(strategy.formulas || []),
@@ -969,6 +1178,7 @@ function renderWeeklyHero() {
   const money = strategy.money_management || {};
   const profitLock = money.daily_profit_lock || {};
   const afterLock = money.after_lock || {};
+  const profitScalp = afterLock.profit_collateral_scalp || {};
   const pressureFilter = money.downside_pressure_filter || {};
   const entry = strategy.entry || {};
   const date = (state.report?.generated_at || "").slice(0, 10) || "공식 정리";
@@ -993,6 +1203,7 @@ function renderWeeklyPanel() {
   const money = strategy.money_management || {};
   const profitLock = money.daily_profit_lock || {};
   const afterLock = money.after_lock || {};
+  const profitScalp = afterLock.profit_collateral_scalp || {};
   const pressureFilter = money.downside_pressure_filter || {};
   const entry = strategy.entry || {};
   const rolePlan = strategy.position_roles || {};
@@ -1009,12 +1220,19 @@ function renderWeeklyPanel() {
   const minTake = quickRebound.minimum_take_profit || {};
   const freeRunner = quickRebound.free_runner_plan || {};
   const runner = exit.runner || {};
+  const runnerFullExit = runner.full_exit_on_index_50_confluence || {};
   const switchRule = strategy.position_switch || {};
   const switchTrigger = switchRule.trigger || {};
   const switchReplacement = switchRule.replacement_selection || {};
   const switchExecution = switchRule.execution || {};
   const switchRetry = switchRule.retry_limit || {};
   const criticalBreakdown = switchRule.critical_breakdown || {};
+  const lowFloorExit = switchRule.low_floor_replacement_exit || {};
+  const finalTry = switchRule.final_try || {};
+  const finalExitPlan = finalTry.exit_plan || {};
+  const intradayReview = strategy.intraday_full_fibonacci_review || {};
+  const indexBounce = strategy.index_bounce_target_reference || {};
+  const indexBounceFullExit = indexBounce.runner_full_exit || {};
   const perStopRange = Array.isArray(risk.per_stop_loss_krw_range)
     ? `${formatWon(risk.per_stop_loss_krw_range[0])}~${formatWon(risk.per_stop_loss_krw_range[1])}`
     : "300,000~500,000원";
@@ -1023,6 +1241,9 @@ function renderWeeklyPanel() {
     : "500,000원~1,000,000원";
   const formatPremiumRange = (range) => Array.isArray(range)
     ? `${Number(range[0]).toFixed(1)}~${Number(range[1]).toFixed(1)}`
+    : "-";
+  const formatPctRange = (range) => Array.isArray(range)
+    ? `+${formatNum(range[0], 0)}~+${formatNum(range[1], 0)}%`
     : "-";
   const formatContractRange = (range, fallback = 3) => Array.isArray(range)
     ? `${formatNum(range[0], 0)}~${formatNum(range[1], 0)}계약`
@@ -1038,12 +1259,18 @@ function renderWeeklyPanel() {
     { label: "1회 손절 비용", value: perStopRange, text: risk.per_stop_loss_description || "손절과 자리이동을 감수해 반등 시 수익 회수를 빠르게 노립니다." },
     { label: "수익 잠금", value: profitLockRange, text: profitLock.description || "당일 수익 달성 후 보수 모드로 전환합니다." },
     { label: "이후 진입", value: `${afterLock.max_contracts || 1}계약만`, text: afterLock.description || "급소자리 외에는 진입하지 않고 수익담보 내에서만 운용합니다." },
+    { label: "수익담보 눌림", value: `${profitScalp.max_contracts || 1}계약`, text: profitScalp.description || "전환선 눌림에서 1계약만 진입하고 30이평 터치 시 청산합니다." },
     { label: "하락 압력", value: `${pressureFilter.max_contracts || 1}계약`, text: pressureFilter.description || "5분봉이 30이평, 전환선, 기준선 아래이면 최소 물량만 시도합니다." },
     { label: "100% 앞선 자리", value: "최소 물량", text: entryTiming.description || "우측 바닥이 더 높게 돌 수 있어 100%를 딱 기다리지 않고 앞선 자리도 봅니다." },
     { label: "만기 12시 후", value: `${formatNum(afterNoonPlan.strike_offset_pct || 1.5, 1)}% / ${afterNoonPremiumRange}`, text: afterNoonPlan.description || "프리미엄 급감 구간에서는 더 가까운 행사가와 낮은 프리미엄으로 재선정합니다." },
     { label: "12시 후 손절", value: `-${formatNum(afterNoonPlan.stop_loss_pct || 40, 0)}%`, text: afterNoonPlan.position_switch_required ? "손절 범위를 40%로 두고 자리이동을 전제로 운용합니다." : "손절 기준 확인이 필요합니다." },
     { label: "자리이동 한도", value: `${formatNum(switchRetry.max_switch_attempts || 2, 0)}회`, text: switchRetry.description || "핵심 자리 이탈 구간에서는 자리이동을 최대 두 번까지만 허용합니다." },
     { label: "이후 대기", value: "약손실 후 중단", text: criticalBreakdown.description || "방어해야 할 자리가 무너지면 추가 하락이 커질 수 있어 무한 재진입하지 않습니다." },
+    { label: "저점 자리이동", value: `${formatNum(lowFloorExit.example_strike || 1270, 0)}콜 ${formatNum(lowFloorExit.example_entry_premium || 2.2, 1)}`, text: lowFloorExit.description || "저점 자리이동 포지션은 빠른 70% 청산 후 잔량만 가져갑니다." },
+    { label: "마지막 트라이", value: `${formatNum(finalTry.example_strike || 1260, 0)}콜 ${formatNum(finalTry.example_entry_premium || 2.4, 1)}`, text: finalTry.description || "400/456이평 라인대에서 마지막 트라이 후보를 봅니다." },
+    { label: "전구간 피보나치", value: "위치 재점검", text: intradayReview.description || "포지션 변화 후 당일 전체 고저 피보나치로 현재 위치를 다시 봅니다." },
+    { label: indexBounce.label || "바운딩 목표", value: "61.8% → 50%", text: indexBounce.description || "저점권 바운딩 후 지수 목표는 61.8%, 이후 50% 라인까지 순서대로 봅니다." },
+    { label: "잔량 올청", value: "50%+50이평", text: indexBounceFullExit.description || runnerFullExit.description || "수익극대화 잔량은 50% 피보나치와 50이평이 겹치는 자리에서 전량 청산 후보로 봅니다." },
     { label: "도달 시", value: "오늘 중단", text: "신규 진입과 추가 진입을 멈춥니다." },
     { label: "초기 계약", value: `${entry.initial_contracts || 3}계약`, text: "1계약씩 3분할 주문을 기본값으로 둡니다." },
     { label: "기준 신호", value: "지수 매매", text: "지수 탭의 신규 진입 위치를 옵션 선택의 출발점으로 씁니다." },
@@ -1071,6 +1298,21 @@ function renderWeeklyPanel() {
       <span>밑꼬리 확인</span>
       <strong>진입 후보 강화</strong>
       <small>${escapeHtml(resetWick.description || "거의 원하는 자리에서 밑꼬리가 나오면 콜 재시작 후보의 신뢰도를 높입니다.")}</small>
+    </article>
+    <article class="option-summary-card">
+      <span>저점 자리이동</span>
+      <strong>${formatNum(lowFloorExit.example_strike || 1270, 0)}콜 ${formatNum(lowFloorExit.example_entry_premium || 2.2, 1)}</strong>
+      <small>${formatPremiumRange(lowFloorExit.take_profit_premium_range || [3.0, 3.3])}에서 ${formatNum(lowFloorExit.exit_position_pct || 70, 0)}% 청산</small>
+    </article>
+    <article class="option-summary-card">
+      <span>마지막 트라이</span>
+      <strong>${formatNum(finalTry.example_strike || 1260, 0)}콜 ${formatNum(finalTry.example_entry_premium || 2.4, 1)}</strong>
+      <small>400/456이평 · ${formatPctRange(finalExitPlan.targets?.[0]?.profit_pct_range || [40, 50])} 1계약, +${formatNum(finalExitPlan.targets?.[1]?.profit_pct || 100, 0)}% 1계약</small>
+    </article>
+    <article class="option-summary-card">
+      <span>수익담보 스캘프</span>
+      <strong>전환선 눌림 ${formatNum(profitScalp.max_contracts || 1, 0)}계약</strong>
+      <small>30이평 터치 청산 · 예시 ${escapeHtml(profitScalp.example_option || "콜 2605 1275.0 4W")} +${formatNum(profitScalp.example_profit_pct || 55.4, 1)}%</small>
     </article>
     <article class="option-summary-card">
       <span>쌍바닥 타이밍</span>
@@ -1134,6 +1376,32 @@ function renderWeeklyPanel() {
     </article>
   ` : "";
 
+  const bounceTargetItems = indexBounce.status ? `
+    <article class="target-item quick">
+      <span>바닥 바운딩 목표</span>
+      <strong>1차 61.8% · 2차 50%</strong>
+      <small>${escapeHtml(indexBounce.description || "저점권 바운딩 후 지수 61.8%, 이후 50% 라인까지 도전 후보로 봅니다.")}</small>
+    </article>
+    <article class="target-item quick">
+      <span>50%+50이평 올청</span>
+      <strong>수익극대화 잔량 전량 청산</strong>
+      <small>${escapeHtml(indexBounceFullExit.description || runnerFullExit.description || "50% 피보나치 목표와 50이평이 겹치면 잔량 올청 후 당일 매매를 종료합니다.")}</small>
+    </article>
+  ` : "";
+
+  const profitScalpItems = profitScalp.status ? `
+    <article class="target-item quick">
+      <span>수익담보 전환선 눌림</span>
+      <strong>${formatNum(profitScalp.max_contracts || 1, 0)}계약만 진입</strong>
+      <small>당일 수익을 담보로 짧게 접근 · ${escapeHtml(profitScalp.entry_trigger || "tenkan_pullback_5m")}</small>
+    </article>
+    <article class="target-item quick">
+      <span>30이평 터치 청산</span>
+      <strong>예시 +${formatNum(profitScalp.example_profit_pct || 55.4, 1)}%</strong>
+      <small>${escapeHtml(profitScalp.example_option || "콜 2605 1275.0 4W")} · ${escapeHtml(profitScalp.exit_trigger || "gma_30_5m_touch")}</small>
+    </article>
+  ` : "";
+
   const switchLossRange = Array.isArray(switchTrigger.loss_prepare_pct_range)
     ? `-${formatNum(switchTrigger.loss_prepare_pct_range[0], 0)}~-${formatNum(switchTrigger.loss_prepare_pct_range[1], 0)}%`
     : "-20~-25%";
@@ -1153,6 +1421,26 @@ function renderWeeklyPanel() {
       <span>실행 순서</span>
       <strong>새 ${formatNum(switchExecution.new_contracts, 0)}계약 체결 후 기존 ${formatNum(switchExecution.old_contracts_to_close, 0)}계약 청산</strong>
       <small>기존 포지션이 약 -${formatNum(switchExecution.old_position_exit_loss_pct, 0)}% 손실권이면 자리이동 확정 시 즉시 정리</small>
+    </article>
+    <article class="target-item switch">
+      <span>저점 자리이동 회수</span>
+      <strong>${formatNum(lowFloorExit.example_strike || 1270, 0)}콜 ${formatNum(lowFloorExit.example_entry_premium || 2.2, 1)} → ${formatPremiumRange(lowFloorExit.take_profit_premium_range || [3.0, 3.3])}</strong>
+      <small>${formatNum(lowFloorExit.exit_position_pct || 70, 0)}% 물량 청산 · 남은 ${formatNum(lowFloorExit.runner_position_pct || 30, 0)}%만 수익극대화</small>
+    </article>
+    <article class="target-item switch">
+      <span>마지막 트라이 라인</span>
+      <strong>${formatNum(finalTry.example_strike || 1260, 0)}콜 ${formatNum(finalTry.example_entry_premium || 2.4, 1)} · 400/456이평</strong>
+      <small>${escapeHtml(finalTry.description || "장기 이평 라인대에서 마지막 트라이 후보를 봅니다.")}</small>
+    </article>
+    <article class="target-item switch">
+      <span>마지막 단계 청산</span>
+      <strong>${formatPctRange(finalExitPlan.targets?.[0]?.profit_pct_range || [40, 50])} 1계약 · +${formatNum(finalExitPlan.targets?.[1]?.profit_pct || 100, 0)}% 1계약</strong>
+      <small>${escapeHtml(finalExitPlan.description || "빠른 70% 청산보다 손절분 회수용 단계 청산을 우선합니다.")}</small>
+    </article>
+    <article class="target-item switch">
+      <span>전구간 피보나치</span>
+      <strong>현재 지수 위치 재점검</strong>
+      <small>${escapeHtml(intradayReview.description || "포지션 변화 후 당일 전체 고가/저가 기준 피보나치를 다시 그립니다.")}</small>
     </article>
     <article class="target-item switch">
       <span>자리이동 제한</span>
@@ -1183,7 +1471,7 @@ function renderWeeklyPanel() {
   `;
   }).join("");
 
-  document.querySelector("#weeklyTargetList").innerHTML = lossItem + roleItems + quickReboundItems + switchItems + targetItems + `
+  document.querySelector("#weeklyTargetList").innerHTML = lossItem + roleItems + quickReboundItems + bounceTargetItems + profitScalpItems + switchItems + targetItems + `
     <article class="target-item runner">
       <span>잔량 운용</span>
       <strong>${formatNum(runner.contracts || 1, 0)}계약</strong>
@@ -1232,6 +1520,11 @@ function renderIndexLegend() {
     { label: "100/103 휩소", color: "#d89216" },
     { label: "105 손절", color: "#b6504a" },
     { label: "리셋 61.8/중심/100", color: "#6d5bd0" },
+    { label: "전환선 눌림/30이평 청산", color: "#9a4fb5" },
+    { label: "바운딩 목표 61.8→50", color: "#c7552b" },
+    { label: "50%+50이평 올청", color: "#b6504a" },
+    { label: "400/456이평", color: "#7b8799" },
+    { label: "당일 전구간 피보나치", color: "#4069b8" },
   ].map((item) => `<span style="color:${item.color}"><i></i>${item.label}</span>`).join("");
 }
 
@@ -1253,8 +1546,13 @@ function drawWeeklyBlueprint(strategy = state.weeklyOptions || defaultWeeklyOpti
   const entry = strategy.entry || {};
   const exit = strategy.exit || {};
   const loss = exit.loss_control || {};
+  const money = strategy.money_management || {};
+  const afterLock = money.after_lock || {};
+  const profitScalp = afterLock.profit_collateral_scalp || {};
   const switchRule = strategy.position_switch || {};
   const switchRetry = switchRule.retry_limit || {};
+  const lowFloorExit = switchRule.low_floor_replacement_exit || {};
+  const finalTry = switchRule.final_try || {};
   const { context, width, height } = setupCanvas(canvas, visual.height || 300);
   context.clearRect(0, 0, width, height);
 
@@ -1262,6 +1560,9 @@ function drawWeeklyBlueprint(strategy = state.weeklyOptions || defaultWeeklyOpti
   const scope = {
     avg_entry: avgEntry,
     average_entry_price: avgEntry,
+    switch_entry: number(lowFloorExit.example_entry_premium) ?? avgEntry,
+    final_entry: number(finalTry.example_entry_premium) ?? avgEntry,
+    scalp_entry: number(profitScalp.example_entry_premium) ?? avgEntry,
     stop_loss_pct: number(loss.hold_until_loss_pct) ?? 30,
     max_switch_attempts: number(switchRetry.max_switch_attempts) ?? 2,
   };
@@ -1452,10 +1753,30 @@ function drawIndexBlueprint() {
     "리셋 중심": resetMid,
     "리셋 100": reset100,
   };
+  const dayHigh = 1338.2;
+  const dayLow = 1237.5;
+  const dayLevels = {
+    "당일 50": dayHigh - (dayHigh - dayLow) * 0.5,
+    "당일 61.8": dayHigh - (dayHigh - dayLow) * 0.618,
+  };
   const prices = [1298, 1306, 1320, 1332, 1325, 1311, 1301, 1290, 1278, 1274, 1283, 1292, 1300, 1308];
   const gma30 = prices.map((value, index) => 1286 + index * 1.35);
   const gma50 = prices.map((value, index) => 1274 + index * 0.82);
-  const allValues = [...prices, ...gma30, ...gma50, ...Object.values(levels), resetHigh, ...Object.values(resetLevels)];
+  const tenkan5m = [1290, 1295, 1304, 1312, 1315, 1308, 1298, 1287, 1279, 1274, 1281, 1289, 1297, 1304];
+  const gma400 = prices.map((value, index) => 1238 + index * 0.28);
+  const gma456 = prices.map((value, index) => 1231 + index * 0.22);
+  const allValues = [
+    ...prices,
+    ...gma30,
+    ...gma50,
+    ...tenkan5m,
+    ...gma400,
+    ...gma456,
+    ...Object.values(levels),
+    resetHigh,
+    ...Object.values(resetLevels),
+    ...Object.values(dayLevels),
+  ];
   const padding = 26;
   const min = Math.min(...allValues) - 4;
   const max = Math.max(...allValues) + 4;
@@ -1472,10 +1793,17 @@ function drawIndexBlueprint() {
   drawHorizontalLevel(context, width, padding, yFor(resetLevels["리셋 61.8"]), "리셋 61.8", resetLevels["리셋 61.8"], "#6d5bd0");
   drawHorizontalLevel(context, width, padding, yFor(resetLevels["리셋 중심"]), "리셋 중심", resetLevels["리셋 중심"], "#8a63d2");
   drawHorizontalLevel(context, width, padding, yFor(resetLevels["리셋 100"]), "리셋 100", resetLevels["리셋 100"], "#6d5bd0");
+  drawHorizontalLevel(context, width, padding, yFor(dayLevels["당일 50"]), "당일 50", dayLevels["당일 50"], "#4069b8");
+  drawHorizontalLevel(context, width, padding, yFor(dayLevels["당일 61.8"]), "당일 61.8", dayLevels["당일 61.8"], "#4069b8");
+  drawSeries(context, gma456, xFor, yFor, "#6f8f6b", 2, [4, 5]);
+  drawSeries(context, gma400, xFor, yFor, "#9b8fb0", 2, [7, 4]);
   drawSeries(context, gma50, xFor, yFor, "#95a3b7", 2, [6, 4]);
+  drawSeries(context, tenkan5m, xFor, yFor, "#d89216", 1.7, [3, 3]);
   drawSeries(context, gma30, xFor, yFor, "#008c8c", 2.2, []);
   drawSeries(context, prices, xFor, yFor, "#17202a", 2.8, []);
   drawResetBlueprint(context, width, padding, xFor, yFor, resetHigh, reset618, resetMid, reset100);
+  drawBottomBounceTargets(context, xFor, yFor, dayLevels, gma50);
+  drawProfitScalpBlueprint(context, xFor, yFor, tenkan5m, gma30);
 
   const lastX = xFor(prices.length - 1);
   const lastY = yFor(prices[prices.length - 1]);
@@ -1490,6 +1818,78 @@ function drawIndexBlueprint() {
   context.fillText("샘플 흐름", padding, 15);
   context.textAlign = "right";
   context.fillText("실시간 데이터 연결 전", width - padding, height - 8);
+}
+
+function drawProfitScalpBlueprint(context, xFor, yFor, tenkan5m, gma30) {
+  const entryIndex = 10;
+  const exitIndex = 13;
+  const entryX = xFor(entryIndex);
+  const entryY = yFor(tenkan5m[entryIndex]);
+  const exitX = xFor(exitIndex);
+  const exitY = yFor(gma30[exitIndex]);
+  context.save();
+  context.strokeStyle = "rgba(154, 79, 181, 0.72)";
+  context.fillStyle = "#9a4fb5";
+  context.lineWidth = 1.4;
+  context.setLineDash([4, 3]);
+  context.beginPath();
+  context.moveTo(entryX, entryY);
+  context.lineTo(exitX, exitY);
+  context.stroke();
+  context.setLineDash([]);
+
+  [
+    { x: entryX, y: entryY, label: "수익담보 1계약", dy: -11 },
+    { x: exitX, y: exitY, label: "30이평 청산", dy: -11 },
+  ].forEach((point) => {
+    context.beginPath();
+    context.arc(point.x, point.y, 3.8, 0, Math.PI * 2);
+    context.fill();
+    context.font = "10px Segoe UI, sans-serif";
+    context.textAlign = point.x > xFor(11.5) ? "right" : "center";
+    context.fillText(point.label, point.x, Math.max(11, point.y + point.dy));
+  });
+  context.restore();
+}
+
+function drawBottomBounceTargets(context, xFor, yFor, dayLevels, gma50 = []) {
+  const startX = xFor(9);
+  const firstX = xFor(11.2);
+  const secondX = xFor(13);
+  const startY = yFor(dayLevels["당일 61.8"] - 2.4);
+  const firstY = yFor(dayLevels["당일 61.8"]);
+  const secondY = yFor(dayLevels["당일 50"]);
+  const gma50Y = Number.isFinite(gma50[13]) ? yFor(gma50[13]) : secondY;
+  context.save();
+  context.strokeStyle = "rgba(199, 85, 43, 0.76)";
+  context.fillStyle = "#c7552b";
+  context.lineWidth = 1.6;
+  context.setLineDash([6, 3]);
+  context.beginPath();
+  context.moveTo(startX, startY);
+  context.lineTo(firstX, firstY);
+  context.lineTo(secondX, secondY);
+  context.stroke();
+  context.setLineDash([]);
+  context.strokeStyle = "rgba(182, 80, 74, 0.72)";
+  context.lineWidth = 1.2;
+  context.beginPath();
+  context.moveTo(secondX - 7, secondY);
+  context.lineTo(secondX + 7, gma50Y);
+  context.stroke();
+  [
+    { x: startX, y: startY, label: "바운딩" },
+    { x: firstX, y: firstY, label: "1차 61.8%" },
+    { x: secondX, y: (secondY + gma50Y) / 2, label: "50%+50이평 올청" },
+  ].forEach((point) => {
+    context.beginPath();
+    context.arc(point.x, point.y, 3.6, 0, Math.PI * 2);
+    context.fill();
+    context.font = "10px Segoe UI, sans-serif";
+    context.textAlign = point.x > xFor(12) ? "right" : "center";
+    context.fillText(point.label, point.x, Math.max(11, point.y - 9));
+  });
+  context.restore();
 }
 
 function drawResetBlueprint(context, width, padding, xFor, yFor, resetHigh, reset618, resetMid, reset100) {

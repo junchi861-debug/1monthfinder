@@ -26,6 +26,12 @@ GitHub Actions로 하루 한 번 돌리는 구조는 맞지 않는다.
 - 핵심 자리 이탈 후 직전 저가를 새 61.8%로 맞추고 100% 자리를 다시 계산하는 피보나치 리셋 구조 추가
 - 리셋된 61.8%~100% 사이 중심라인과 프리미엄 1.5~1.8 콜 2~3계약 재시작 후보 추가
 - 원하는 자리 근처 밑꼬리 확인을 중심라인 콜 재시작 신뢰도 상승 조건으로 추가
+- 저점 자리이동 후 1270콜 2.2 예시, 3.0~3.3에서 70% 청산 후 잔량 운용 규칙 추가
+- 마지막 트라이 1260콜 2.4 예시, 400/456이평 라인대, +40~50% 1계약 및 +100% 1계약 단계 청산 규칙 추가
+- 자리이동/마지막 트라이 이후 당일 전구간 피보나치로 현재 지수 위치를 재점검하는 구조 추가
+- 저점권 바운딩 이후 1차 목표 61.8%, 2차 목표 50% 도전 구조 추가
+- 50% 피보나치와 50이평이 겹치는 자리에서 수익극대화 잔량 올청 후 당일 매매 종료 구조 추가
+- 수익담보 보수 모드에서 전환선 눌림 1계약 진입, 30이평 터치 청산 규칙 추가
 - 70% 1차 진입, 30% 추가 진입, 105% 손절, 70% 청산, 잔량 운용, 5분봉 하락 압력, 쌍바닥 최소 트라이, 100% 앞선 트라이 상태 흐름 정리
 - 옵션 당일 손실 300만원 중단 원칙, 당일 50~100만원 수익 후 보수 모드, 하락 압력 구간 최소 물량 트라이, 100% 앞선 자리 트라이, 만기일 12시 이후 1.5%/프리 0.6~1.0/40% 손절 규칙, 1회 손절 30~50만원 감수, 3계약 분할진입, 70% 안전마진 물량/30% 수익극대화 물량, 급반등 +20~30% 최소 1계약 청산, -20~-25% 손실권 자리이동, 자리이동 2회 제한, 약손실 후 대기, -30% 손실선 홀딩, +35%/+45% 부분청산, 잔량 운용 구조 정리
 - 알고리즘 설정 JSON 분리
@@ -75,6 +81,10 @@ GitHub Actions로 하루 한 번 돌리는 구조는 맞지 않는다.
 - reset_fib_618, reset_fib_100
 - reset_mid_618_100
 - lower_wick_5m, lower_wick_ratio_5m
+- gma_400, gma_456
+- intraday_full_fib_50, intraday_full_fib_618
+- bottom_bounce_target_618, bottom_bounce_target_50
+- fib50_gma50_confluence
 
 3. 상태 머신 구현
 - WAIT
@@ -86,6 +96,20 @@ GitHub Actions로 하루 한 번 돌리는 구조는 맞지 않는다.
 - FIBONACCI_RESET
 - RESET_MID_CALL_PREPARE
 - RESET_MID_WICK_CONFIRM
+- LONG_MA_FINAL_TRY_LINE
+- INTRADAY_FULL_FIB_CHECK
+- BOTTOM_BOUNCE_TARGET_618
+- BOTTOM_BOUNCE_TARGET_50
+- RUNNER_FULL_EXIT_50_CONFLUENCE
+- DAILY_DONE_NO_MORE_TRY
+- SWITCH_TAKE_PROFIT_70
+- FINAL_LONG_MA_TRY
+- FINAL_TRY_STAGED_EXIT
+- INTRADAY_FULL_FIB_REVIEW
+- PROFIT_COLLATERAL_TENKAN_PULLBACK
+- PROFIT_COLLATERAL_GMA30_EXIT
+- PROFIT_COLLATERAL_TENKAN_ENTRY
+- SCALP_GMA30_EXIT
 - SELL_70
 - HOLD_RUNNER
 - SELL_REST
@@ -116,6 +140,13 @@ GitHub Actions로 하루 한 번 돌리는 구조는 맞지 않는다.
 - 피보나치 리셋용 새 고가/직전 저가 확정 기준
 - 리셋 중심라인에서 2계약/3계약 선택 기준과 1.5~1.8 프리미엄 주문가 분할 기준
 - 원하는 자리 밑꼬리의 종가 회복 기준, 밑꼬리 비율, 근접 허용 오차
+- 1270콜/1260콜이 예시 행사가인지 자동 선택 기준인지
+- 마지막 트라이가 자리이동 2회 제한에 포함되는지
+- 400/456이평 산식과 적용 시간프레임
+- 당일 전구간 피보나치의 고가/저가 기준과 현재 위치별 행동 규칙
+- 수익담보 전환선 눌림 진입 기준
+- 수익담보 1계약의 30이평 청산 기준
+- 수익담보 스캘프의 손절선과 미체결 주문 취소 기준
 
 
 6. 주의
