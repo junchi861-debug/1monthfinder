@@ -572,6 +572,20 @@ function backfilledTradePlan(snapshot, signal, candle) {
       runnerTargetText: setup.runnerTargetText,
     };
   }
+  if (signal.trade_decision === "take_profit" || String(signalLogRule(signal)).includes("RUNNER_EXIT")) {
+    const premium = optionPremiumPlan(signal);
+    const runnerExit = number(signal.metrics?.option_runner_exit_premium) ?? premium.entry;
+    return {
+      status: "잔량청산",
+      entry: premium.entry,
+      stop: runnerExit,
+      tp1: premium.tp1,
+      tp2: runnerExit,
+      stopText: `3회차 본청 ${formatNum(runnerExit, 2)}`,
+      tp2Text: "청산확인",
+      contracts: number(signal.metrics?.option_runner_exit_contracts) || 1,
+    };
+  }
   if (signal.type === "sell" || String(signalLogRule(signal)).includes("BREAK")) {
     const premium = optionPremiumPlan(signalLike);
     return {
@@ -925,6 +939,36 @@ function buildLiveTradePlan(snapshot) {
       tp1Gain: setup.tp1Gain,
       runnerTargetText: setup.runnerTargetText,
       markers: [tradeEvent(eventKind, 1, candles[pointIndex] || latest, pointIndex, setup)],
+    };
+  }
+
+  if (signal.trade_decision === "take_profit" || String(signal.rule || "").includes("RUNNER_EXIT")) {
+    const premium = optionPremiumPlan(signal);
+    const runnerExit = number(signal.metrics?.option_runner_exit_premium) ?? premium.entry;
+    const exitSetup = {
+      ...premium,
+      mode: "signal",
+      currentStop: runnerExit,
+      tp1Contracts: number(signal.metrics?.option_runner_exit_contracts) || 1,
+      indexEntry: close,
+      indexStop: close,
+      indexTp1: close,
+      indexTp2: close,
+      risk: 1,
+    };
+    return {
+      tone: "warning",
+      status: "잔량청산",
+      entry: premium.entry,
+      stop: runnerExit,
+      tp1: premium.tp1,
+      tp2: runnerExit,
+      stopLabel: "잔량",
+      stopText: `3회차 본청 ${formatNum(runnerExit, 2)}`,
+      tp2Label: "판단",
+      tp2Text: "청산확인",
+      contracts: number(signal.metrics?.option_runner_exit_contracts) || 1,
+      markers: [tradeEvent("take_profit", 1, candles[pointIndex] || latest, pointIndex, exitSetup, close)],
     };
   }
 

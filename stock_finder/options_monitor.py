@@ -68,7 +68,7 @@ def build_options_monitor_snapshot(use_cache: bool = True) -> dict[str, Any]:
         "source": {
             "name": "Yahoo Finance + Naver Finance",
             "key_required": False,
-            "note": "Yahoo 5분봉에 네이버 장중 시간별 시세를 합쳐 최신 분봉 지연을 줄입니다. 주문/계좌 기능은 사용하지 않습니다.",
+            "note": "Yahoo 5분봉과 네이버 1분 장중 시세를 합쳐 1분 예비 감지와 5분 확정 신호를 나눕니다. 주문/계좌 기능은 사용하지 않습니다.",
         },
         "main": main,
         "secondary": secondary,
@@ -94,7 +94,7 @@ def evaluate_candle_signal(candles: list[dict[str, Any]], levels: dict[str, floa
 
 def _build_instrument_snapshot(instrument: MonitorInstrument, generated_at: datetime) -> dict[str, Any]:
     try:
-        candles = _fetch_monitor_candles(instrument, generated_at)
+        candles, minute_candles = _fetch_monitor_bundle(instrument, generated_at)
     except Exception as exc:
         return {
             "ok": False,
@@ -118,6 +118,13 @@ def _build_instrument_snapshot(instrument: MonitorInstrument, generated_at: date
     latest = candles[-1] if candles else None
     signal = _evaluate_signal(candles, levels, generated_at)
     session_candles = _latest_session_candles(candles)
+    minute_signal = (
+        _minute_precheck_signal(minute_candles, session_candles, generated_at)
+        if instrument.role == "main"
+        else None
+    )
+    if minute_signal and _prefer_minute_signal(signal):
+        signal = minute_signal
     signals = _signals_for_candles(session_candles) if instrument.role == "main" else []
     return {
         "ok": bool(candles),
@@ -126,16 +133,27 @@ def _build_instrument_snapshot(instrument: MonitorInstrument, generated_at: date
         "label": instrument.label,
         "provider": instrument.provider,
         "interval": "5m",
+        "precheck_interval": "1m" if minute_candles else None,
         "candles": candles[-96:],
+        "minute_candles": minute_candles[-90:],
         "latest": latest,
         "levels": levels,
         "raw_levels": _intraday_levels(candles),
+        "minute_signal": minute_signal,
         "signals": signals,
         "signal": signal,
     }
 
 
 def _fetch_monitor_candles(instrument: MonitorInstrument, generated_at: datetime) -> list[dict[str, Any]]:
+    candles, _minute_candles = _fetch_monitor_bundle(instrument, generated_at)
+    return candles
+
+
+def _fetch_monitor_bundle(
+    instrument: MonitorInstrument,
+    generated_at: datetime,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     yahoo_candles: list[dict[str, Any]] = []
     errors: list[str] = []
     try:
@@ -144,16 +162,23 @@ def _fetch_monitor_candles(instrument: MonitorInstrument, generated_at: datetime
         errors.append(f"Yahoo: {exc}")
 
     naver_candles: list[dict[str, Any]] = []
+    naver_minute_candles: list[dict[str, Any]] = []
     if instrument.naver_code and instrument.naver_kind and _is_naver_live_window(generated_at):
         pages = _naver_page_budget(yahoo_candles, generated_at)
         try:
-            naver_candles = _fetch_naver_candles(instrument.naver_code, instrument.naver_kind, pages, generated_at)
+            naver_minute_candles = _fetch_naver_minute_candles(
+                instrument.naver_code,
+                instrument.naver_kind,
+                pages,
+                generated_at,
+            )
+            naver_candles = _aggregate_candles_to_5m(naver_minute_candles)
         except Exception as exc:
             errors.append(f"Naver: {exc}")
 
     candles = _merge_candles(yahoo_candles, naver_candles)
     if candles:
-        return candles
+        return candles, naver_minute_candles
     raise RuntimeError("; ".join(errors) or "분봉 데이터 없음")
 
 
@@ -244,6 +269,18 @@ def _fetch_yahoo_candles(symbol: str, range_value: str = "5d") -> list[dict[str,
 
 
 def _fetch_naver_candles(code: str, kind: str, pages: int, generated_at: datetime) -> list[dict[str, Any]]:
+    return _aggregate_candles_to_5m(_fetch_naver_minute_candles(code, kind, pages, generated_at))
+
+
+def _fetch_naver_minute_candles(code: str, kind: str, pages: int, generated_at: datetime) -> list[dict[str, Any]]:
+    quotes = _fetch_naver_time_quotes(code, kind, pages, generated_at)
+    candles = _quotes_to_minute_candles(quotes)
+    if not candles:
+        raise RuntimeError("네이버 1분 시세 없음")
+    return candles
+
+
+def _fetch_naver_time_quotes(code: str, kind: str, pages: int, generated_at: datetime) -> list[dict[str, Any]]:
     quotes: list[dict[str, Any]] = []
     trade_date = generated_at.date()
     for page in range(1, pages + 1):
@@ -253,10 +290,10 @@ def _fetch_naver_candles(code: str, kind: str, pages: int, generated_at: datetim
         quotes.extend(page_quotes)
         if page_quotes[-1]["datetime"].time() <= time(9, 0):
             break
-    candles = _aggregate_minute_quotes(quotes)
-    if not candles:
+    quotes = _unique_ordered_quotes(quotes)
+    if not quotes:
         raise RuntimeError("네이버 장중 시세 없음")
-    return candles
+    return quotes
 
 
 def _fetch_naver_time_page(
@@ -346,15 +383,48 @@ def _naver_volume_delta(cells: list[str], kind: str) -> int:
     return max(0, int(value * multiplier))
 
 
-def _aggregate_minute_quotes(quotes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _unique_ordered_quotes(quotes: list[dict[str, Any]]) -> list[dict[str, Any]]:
     if not quotes:
         return []
     unique = {quote["datetime"]: quote for quote in quotes}
-    ordered = [unique[key] for key in sorted(unique)]
-    buckets: dict[datetime, dict[str, Any]] = {}
-    for quote in ordered:
+    return [unique[key] for key in sorted(unique)]
+
+
+def _quotes_to_minute_candles(quotes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    candles: list[dict[str, Any]] = []
+    previous_close: float | None = None
+    for quote in _unique_ordered_quotes(quotes):
         timestamp: datetime = quote["datetime"]
+        close = round(float(quote["close"]), 4)
+        open_ = close if previous_close is None else previous_close
+        candles.append(
+            {
+                "time": timestamp.strftime("%H:%M"),
+                "datetime": _iso(timestamp),
+                "date": timestamp.date().isoformat(),
+                "open": round(open_, 4),
+                "high": round(max(open_, close), 4),
+                "low": round(min(open_, close), 4),
+                "close": close,
+                "volume": int(quote.get("volume_delta") or 0),
+                "partial": True,
+                "source_interval": "1m",
+            }
+        )
+        previous_close = close
+    return candles
+
+
+def _aggregate_candles_to_5m(candles_1m: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if not candles_1m:
+        return []
+    buckets: dict[datetime, dict[str, Any]] = {}
+    for quote in candles_1m:
+        timestamp = _parse_iso(str(quote["datetime"]))
         bucket_time = timestamp.replace(minute=(timestamp.minute // 5) * 5, second=0, microsecond=0)
+        open_ = float(quote["open"])
+        high = float(quote["high"])
+        low = float(quote["low"])
         close = float(quote["close"])
         bucket = buckets.get(bucket_time)
         if bucket is None:
@@ -362,18 +432,19 @@ def _aggregate_minute_quotes(quotes: list[dict[str, Any]]) -> list[dict[str, Any
                 "time": bucket_time.strftime("%H:%M"),
                 "datetime": _iso(bucket_time),
                 "date": bucket_time.date().isoformat(),
-                "open": close,
-                "high": close,
-                "low": close,
+                "open": open_,
+                "high": high,
+                "low": low,
                 "close": close,
-                "volume": int(quote.get("volume_delta") or 0),
+                "volume": int(quote.get("volume") or 0),
                 "partial": True,
+                "source_interval": "5m-from-1m",
             }
             continue
-        bucket["high"] = max(float(bucket["high"]), close)
-        bucket["low"] = min(float(bucket["low"]), close)
+        bucket["high"] = max(float(bucket["high"]), high)
+        bucket["low"] = min(float(bucket["low"]), low)
         bucket["close"] = close
-        bucket["volume"] = int(bucket.get("volume") or 0) + int(quote.get("volume_delta") or 0)
+        bucket["volume"] = int(bucket.get("volume") or 0) + int(quote.get("volume") or 0)
 
     candles = list(buckets.values())
     for candle in candles:
@@ -382,6 +453,10 @@ def _aggregate_minute_quotes(quotes: list[dict[str, Any]]) -> list[dict[str, Any
         candle["low"] = round(float(candle["low"]), 4)
         candle["close"] = round(float(candle["close"]), 4)
     return candles
+
+
+def _aggregate_minute_quotes(quotes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return _aggregate_candles_to_5m(_quotes_to_minute_candles(quotes))
 
 
 def _merge_candles(base: list[dict[str, Any]], overlay: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -450,6 +525,104 @@ def _signals_for_candles(candles: list[dict[str, Any]]) -> list[dict[str, Any]]:
             }
         )
     return signals[-24:]
+
+
+def _minute_precheck_signal(
+    minute_candles: list[dict[str, Any]],
+    five_minute_session: list[dict[str, Any]],
+    generated_at: datetime,
+) -> dict[str, Any] | None:
+    if len(minute_candles) < 2 or len(five_minute_session) < 30:
+        return None
+
+    latest_date = five_minute_session[-1].get("date")
+    minute_session = [candle for candle in minute_candles if candle.get("date") == latest_date]
+    if len(minute_session) < 2:
+        return None
+
+    levels = _intraday_levels(five_minute_session)
+    span = max(float(levels.get("day_high") or 0) - float(levels.get("day_low") or 0), 0.0001)
+    trend = _trend_context(five_minute_session)
+    tenkan = _level(trend, "tenkan")
+    kijun = _level(trend, "kijun")
+    gma_30 = _level(trend, "gma_30")
+    if tenkan is None or kijun is None or gma_30 is None:
+        return None
+
+    latest = minute_session[-1]
+    previous = minute_session[-2]
+    close = float(latest["close"])
+    open_ = float(latest["open"])
+    low = float(latest["low"])
+    high = float(latest["high"])
+    previous_close = float(previous["close"])
+    tolerance = _trend_touch_tolerance(span)
+    reclaims_tenkan = previous_close < tenkan - tolerance and close >= tenkan
+    touches_tenkan = low <= tenkan + tolerance and high >= tenkan - tolerance and close >= tenkan
+    holds_base = close >= kijun and close >= gma_30
+    if not (reclaims_tenkan or touches_tenkan) or not holds_base:
+        return None
+
+    evidence = _recent_kijun_support_evidence(five_minute_session[:-1], span)
+    if int(evidence["kijun_support_count"]) < 2:
+        return None
+
+    latest_time = _parse_iso(str(latest["datetime"]))
+    age_minutes = max(0, int((generated_at - latest_time).total_seconds() // 60))
+    candle_range = max(high - low, 0.0001)
+    lower_wick_ratio = max(min(open_, close) - low, 0) / candle_range
+    return {
+        "type": "watch",
+        "label": "1분예비",
+        "title": "전환선 1분 예비 감지",
+        "message": (
+            f"네이버 1분 시세가 5분봉 확정 전에 전환선 {tenkan:.2f} 회복/재터치를 먼저 감지했습니다. "
+            f"기준선 {kijun:.2f} 지지와 30이평 {gma_30:.2f} 위 흐름은 유지 중입니다. "
+            "종목은 미리 준비하되, 실제 진입은 5분봉 확정 신호로 승격될 때 확인합니다."
+        ),
+        "alert_level": "normal",
+        "rule": "TENKAN_PULLBACK_PRECHECK_1M",
+        "time": latest["time"],
+        "datetime": latest["datetime"],
+        "date": latest["date"],
+        "index_value": close,
+        "candle": {
+            "time": latest["time"],
+            "datetime": latest["datetime"],
+            "date": latest["date"],
+            "open": latest["open"],
+            "high": latest["high"],
+            "low": latest["low"],
+            "close": latest["close"],
+        },
+        "trade_decision": "watch",
+        "metrics": _signal_metrics(
+            close,
+            lower_wick_ratio,
+            age_minutes,
+            trend,
+            _call_entry_filter_pass(close, trend),
+            {
+                "precheck_interval": "1m",
+                "confirmation_interval": "5m",
+                "tenkan_entry": tenkan,
+                "kijun_stop": kijun,
+                "gma30_reference": gma_30,
+                "kijun_support_count": evidence["kijun_support_count"],
+                "option_strike_offset_points": 70,
+                "option_premium_min": 2.0,
+                "option_premium_max": 3.0,
+                "option_entry_premium": 2.3,
+                "precheck_only": True,
+                "underlying_line_basis": "KOSPI200 futures confirm required",
+            },
+        ),
+    }
+
+
+def _prefer_minute_signal(signal: dict[str, Any]) -> bool:
+    rule = signal.get("rule")
+    return rule in (None, "", "WAIT", "NO_DATA") or signal.get("alert_level") == "silent"
 
 
 def _signal_levels(levels: dict[str, Any]) -> dict[str, float]:
@@ -568,6 +741,22 @@ def _evaluate_signal(candles: list[dict[str, Any]], levels: dict[str, float], ge
             "trade_decision": "stop",
             "metrics": _signal_metrics(close, lower_wick_ratio, age_minutes, trend, call_filter_pass),
         }
+
+    kijun_runner_exit = _kijun_repeat_runner_exit_signal(
+        candles,
+        latest,
+        span,
+        close,
+        open_,
+        low,
+        high,
+        lower_wick_ratio,
+        age_minutes,
+        trend,
+        call_filter_pass,
+    )
+    if kijun_runner_exit:
+        return kijun_runner_exit
 
     if low <= fib_618 <= close and close >= open_ and lower_wick_ratio >= 0.35:
         if not call_filter_pass:
@@ -705,6 +894,76 @@ def _index_reset_signal(
                 "index_reset_mid": reset_mid,
                 "index_reset_100": reset_100,
                 "index_reset_active": True,
+            },
+        ),
+    }
+
+
+def _kijun_repeat_runner_exit_signal(
+    candles: list[dict[str, Any]],
+    latest: dict[str, Any],
+    span: float,
+    close: float,
+    open_: float,
+    low: float,
+    high: float,
+    lower_wick_ratio: float,
+    age_minutes: int,
+    trend: dict[str, Any],
+    call_filter_pass: bool,
+) -> dict[str, Any] | None:
+    session = _latest_session_candles(candles)
+    if len(session) < 30:
+        return None
+
+    kijun = _level(trend, "kijun")
+    tenkan = _level(trend, "tenkan")
+    gma_30 = _level(trend, "gma_30")
+    if kijun is None:
+        return None
+
+    tolerance = _trend_touch_tolerance(span)
+    touches_kijun = low <= kijun + tolerance and high >= kijun - tolerance
+    rebounds_from_kijun = close >= kijun and high >= kijun + tolerance * 0.5
+    if not touches_kijun or not rebounds_from_kijun:
+        return None
+
+    evidence = _recent_kijun_support_evidence(session[:-1], span)
+    previous_touches = int(evidence["kijun_support_count"])
+    touch_count = previous_touches + 1
+    if previous_touches < 2:
+        return None
+
+    return {
+        "type": "watch",
+        "label": "잔량청산",
+        "title": "기준선 3회차 터치",
+        "message": (
+            f"30분 안에 기준선 {kijun:.2f} 터치 후 재상승이 {touch_count}회째입니다. "
+            "이 구간은 잔량을 더 끌기보다 홀딩 물량 청산을 확인하는 쪽이 안전합니다. "
+            "2.3 부근 진입 후 남긴 1계약은 지수 상승 각도가 가파르지 않으면 프리미엄이 폭발하지 못하고 본청 근처로 돌아올 수 있습니다."
+        ),
+        "alert_level": "strong",
+        "rule": "KIJUN_THIRD_TOUCH_RUNNER_EXIT",
+        "time": latest["time"],
+        "trade_decision": "take_profit",
+        "metrics": _signal_metrics(
+            close,
+            lower_wick_ratio,
+            age_minutes,
+            trend,
+            call_filter_pass,
+            {
+                "kijun_touch_count_30m": touch_count,
+                "kijun_previous_touch_count_30m": previous_touches,
+                "kijun_stop": kijun,
+                "tenkan_entry": tenkan,
+                "gma30_reference": gma_30,
+                "option_entry_premium": 2.3,
+                "option_runner_exit_premium": 2.3,
+                "option_runner_exit_contracts": 1,
+                "runner_exit_reason": "third kijun touch/rebound within 30 minutes; weak index angle can return option runner near breakeven",
+                "underlying_line_basis": "KOSPI200 futures confirm required",
             },
         ),
     }
