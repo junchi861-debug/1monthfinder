@@ -46,6 +46,7 @@ const state = {
   wakeLock: null,
   chartResizeObserver: null,
   redrawFrame: null,
+  viewportFrame: null,
 };
 
 const modalMeta = {
@@ -269,9 +270,11 @@ function bindControls() {
     localStorage.removeItem(SIGNAL_LOG_KEY);
     renderSignalLog();
   });
+  updateViewportMetrics();
   setupChartResizeObserver();
-  window.addEventListener("resize", scheduleChartRedraw);
-  window.visualViewport?.addEventListener("resize", scheduleChartRedraw);
+  window.addEventListener("resize", handleViewportChange);
+  window.visualViewport?.addEventListener("resize", handleViewportChange);
+  window.visualViewport?.addEventListener("scroll", handleViewportChange);
 }
 
 async function registerServiceWorker() {
@@ -2085,6 +2088,23 @@ function setupChartResizeObserver() {
   state.chartResizeObserver?.disconnect();
   state.chartResizeObserver = new ResizeObserver(scheduleChartRedraw);
   document.querySelectorAll(".chart-frame").forEach((frame) => state.chartResizeObserver.observe(frame));
+}
+
+function handleViewportChange() {
+  updateViewportMetrics();
+  scheduleChartRedraw();
+}
+
+function updateViewportMetrics() {
+  if (state.viewportFrame) window.cancelAnimationFrame(state.viewportFrame);
+  state.viewportFrame = window.requestAnimationFrame(() => {
+    state.viewportFrame = null;
+    const viewport = window.visualViewport;
+    const height = Math.max(320, Math.round(viewport?.height || window.innerHeight || document.documentElement.clientHeight || 640));
+    const offsetTop = Math.max(0, Math.round(viewport?.offsetTop || 0));
+    document.documentElement.style.setProperty("--app-viewport-height", `${height}px`);
+    document.documentElement.style.setProperty("--app-viewport-top", `${offsetTop}px`);
+  });
 }
 
 function scheduleChartRedraw() {
