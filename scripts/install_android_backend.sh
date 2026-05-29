@@ -2,6 +2,7 @@
 set -eu
 
 REPO_URL="${REPO_URL:-https://github.com/junchi861-debug/1monthfinder.git}"
+SOURCE_ZIP_URL="${SOURCE_ZIP_URL:-https://github.com/junchi861-debug/1monthfinder/archive/refs/heads/main.zip}"
 APP_DIR="${APP_DIR:-$HOME/1monthfinder}"
 PORT="${PORT:-8000}"
 START_BIN="${PREFIX:-$HOME/.local}/bin/1monthfinder-backend"
@@ -24,8 +25,43 @@ find_python() {
 
 if command -v pkg >/dev/null 2>&1; then
   pkg update -y
-  pkg install -y curl git python
+  pkg install -y git python
 fi
+
+PYTHON_BIN="$(find_python)" || {
+  say "Python was not found. In Termux, run: pkg install -y python"
+  exit 1
+}
+
+download_source_archive() {
+  target_dir="$1"
+  "$PYTHON_BIN" - "$SOURCE_ZIP_URL" "$target_dir" <<'PY'
+import io
+import shutil
+import sys
+import urllib.request
+import zipfile
+from pathlib import Path
+
+url = sys.argv[1]
+target = Path(sys.argv[2]).expanduser()
+tmp = target.with_name(target.name + ".download")
+if tmp.exists():
+    shutil.rmtree(tmp)
+tmp.mkdir(parents=True, exist_ok=True)
+with urllib.request.urlopen(url, timeout=60) as response:
+    data = response.read()
+with zipfile.ZipFile(io.BytesIO(data)) as archive:
+    archive.extractall(tmp)
+roots = [path for path in tmp.iterdir() if path.is_dir()]
+if len(roots) != 1:
+    raise SystemExit("source archive layout was not recognized")
+if target.exists():
+    shutil.rmtree(target)
+shutil.move(str(roots[0]), str(target))
+shutil.rmtree(tmp, ignore_errors=True)
+PY
+}
 
 if [ -d "$APP_DIR/.git" ]; then
   if ! git -C "$APP_DIR" pull --ff-only; then
@@ -41,17 +77,18 @@ elif [ -e "$APP_DIR" ]; then
   say "$APP_DIR already exists and is not a git repository."
   say "Moving it to $BACKUP_DIR and cloning a clean copy."
   mv "$APP_DIR" "$BACKUP_DIR"
-  git clone "$REPO_URL" "$APP_DIR"
+  if ! git clone "$REPO_URL" "$APP_DIR"; then
+    say "Git clone failed. Downloading source archive with Python instead."
+    download_source_archive "$APP_DIR"
+  fi
 else
-  git clone "$REPO_URL" "$APP_DIR"
+  if ! git clone "$REPO_URL" "$APP_DIR"; then
+    say "Git clone failed. Downloading source archive with Python instead."
+    download_source_archive "$APP_DIR"
+  fi
 fi
 
 cd "$APP_DIR"
-
-PYTHON_BIN="$(find_python)" || {
-  say "Python was not found. In Termux, run: pkg install -y python"
-  exit 1
-}
 
 if [ ! -f ".env.local" ] && [ -f "config/backend.env.example" ]; then
   cp "config/backend.env.example" ".env.local"
@@ -128,7 +165,12 @@ case "\$command_name" in
     fi
     ;;
   update)
-    git -C "\$APP_DIR" pull --ff-only
+    if [ -d "\$APP_DIR/.git" ]; then
+      git -C "\$APP_DIR" pull --ff-only
+    else
+      echo "This install was created from a source archive, not git."
+      echo "Run the install command again to refresh the app files."
+    fi
     ;;
   start|"")
     if health_check; then

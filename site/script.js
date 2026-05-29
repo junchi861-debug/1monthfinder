@@ -2,8 +2,16 @@ const MONITOR_POLL_MS = 60000;
 const SIGNAL_LOG_KEY = "1monthfinder.options.signalLog";
 const SETTINGS_KEY = "1monthfinder.options.settings";
 const ANDROID_BACKEND_LOCAL_URL = "http://127.0.0.1:8000";
-const ANDROID_INSTALL_COMMAND =
-  'pkg update -y && pkg install -y curl git python && curl -fsSL https://raw.githubusercontent.com/junchi861-debug/1monthfinder/main/scripts/install_android_backend.sh -o "$HOME/install_1monthfinder.sh" && NO_START=1 sh "$HOME/install_1monthfinder.sh"';
+const ANDROID_INSTALL_COMMAND = [
+  "pkg update -y && pkg upgrade -y && pkg install -y git python",
+  "python - <<'PY'",
+  "from pathlib import Path",
+  "from urllib.request import urlopen",
+  "url = 'https://raw.githubusercontent.com/junchi861-debug/1monthfinder/main/scripts/install_android_backend.sh'",
+  "Path.home().joinpath('install_1monthfinder.sh').write_bytes(urlopen(url, timeout=60).read())",
+  "PY",
+  'NO_START=1 sh "$HOME/install_1monthfinder.sh"',
+].join("\n");
 const ANDROID_START_COMMAND =
   'export PATH="$PREFIX/bin:$HOME/.local/bin:$PATH"; BACKEND_BIN="$(command -v 1monthfinder-backend || printf "%s" "${PREFIX:-$HOME/.local}/bin/1monthfinder-backend")"; echo "$BACKEND_BIN"; "$BACKEND_BIN" doctor && { "$BACKEND_BIN" status || "$BACKEND_BIN"; }';
 const BACKEND_ENV_TEMPLATE = [
