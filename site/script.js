@@ -476,6 +476,8 @@ function signalLogEntry(signal, candle, tradePlan = null) {
       stopText: tradePlan.stopText,
       tp2Text: tradePlan.tp2Text,
       contracts: tradePlan.contracts,
+      tp1Gain: tradePlan.tp1Gain,
+      runnerTargetText: tradePlan.runnerTargetText,
     } : null,
     sourceAt,
     createdAt: new Date().toISOString(),
@@ -502,6 +504,8 @@ function backfilledTradePlan(snapshot, signal, candle) {
       stopText: setup.stopText,
       tp2Text: setup.tp2Text,
       contracts: setup.contracts,
+      tp1Gain: setup.tp1Gain,
+      runnerTargetText: setup.runnerTargetText,
     };
   }
   if (signal.type === "sell" || String(signalLogRule(signal)).includes("BREAK")) {
@@ -548,8 +552,10 @@ function renderSignalLog() {
   root.innerHTML = state.signalLog
     .slice(0, 5)
     .map((item) => {
+      const tp1GainText = item.trade?.tp1Gain != null ? `(+${formatNum(item.trade.tp1Gain, 2)})` : "";
+      const runnerText = item.trade?.runnerTargetText || item.trade?.tp2Text || "";
       const tradeText = item.trade
-        ? `ENTRY ${formatNum(item.trade.entry, 2)} · ${item.trade.stopText || `STOP ${formatNum(item.trade.stop, 2)}`} · TP1 ${formatNum(item.trade.tp1, 2)}${item.trade.tp2Text ? ` · ${item.trade.tp2Text}` : ""}`
+        ? `ENTRY ${formatNum(item.trade.entry, 2)} · ${item.trade.stopText || `STOP ${formatNum(item.trade.stop, 2)}`} · TP1 ${formatNum(item.trade.tp1, 2)}${tp1GainText}${runnerText ? ` · ${runnerText}` : ""}`
         : item.message;
       return `
         <article class="log-item ${escapeAttr(signalClass(item.type))}">
@@ -775,7 +781,7 @@ function renderLiveTradePlan(plan) {
     { label: "계획진입", value: formatNum(current.entry, 2) },
     { label: current.stopLabel || "계획손절", value: current.stopText || formatNum(current.stop, 2) },
     { label: "계획TP1", value: formatNum(current.tp1, 2) },
-    { label: current.tp2Label || "계획TP2", value: current.tp2Text || formatNum(current.tp2, 2) },
+    { label: current.tp2Label || "계획TP2", value: current.runnerTargetText || current.tp2Text || formatNum(current.tp2, 2) },
   ];
   root.innerHTML = items
     .map((item) => `
@@ -852,6 +858,8 @@ function buildLiveTradePlan(snapshot) {
       tp2Label: setup.tp2Label,
       tp2Text: setup.tp2Text,
       contracts: setup.contracts,
+      tp1Gain: setup.tp1Gain,
+      runnerTargetText: setup.runnerTargetText,
       markers: [tradeEvent(eventKind, 1, candles[pointIndex] || latest, pointIndex, setup)],
     };
   }
@@ -1161,6 +1169,11 @@ function tradeSetupFromSignal(signal, session, entryOverride = null) {
   const tenkanStopText = isTenkanPullback && stopReference != null
     ? `기준 ${formatNum(stopReference, 2)} · 선물확인`
     : null;
+  const tp1Gain = number(signal.metrics?.option_tp1_gain) ?? (premium.tp1 - premium.entry);
+  const extensionTarget = number(signal.metrics?.runner_extension_target);
+  const runnerTargetText = isTenkanPullback
+    ? extensionTarget != null ? `1.6배 ${formatNum(extensionTarget, 2)}` : "1.6배 홀딩"
+    : null;
 
   return {
     direction: "CALL",
@@ -1177,6 +1190,10 @@ function tradeSetupFromSignal(signal, session, entryOverride = null) {
     stopText: tenkanStopText,
     tp2Label: isTenkanPullback ? "잔량" : null,
     tp2Text: isTenkanPullback ? "트레일" : null,
+    tp1Gain,
+    runnerTargetText,
+    tp1Reason: isTenkanPullback ? "D-1 타이트 안전마진" : null,
+    runnerCutText: isTenkanPullback ? "기준선 지지 실패 컷" : null,
     optionRangeText: isTenkanPullback ? `${formatNum(signal.metrics?.option_premium_min, 1)}~${formatNum(signal.metrics?.option_premium_max, 1)}` : null,
     strikeOffsetText: isTenkanPullback ? `+${formatNum(signal.metrics?.option_strike_offset_points, 0)}p` : null,
     indexEntry,
@@ -1350,14 +1367,16 @@ function tradeTitle(kind, tradeId) {
 function tradeDetail(kind, setup, outputR) {
   if (kind === "entry" || kind === "test") {
     if (setup.tp2Text) {
-      return `${setup.contracts}계약 · TP1 ${formatNum(setup.tp1, 2)} 1계약 · 잔량 ${setup.tp2Text} · ${setup.stopText || `손절 ${formatNum(setup.stop, 2)}`}`;
+      const gainText = setup.tp1Gain != null ? `(+${formatNum(setup.tp1Gain, 2)})` : "";
+      const runnerText = setup.runnerTargetText ? ` · ${setup.runnerTargetText}` : "";
+      return `${setup.contracts}계약 · TP1 ${formatNum(setup.tp1, 2)}${gainText} 1계약 · 잔량 ${setup.tp2Text}${runnerText} · ${setup.stopText || `손절 ${formatNum(setup.stop, 2)}`}`;
     }
     const tp1Text = setup.tp1Contracts ? `TP1 ${setup.tp1Contracts}계약` : "TP1 본전스탑";
     return `${setup.contracts}계약 · 계획손절 ${formatNum(setup.stop, 2)} · ${tp1Text} · TP2 ${formatNum(setup.tp2, 2)}`;
   }
   if (kind === "tp1") {
     return setup.tp1Contracts
-      ? `계획프리 ${formatNum(outputR, 2)} · ${setup.tp1Contracts}계약 청산 · 잔량 ${setup.tp2Text || "본전스탑"}`
+      ? `계획프리 ${formatNum(outputR, 2)} · ${setup.tp1Contracts}계약 청산 · 잔량 ${setup.runnerTargetText || setup.tp2Text || "본전스탑"}`
       : `계획프리 ${formatNum(outputR, 2)} · 본전스탑 적용`;
   }
   if (kind === "mixed") {

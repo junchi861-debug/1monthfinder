@@ -747,6 +747,13 @@ def _tenkan_pullback_continuation_signal(
     if evidence["above_gma30_count"] < 1:
         return None
 
+    extension = _trend_extension_context(candles, close)
+    runner_note = (
+        f" 최근 트렌드고가 {extension['recent_trend_high']:.2f} 돌파 시 오늘 저가 기준 1.6배 파장 "
+        f"{extension['extension_target']:.2f}까지 잔량 홀딩을 시도합니다."
+        if extension.get("recent_trend_high") is not None and extension.get("extension_target") is not None
+        else " 최근 며칠 트렌드고가 돌파 시 오늘 저가 기준 1.6배 파장까지 잔량 홀딩을 시도합니다."
+    )
     return {
         "type": "candidate",
         "label": "전환선2",
@@ -755,7 +762,8 @@ def _tenkan_pullback_continuation_signal(
             f"30분 안에 기준선 {kijun:.2f} 지지가 {evidence['kijun_support_count']}번 반복됐고 "
             f"30이평 {gma_30:.2f} 위에서 전환선 {tenkan:.2f}을 재터치했습니다. "
             "피보나치 자리가 아니므로 현재가 대비 약 70p 위 위클리 콜 중 프리미엄 2.0~3.0, 기준 2.3 근처를 2계약 이하로 봅니다. "
-            "2.6 부근에서 1계약 청산 후 잔량은 선물 차트 전환선/기준선을 매매폰에서 재확인하며 트레일합니다."
+            "D-1은 큰 변동성이 없으면 옵션이 급격히 오르지 않으므로 +0.30 안전마진인 2.6 부근에서 1계약을 먼저 줄입니다. "
+            f"잔량은 선물 차트 전환선/기준선을 매매폰에서 재확인하며 트레일합니다.{runner_note}"
         ),
         "alert_level": "strong",
         "rule": "TENKAN_PULLBACK_CONTINUATION",
@@ -780,13 +788,53 @@ def _tenkan_pullback_continuation_signal(
                 "option_premium_max": 3.0,
                 "option_entry_premium": 2.3,
                 "option_tp1_premium": 2.6,
+                "option_tp1_gain": 0.3,
                 "option_tp1_contracts": 1,
+                "option_tp1_reason": "D-1 limited volatility, tight safety margin",
                 "option_runner_contracts": 1,
                 "option_runner_mode": "trail_until_futures_tenkan_break_or_kijun_touch",
+                "runner_extension_ratio": 1.6,
+                "runner_recent_trend_high": extension.get("recent_trend_high"),
+                "runner_today_low": extension.get("today_low"),
+                "runner_extension_target": extension.get("extension_target"),
+                "runner_trend_high_breakout": extension.get("trend_high_breakout"),
+                "runner_hold_condition": "hold while futures kijun support is not broken; kijun touch and rebound keeps trend alive",
+                "runner_cut_condition": "cut if futures fails to support kijun",
                 "underlying_line_basis": "KOSPI200 futures confirm required",
                 "entry_basis": "tenkan_pullback_after_kijun_support",
             },
         ),
+    }
+
+
+def _trend_extension_context(candles: list[dict[str, Any]], close: float) -> dict[str, Any]:
+    if not candles:
+        return {
+            "today_low": None,
+            "recent_trend_high": None,
+            "extension_target": None,
+            "trend_high_breakout": False,
+        }
+    latest_date = candles[-1].get("date")
+    today = [candle for candle in candles if candle.get("date") == latest_date]
+    previous = [candle for candle in candles if candle.get("date") != latest_date]
+    if not today:
+        return {
+            "today_low": None,
+            "recent_trend_high": None,
+            "extension_target": None,
+            "trend_high_breakout": False,
+        }
+    today_low = min(float(candle["low"]) for candle in today)
+    recent_trend_high = max((float(candle["high"]) for candle in previous[-288:]), default=None)
+    extension_target = None
+    if recent_trend_high is not None and recent_trend_high > today_low:
+        extension_target = today_low + (recent_trend_high - today_low) * 1.6
+    return {
+        "today_low": round(today_low, 4),
+        "recent_trend_high": round(recent_trend_high, 4) if recent_trend_high is not None else None,
+        "extension_target": round(extension_target, 4) if extension_target is not None else None,
+        "trend_high_breakout": bool(recent_trend_high is not None and close > recent_trend_high),
     }
 
 
