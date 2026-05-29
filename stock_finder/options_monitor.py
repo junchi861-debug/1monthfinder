@@ -754,7 +754,8 @@ def _tenkan_pullback_continuation_signal(
         "message": (
             f"30분 안에 기준선 {kijun:.2f} 지지가 {evidence['kijun_support_count']}번 반복됐고 "
             f"30이평 {gma_30:.2f} 위에서 전환선 {tenkan:.2f}을 재터치했습니다. "
-            "피보나치 자리가 아니므로 콜은 2계약 이하로 시작하고 지수가 기준선을 이탈하면 컷 기준입니다."
+            "피보나치 자리가 아니므로 현재가 대비 약 70p 위 위클리 콜 중 프리미엄 2.0~3.0, 기준 2.3 근처를 2계약 이하로 봅니다. "
+            "2.6 부근에서 1계약 청산 후 잔량은 선물 차트 전환선/기준선을 매매폰에서 재확인하며 트레일합니다."
         ),
         "alert_level": "strong",
         "rule": "TENKAN_PULLBACK_CONTINUATION",
@@ -774,6 +775,15 @@ def _tenkan_pullback_continuation_signal(
                 "above_gma30_count": evidence["above_gma30_count"],
                 "tenkan_reclaim_time": evidence.get("tenkan_reclaim_time"),
                 "contracts": 2,
+                "option_strike_offset_points": 70,
+                "option_premium_min": 2.0,
+                "option_premium_max": 3.0,
+                "option_entry_premium": 2.3,
+                "option_tp1_premium": 2.6,
+                "option_tp1_contracts": 1,
+                "option_runner_contracts": 1,
+                "option_runner_mode": "trail_until_futures_tenkan_break_or_kijun_touch",
+                "underlying_line_basis": "KOSPI200 futures confirm required",
                 "entry_basis": "tenkan_pullback_after_kijun_support",
             },
         ),

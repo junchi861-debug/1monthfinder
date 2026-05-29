@@ -473,6 +473,9 @@ function signalLogEntry(signal, candle, tradePlan = null) {
       stop: tradePlan.stop,
       tp1: tradePlan.tp1,
       tp2: tradePlan.tp2,
+      stopText: tradePlan.stopText,
+      tp2Text: tradePlan.tp2Text,
+      contracts: tradePlan.contracts,
     } : null,
     sourceAt,
     createdAt: new Date().toISOString(),
@@ -496,6 +499,9 @@ function backfilledTradePlan(snapshot, signal, candle) {
       stop: setup.stop,
       tp1: setup.tp1,
       tp2: setup.tp2,
+      stopText: setup.stopText,
+      tp2Text: setup.tp2Text,
+      contracts: setup.contracts,
     };
   }
   if (signal.type === "sell" || String(signalLogRule(signal)).includes("BREAK")) {
@@ -543,7 +549,7 @@ function renderSignalLog() {
     .slice(0, 5)
     .map((item) => {
       const tradeText = item.trade
-        ? `ENTRY ${formatNum(item.trade.entry, 2)} · STOP ${formatNum(item.trade.stop, 2)} · TP1 ${formatNum(item.trade.tp1, 2)}`
+        ? `ENTRY ${formatNum(item.trade.entry, 2)} · ${item.trade.stopText || `STOP ${formatNum(item.trade.stop, 2)}`} · TP1 ${formatNum(item.trade.tp1, 2)}${item.trade.tp2Text ? ` · ${item.trade.tp2Text}` : ""}`
         : item.message;
       return `
         <article class="log-item ${escapeAttr(signalClass(item.type))}">
@@ -767,9 +773,9 @@ function renderLiveTradePlan(plan) {
   const items = [
     { label: "상태", value: current.status || "대기" },
     { label: "계획진입", value: formatNum(current.entry, 2) },
-    { label: "계획손절", value: formatNum(current.stop, 2) },
+    { label: current.stopLabel || "계획손절", value: current.stopText || formatNum(current.stop, 2) },
     { label: "계획TP1", value: formatNum(current.tp1, 2) },
-    { label: "계획TP2", value: formatNum(current.tp2, 2) },
+    { label: current.tp2Label || "계획TP2", value: current.tp2Text || formatNum(current.tp2, 2) },
   ];
   root.innerHTML = items
     .map((item) => `
@@ -836,11 +842,16 @@ function buildLiveTradePlan(snapshot) {
     const eventKind = setup.mode === "test" ? "test" : "entry";
     return {
       tone: setup.mode === "test" ? "warning" : "buy",
-      status: setup.contracts > 1 ? "CALL ENTRY" : "CALL TEST",
+      status: setup.contracts > 1 ? `CALL ENTRY ${setup.contracts}` : "CALL TEST",
       entry: setup.entry,
       stop: setup.stop,
       tp1: setup.tp1,
       tp2: setup.tp2,
+      stopLabel: setup.stopLabel,
+      stopText: setup.stopText,
+      tp2Label: setup.tp2Label,
+      tp2Text: setup.tp2Text,
+      contracts: setup.contracts,
       markers: [tradeEvent(eventKind, 1, candles[pointIndex] || latest, pointIndex, setup)],
     };
   }
@@ -1126,9 +1137,14 @@ function tradeSetupFromSignal(signal, session, entryOverride = null) {
     .map((value) => value - buffer)
     .filter((value) => value < indexEntry);
 
-  let indexStop = stopCandidates.length ? Math.min(...stopCandidates) : indexEntry - minRisk;
+  let indexStop = isTenkanPullback && stopReference != null
+    ? stopReference
+    : stopCandidates.length ? Math.min(...stopCandidates) : indexEntry - minRisk;
   let risk = indexEntry - indexStop;
-  if (!Number.isFinite(risk) || risk < minRisk) {
+  if (isTenkanPullback && (!Number.isFinite(risk) || risk <= 0)) {
+    risk = minRisk;
+    indexStop = indexEntry - risk;
+  } else if (!isTenkanPullback && (!Number.isFinite(risk) || risk < minRisk)) {
     risk = minRisk;
     indexStop = indexEntry - risk;
   }
@@ -1142,6 +1158,9 @@ function tradeSetupFromSignal(signal, session, entryOverride = null) {
   const premium = optionPremiumPlan(signal);
   const mode = signal.trade_decision === "test" ? "test" : "entry";
   const tp1Contracts = premium.contracts > 1 ? 1 : 0;
+  const tenkanStopText = isTenkanPullback && stopReference != null
+    ? `기준 ${formatNum(stopReference, 2)} · 선물확인`
+    : null;
 
   return {
     direction: "CALL",
@@ -1154,6 +1173,12 @@ function tradeSetupFromSignal(signal, session, entryOverride = null) {
     contracts: premium.contracts,
     tp1Contracts,
     runnerContracts: premium.contracts - tp1Contracts,
+    stopLabel: tenkanStopText ? "지수컷" : null,
+    stopText: tenkanStopText,
+    tp2Label: isTenkanPullback ? "잔량" : null,
+    tp2Text: isTenkanPullback ? "트레일" : null,
+    optionRangeText: isTenkanPullback ? `${formatNum(signal.metrics?.option_premium_min, 1)}~${formatNum(signal.metrics?.option_premium_max, 1)}` : null,
+    strikeOffsetText: isTenkanPullback ? `+${formatNum(signal.metrics?.option_strike_offset_points, 0)}p` : null,
     indexEntry,
     indexStop,
     indexTp1,
@@ -1170,9 +1195,9 @@ function optionPremiumPlan(signal = {}) {
   const contracts = profile.contracts;
   return {
     entry: base,
-    stop: base * profile.stopMultiplier,
-    tp1: base * profile.tp1Multiplier,
-    tp2: base * profile.tp2Multiplier,
+    stop: profile.stop ?? base * profile.stopMultiplier,
+    tp1: profile.tp1 ?? base * profile.tp1Multiplier,
+    tp2: profile.tp2 ?? base * profile.tp2Multiplier,
     contracts,
   };
 }
@@ -1201,12 +1226,14 @@ function premiumProfile(signal = {}, entry = {}) {
   }
 
   if (action.includes("TENKAN_PULLBACK") || action.includes("KIJUN_SUPPORT")) {
+    const entryPremium = number(signal.metrics?.option_entry_premium) ?? 2.3;
+    const tp1Premium = number(signal.metrics?.option_tp1_premium) ?? 2.6;
     return {
-      entry: base,
-      contracts: 2,
+      entry: entryPremium,
+      contracts: number(signal.metrics?.contracts) || 2,
       stopMultiplier: 0.68,
-      tp1Multiplier: 1.28,
-      tp2Multiplier: 1.42,
+      tp1: tp1Premium,
+      tp2: Math.max(tp1Premium, entryPremium * 1.37),
     };
   }
 
@@ -1322,12 +1349,15 @@ function tradeTitle(kind, tradeId) {
 
 function tradeDetail(kind, setup, outputR) {
   if (kind === "entry" || kind === "test") {
+    if (setup.tp2Text) {
+      return `${setup.contracts}계약 · TP1 ${formatNum(setup.tp1, 2)} 1계약 · 잔량 ${setup.tp2Text} · ${setup.stopText || `손절 ${formatNum(setup.stop, 2)}`}`;
+    }
     const tp1Text = setup.tp1Contracts ? `TP1 ${setup.tp1Contracts}계약` : "TP1 본전스탑";
     return `${setup.contracts}계약 · 계획손절 ${formatNum(setup.stop, 2)} · ${tp1Text} · TP2 ${formatNum(setup.tp2, 2)}`;
   }
   if (kind === "tp1") {
     return setup.tp1Contracts
-      ? `계획프리 ${formatNum(outputR, 2)} · ${setup.tp1Contracts}계약 청산 · 잔량 본전스탑`
+      ? `계획프리 ${formatNum(outputR, 2)} · ${setup.tp1Contracts}계약 청산 · 잔량 ${setup.tp2Text || "본전스탑"}`
       : `계획프리 ${formatNum(outputR, 2)} · 본전스탑 적용`;
   }
   if (kind === "mixed") {
