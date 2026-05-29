@@ -90,9 +90,17 @@ p {
 
 .top-bar div {
   display: flex;
+  flex: 1 1 auto;
   min-width: 0;
   align-items: baseline;
   gap: 0.45rem;
+}
+
+.top-bar .top-actions {
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.4rem;
 }
 
 .top-bar strong {
@@ -106,6 +114,15 @@ p {
   font-size: 0.78rem;
   font-weight: 850;
   text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.top-bar .app-updated-at {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 0.6rem;
+  font-weight: 800;
+  line-height: 1;
   white-space: nowrap;
 }
 
