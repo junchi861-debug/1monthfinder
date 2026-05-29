@@ -18,13 +18,19 @@
 }
 
 html {
+  width: 100%;
   min-height: 100%;
+  overflow-x: hidden;
   background: var(--paper);
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
 }
 
 body {
+  width: 100%;
   min-width: 320px;
   margin: 0;
+  overflow-x: hidden;
   color: var(--ink);
   background: var(--paper);
   font-family:
@@ -315,6 +321,10 @@ canvas {
 
 .chart-frame {
   position: relative;
+  contain: layout paint;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
   overflow: hidden;
   border: 1px solid #edf1f4;
   border-radius: 8px;
@@ -324,9 +334,12 @@ canvas {
 .chart-frame canvas {
   width: 100%;
   height: 100%;
+  min-width: 0;
+  min-height: 0;
   border: 0;
   border-radius: 0;
   background: transparent;
+  touch-action: pan-y;
 }
 
 .replay-chart-frame {
@@ -897,10 +910,18 @@ canvas {
   margin-top: 0.1rem;
 }
 
-@media (max-width: 380px) {
+@media (max-width: 430px) {
+  .live-chart-frame {
+    height: clamp(13rem, 50vw, 16rem);
+  }
+
   .replay-chart-frame {
-    height: 340px;
-    min-height: 340px;
+    height: clamp(17rem, 64vw, 21rem);
+    min-height: 0;
+  }
+
+  .design-chart-frame {
+    height: clamp(14rem, 56vw, 18rem);
   }
 
   .replay-stepper {

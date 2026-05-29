@@ -3,8 +3,8 @@ const SIGNAL_LOG_KEY = "1monthfinder.options.signalLog";
 const SETTINGS_KEY = "1monthfinder.options.settings";
 const ANDROID_BACKEND_LOCAL_URL = "http://127.0.0.1:8000";
 const ANDROID_INSTALL_COMMAND =
-  "pkg update -y && pkg install -y curl && curl -fsSL https://raw.githubusercontent.com/junchi861-debug/1monthfinder/main/scripts/install_android_backend.sh | sh";
-const ANDROID_START_COMMAND = "1monthfinder-backend";
+  "pkg update -y && pkg install -y curl git python && curl -fsSL https://raw.githubusercontent.com/junchi861-debug/1monthfinder/main/scripts/install_android_backend.sh | sh";
+const ANDROID_START_COMMAND = "1monthfinder-backend doctor && 1monthfinder-backend";
 const BACKEND_ENV_TEMPLATE = [
   "OPTIONS_BACKEND_PORT=8000",
   "KIWOOM_API_MODE=disabled",
@@ -43,6 +43,8 @@ const state = {
   signalLog: loadSignalLog(),
   settings: loadSettings(),
   wakeLock: null,
+  chartResizeObserver: null,
+  redrawFrame: null,
 };
 
 const modalMeta = {
@@ -233,7 +235,7 @@ function bindControls() {
   });
   document.querySelector("#replayDate")?.addEventListener("change", (event) => {
     state.activeReplayDate = event.target.value || null;
-    if (state.activeReplayDate) state.replayCursors[state.activeReplayDate] = 0;
+    if (state.activeReplayDate) delete state.replayCursors[state.activeReplayDate];
     loadReplayDate(state.activeReplayDate);
   });
   document.querySelector("#replayFirst")?.addEventListener("click", () => moveReplayCursor("first"));
@@ -266,7 +268,9 @@ function bindControls() {
     localStorage.removeItem(SIGNAL_LOG_KEY);
     renderSignalLog();
   });
-  window.addEventListener("resize", redrawCharts);
+  setupChartResizeObserver();
+  window.addEventListener("resize", scheduleChartRedraw);
+  window.visualViewport?.addEventListener("resize", scheduleChartRedraw);
 }
 
 async function registerServiceWorker() {
@@ -502,7 +506,7 @@ function replayCursorIndex(session) {
   const seriesLength = Array.isArray(session?.series) ? session.series.length : 0;
   if (!seriesLength) return 0;
   const key = session.date || session.id;
-  if (state.replayCursors[key] == null) state.replayCursors[key] = 0;
+  if (state.replayCursors[key] == null) state.replayCursors[key] = seriesLength - 1;
   return Math.max(0, Math.min(seriesLength - 1, Number(state.replayCursors[key]) || 0));
 }
 
@@ -1422,7 +1426,7 @@ function openModal(name) {
   document.querySelectorAll("[data-open-modal]").forEach((button) => {
     button.classList.toggle("active", button.dataset.openModal === name);
   });
-  redrawCharts();
+  scheduleChartRedraw();
 }
 
 function closeModal() {
@@ -1607,7 +1611,7 @@ async function toggleWakeLock() {
 
 function drawLiveChart(livePlan = buildLiveTradePlan(state.monitor)) {
   const canvas = document.querySelector("#liveChart");
-  const candles = Array.isArray(state.monitor?.main?.candles) ? state.monitor.main.candles.slice(-48) : [];
+  const candles = Array.isArray(state.monitor?.main?.candles) ? state.monitor.main.candles : [];
   if (!candles.length) {
     const signal = state.monitor?.signal || {};
     drawEmptyChart(
@@ -1716,7 +1720,7 @@ function drawLineChart(canvas, options) {
   }
   hideChartEmpty(canvas);
 
-  const padding = chartPadding(options.padding);
+  const padding = chartPadding(options.padding, width, height);
   const values = points.map((point) => number(point[options.valueKey]));
   const extraValues = (options.extraSeries || []).flatMap((series) => points.map((point) => number(point[series.key]))).filter((value) => value != null);
   const levelValues = (options.levels || []).map((level) => number(level.value)).filter((value) => value != null);
@@ -1727,8 +1731,12 @@ function drawLineChart(canvas, options) {
     })
     .filter((value) => value != null);
   const allValues = values.concat(extraValues, levelValues, markerValues).filter((value) => value != null);
-  const min = Math.min(...allValues);
-  const max = Math.max(...allValues);
+  const rawMin = Math.min(...allValues);
+  const rawMax = Math.max(...allValues);
+  const rawSpan = rawMax - rawMin || 1;
+  const yMargin = rawSpan * 0.07;
+  const min = rawMin - yMargin;
+  const max = rawMax + yMargin;
   const span = max - min || 1;
   const plotWidth = Math.max(1, width - padding.left - padding.right);
   const plotHeight = Math.max(1, height - padding.top - padding.bottom);
@@ -1944,15 +1952,24 @@ function drawHorizontalLevel(context, width, padding, y, level) {
   context.restore();
 }
 
-function chartPadding(value = {}) {
+function chartPadding(value = {}, width = 360, height = 240) {
+  const compact = width < 380;
   if (typeof value === "number") {
-    return { top: value, right: value, bottom: value, left: value };
+    const size = compact ? Math.min(value, 34) : value;
+    return { top: size, right: size, bottom: size, left: size };
   }
-  return {
+  const padding = {
     top: Number(value.top) || 52,
     right: Number(value.right) || 52,
     bottom: Number(value.bottom) || 40,
     left: Number(value.left) || 28,
+  };
+  if (!compact) return padding;
+  return {
+    top: Math.min(padding.top, Math.max(38, height * 0.14)),
+    right: Math.min(padding.right, 42),
+    bottom: Math.min(padding.bottom, 36),
+    left: Math.min(padding.left, 24),
   };
 }
 
@@ -2030,16 +2047,40 @@ function hideChartEmpty(canvas) {
 }
 
 function setupCanvas(canvas, height) {
+  const frame = canvas.closest(".chart-frame") || canvas.parentElement;
   const rect = canvas.getBoundingClientRect();
-  const cssWidth = rect.width || canvas.parentElement?.clientWidth || 320;
-  const cssHeight = rect.height && rect.height > 20 ? rect.height : height;
+  const frameRect = frame?.getBoundingClientRect();
+  const viewportWidth = window.visualViewport?.width || document.documentElement.clientWidth || window.innerWidth || 320;
+  const measuredWidth = rect.width || frameRect?.width || canvas.parentElement?.clientWidth || 320;
+  const cssWidth = Math.max(1, Math.min(measuredWidth, frameRect?.width || measuredWidth, viewportWidth));
+  const measuredHeight = frameRect?.height || rect.height || height;
+  const cssHeight = measuredHeight && measuredHeight > 20 ? measuredHeight : height;
   const scale = window.devicePixelRatio || 1;
+  canvas.style.width = "100%";
+  canvas.style.height = `${Math.round(cssHeight)}px`;
   canvas.width = Math.max(1, Math.floor(cssWidth * scale));
   canvas.height = Math.max(1, Math.floor(cssHeight * scale));
   canvas.setAttribute("height", String(Math.round(cssHeight)));
   const context = canvas.getContext("2d");
   context.setTransform(scale, 0, 0, scale, 0, 0);
   return { context, width: cssWidth, height: cssHeight };
+}
+
+function setupChartResizeObserver() {
+  if (!("ResizeObserver" in window)) return;
+  state.chartResizeObserver?.disconnect();
+  state.chartResizeObserver = new ResizeObserver(scheduleChartRedraw);
+  document.querySelectorAll(".chart-frame").forEach((frame) => state.chartResizeObserver.observe(frame));
+}
+
+function scheduleChartRedraw() {
+  if (state.redrawFrame) window.cancelAnimationFrame(state.redrawFrame);
+  state.redrawFrame = window.requestAnimationFrame(() => {
+    state.redrawFrame = window.requestAnimationFrame(() => {
+      state.redrawFrame = null;
+      redrawCharts();
+    });
+  });
 }
 
 function redrawCharts() {
