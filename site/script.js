@@ -711,7 +711,7 @@ function renderSignalLog() {
     return;
   }
   root.innerHTML = state.signalLog
-    .slice(0, 5)
+    .slice(0, SIGNAL_LOG_LIMIT)
     .map((item) => {
       const tp1GainText = item.trade?.tp1Gain != null ? `(+${formatNum(item.trade.tp1Gain, 2)})` : "";
       const runnerText = item.trade?.runnerTargetText || item.trade?.tp2Text || "";
