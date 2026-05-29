@@ -3,22 +3,29 @@ from __future__ import annotations
 import json
 import math
 import re
+import tempfile
+import threading
 import urllib.error
 import urllib.parse
 import urllib.request
 from html import unescape
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
+from pathlib import Path
 from typing import Any
 
 
 KST = timezone(timedelta(hours=9), "KST")
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 YAHOO_CHART_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
 NAVER_INDEX_TIME_URL = "https://finance.naver.com/sise/sise_index_time.naver"
 NAVER_ITEM_TIME_URL = "https://finance.naver.com/item/sise_time.nhn"
 SNAPSHOT_CACHE_SECONDS = 45
 NAVER_RECENT_PAGES = 14
 NAVER_FULL_SESSION_PAGES = 80
+SIGNAL_LOG_PATH = PROJECT_ROOT / "site" / "data" / "options_signal_log.json"
+SIGNAL_LOG_SCHEMA_VERSION = 1
+SIGNAL_LOG_LOCK = threading.Lock()
 _SNAPSHOT_CACHE: dict[str, Any] = {"created_at": 0.0, "payload": None}
 CODEX_EXPERIMENTAL_PROFIT_EXTENSION_TAG = "codex_experimental_profit_extension"
 TRADE_COLORS = {
@@ -89,6 +96,8 @@ def build_options_monitor_snapshot(use_cache: bool = True) -> dict[str, Any]:
                     generated_at,
                 )
             )
+    main["recent_signals"] = _persist_signal_entries(main.get("recent_signals") or [], generated_at)
+    main["signal_log_source"] = "backend"
     payload = {
         "ok": bool(main.get("ok")),
         "mode": "monitor_only",
@@ -102,6 +111,11 @@ def build_options_monitor_snapshot(use_cache: bool = True) -> dict[str, Any]:
         },
         "main": main,
         "secondary": secondary,
+        "signal_log": {
+            "source": "backend",
+            "entries": main["recent_signals"],
+            "path": str(SIGNAL_LOG_PATH),
+        },
         "signal": main.get("signal", _empty_signal("neutral", "데이터 대기", "분봉 데이터를 기다리고 있습니다.")),
     }
     _SNAPSHOT_CACHE["created_at"] = now_ts
@@ -111,6 +125,40 @@ def build_options_monitor_snapshot(use_cache: bool = True) -> dict[str, Any]:
 
 def fetch_main_candles(range_value: str = "1mo") -> list[dict[str, Any]]:
     return _fetch_yahoo_candles(MAIN_INSTRUMENT.symbol, range_value=range_value)
+
+
+def load_options_signal_log() -> dict[str, Any]:
+    with SIGNAL_LOG_LOCK:
+        archive = _read_signal_log()
+    entries = sorted(
+        archive.get("entries") or [],
+        key=lambda item: item.get("sourceAt") or item.get("createdAt") or "",
+        reverse=True,
+    )
+    return {
+        "ok": True,
+        "source": "backend",
+        "generated_at": _iso(datetime.now(KST)),
+        "path": str(SIGNAL_LOG_PATH),
+        "count": len(entries),
+        "entries": entries,
+    }
+
+
+def clear_options_signal_log() -> dict[str, Any]:
+    with SIGNAL_LOG_LOCK:
+        archive = _empty_signal_log()
+        archive["cleared_at"] = _iso(datetime.now(KST))
+        _write_signal_log(archive)
+    _SNAPSHOT_CACHE["created_at"] = 0.0
+    _SNAPSHOT_CACHE["payload"] = None
+    return {
+        "ok": True,
+        "source": "backend",
+        "generated_at": archive["cleared_at"],
+        "count": 0,
+        "entries": [],
+    }
 
 
 def intraday_levels(candles: list[dict[str, Any]]) -> dict[str, float]:
@@ -302,6 +350,86 @@ def _fetch_yahoo_candles(symbol: str, range_value: str = "5d", interval: str = "
     if not candles:
         raise RuntimeError(f"유효한 {interval} 봉 없음")
     return candles
+
+
+def _persist_signal_entries(entries: list[dict[str, Any]], generated_at: datetime) -> list[dict[str, Any]]:
+    with SIGNAL_LOG_LOCK:
+        archive = _read_signal_log()
+        merged: dict[str, dict[str, Any]] = {}
+        for entry in archive.get("entries") or []:
+            key = entry.get("key")
+            if key:
+                merged[str(key)] = entry
+
+        for entry in entries:
+            normalized = _normalize_signal_log_entry(entry, generated_at)
+            key = normalized.get("key")
+            if not key:
+                continue
+            existing = merged.get(str(key), {})
+            merged[str(key)] = {**existing, **normalized}
+
+        ordered = sorted(
+            merged.values(),
+            key=lambda item: item.get("sourceAt") or item.get("createdAt") or "",
+            reverse=True,
+        )
+        archive["entries"] = ordered
+        archive["updated_at"] = _iso(generated_at)
+        _write_signal_log(archive)
+        return ordered
+
+
+def _normalize_signal_log_entry(entry: dict[str, Any], generated_at: datetime) -> dict[str, Any]:
+    key = str(entry.get("key") or "").strip()
+    if not key:
+        kind = entry.get("type") or entry.get("title") or "signal"
+        source_at = entry.get("sourceAt") or entry.get("datetime") or entry.get("time") or _iso(generated_at)
+        key = f"{kind}:{source_at}:{entry.get('close', '')}"
+    return {
+        **entry,
+        "key": key,
+        "type": entry.get("type") or "watch",
+        "title": entry.get("title") or "신호",
+        "message": entry.get("message") or "",
+        "time": entry.get("time") or "-",
+        "sourceAt": entry.get("sourceAt") or entry.get("datetime") or "",
+        "createdAt": entry.get("createdAt") or _iso(generated_at),
+        "source": entry.get("source") or "backend_signal",
+    }
+
+
+def _read_signal_log() -> dict[str, Any]:
+    if not SIGNAL_LOG_PATH.exists():
+        return _empty_signal_log()
+    try:
+        with SIGNAL_LOG_PATH.open("r", encoding="utf-8") as file:
+            data = json.load(file)
+    except (OSError, json.JSONDecodeError):
+        return _empty_signal_log()
+    if data.get("schema_version") != SIGNAL_LOG_SCHEMA_VERSION:
+        return _empty_signal_log()
+    data.setdefault("entries", [])
+    return data
+
+
+def _empty_signal_log() -> dict[str, Any]:
+    return {
+        "schema_version": SIGNAL_LOG_SCHEMA_VERSION,
+        "source": "1MonthFinder backend signal log",
+        "updated_at": None,
+        "cleared_at": None,
+        "entries": [],
+    }
+
+
+def _write_signal_log(archive: dict[str, Any]) -> None:
+    SIGNAL_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    body = json.dumps(archive, ensure_ascii=False, separators=(",", ":"))
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False, dir=SIGNAL_LOG_PATH.parent) as file:
+        file.write(body)
+        temp_name = file.name
+    Path(temp_name).replace(SIGNAL_LOG_PATH)
 
 
 def _build_etf_fibonacci_context(generated_at: datetime, intraday_candles: list[dict[str, Any]]) -> dict[str, Any] | None:
@@ -2027,6 +2155,7 @@ def _late_session_management_signal(
     reclaimed_kijun = low <= kijun + tolerance and close >= kijun
     final_window = latest_clock >= time(15, 30)
     acceleration = _late_session_acceleration_context(session, close, tenkan)
+    runner_score = _runner_hold_score(close, tenkan, kijun, gma_30, reclaimed_kijun, acceleration)
 
     metrics = {
         "codex_experimental_tag": CODEX_EXPERIMENTAL_PROFIT_EXTENSION_TAG,
@@ -2053,6 +2182,9 @@ def _late_session_management_signal(
         "option_trailing_stop_after_3_3": 2.9,
         "option_trailing_stop_after_3_6": 3.2,
         "manual_option_premium_trailing": True,
+        "runner_hold_score": runner_score["score"],
+        "runner_hold_decision": runner_score["decision"],
+        "runner_hold_reasons": runner_score["reasons"],
         **acceleration,
     }
 
@@ -2104,7 +2236,7 @@ def _late_session_management_signal(
             "metrics": _signal_metrics(close, lower_wick_ratio, age_minutes, trend, call_filter_pass, metrics),
         }
 
-    if latest_clock >= time(15, 0) and acceleration["late_acceleration_active"]:
+    if latest_clock >= time(15, 0) and runner_score["decision"] == "hold":
         # Codex experimental, not an expert rule. Remove this branch with the matching
         # JSON tag if later review says the aggressive runner idea is not useful.
         return {
@@ -2112,7 +2244,7 @@ def _late_session_management_signal(
             "label": "공격홀딩",
             "title": "15:00 이후 잔량 공격 홀딩",
             "message": (
-                "15:00 이후 전환선/기준선 위에서 거래량 또는 봉폭 가속이 감지됩니다. "
+                f"15:00 이후 잔량 홀딩 점수 {runner_score['score']}점으로 전환선/기준선/30이평 또는 가속 조건이 살아 있습니다. "
                 "확보 수익이 20만원 이상이면 15:30 전까지 잔량을 더 끌되, 옵션이 3.3 이상 찍힌 뒤에는 2.9~3.2 방어 스탑을 MTS에서 확인하세요."
             ),
             "alert_level": "normal",
@@ -2128,9 +2260,9 @@ def _late_session_management_signal(
         else "기준선 위에서 장후반 추세가 유지되고 있습니다. "
     )
     runner_note = (
-        "확보 수익이 20만원 이상이고 청산조건이 나오지 않으면 15:30 전까지 잔량 플레이가 가능합니다."
+        f"잔량 홀딩 점수는 {runner_score['score']}점/{runner_score['decision']}입니다. 확보 수익이 20만원 이상이고 청산조건이 나오지 않으면 15:30 전까지 잔량 플레이가 가능합니다."
         if holds_tenkan
-        else "전환선 아래에서는 잔량을 길게 끌기보다 청산 준비를 우선합니다."
+        else f"잔량 홀딩 점수는 {runner_score['score']}점/{runner_score['decision']}입니다. 전환선 아래에서는 잔량을 길게 끌기보다 청산 준비를 우선합니다."
     )
     return {
         "type": "watch",
@@ -2305,6 +2437,44 @@ def _late_session_acceleration_context(session: list[dict[str, Any]], close: flo
         "late_high_breakout": high_breakout,
         "late_previous_high": round(previous_high, 4) if previous_high is not None else None,
     }
+
+
+def _runner_hold_score(
+    close: float,
+    tenkan: float,
+    kijun: float,
+    gma_30: float | None,
+    reclaimed_kijun: bool,
+    acceleration: dict[str, Any],
+) -> dict[str, Any]:
+    score = 0
+    reasons: list[str] = []
+    if close >= kijun:
+        score += 1
+        reasons.append("기준선 위")
+    if close >= tenkan:
+        score += 1
+        reasons.append("전환선 위")
+    if gma_30 is not None and close >= gma_30:
+        score += 1
+        reasons.append("30이평 위")
+    if reclaimed_kijun:
+        score += 1
+        reasons.append("기준선 터치 후 재회복")
+    if acceleration.get("late_acceleration_active"):
+        score += 1
+        reasons.append("장후반 가속")
+    if acceleration.get("late_high_breakout"):
+        score += 1
+        reasons.append("최근 고점 돌파")
+
+    if score >= 4:
+        decision = "hold"
+    elif score <= 2:
+        decision = "trim"
+    else:
+        decision = "watch"
+    return {"score": score, "decision": decision, "reasons": reasons}
 
 
 def _recent_kijun_support_evidence(session: list[dict[str, Any]], span: float) -> dict[str, Any]:

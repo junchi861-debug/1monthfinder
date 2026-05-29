@@ -238,15 +238,18 @@ async function init() {
   bindControls();
   await registerServiceWorker();
 
-  const [weeklyOptions, replayPayload, publicReplay] = await Promise.all([
+  const [weeklyOptions, replayPayload, publicReplay, signalLogPayload] = await Promise.all([
     loadOptionalJson("data/weekly_options.json"),
     loadOptionalJson("/api/options-replay"),
     loadOptionalJson("data/public_weekly_replay.json"),
+    loadOptionalJson("/api/options-signals"),
   ]);
 
   state.weeklyOptions = weeklyOptions || fallbackWeeklyOptions;
   state.replay = normalizeReplayPayload(replayPayload) || publicReplay || state.weeklyOptions.signal_replay || {};
   state.activeReplayDate = activeReplaySession()?.date || state.replay.active_session_id || null;
+  const backendSignalLog = normalizeBackendSignalLogPayload(signalLogPayload);
+  if (backendSignalLog) state.signalLog = backendSignalLog;
 
   renderSignalLog();
   renderStaticPanels();
@@ -276,6 +279,11 @@ function normalizeReplayPayload(payload) {
   if (!payload) return null;
   if (payload.active_session || payload.status === "local_archive") return payload;
   return payload.sessions?.length ? payload : null;
+}
+
+function normalizeBackendSignalLogPayload(payload) {
+  if (!payload || payload.source !== "backend" || !Array.isArray(payload.entries)) return null;
+  return normalizeSignalLogEntries(payload.entries);
 }
 
 async function loadReplayDate(date) {
@@ -351,11 +359,7 @@ function bindControls() {
     saveSettings();
     renderSettings();
   });
-  document.querySelector("#clearSignalLog")?.addEventListener("click", () => {
-    state.signalLog = [];
-    localStorage.removeItem(SIGNAL_LOG_KEY);
-    renderSignalLog();
-  });
+  document.querySelector("#clearSignalLog")?.addEventListener("click", clearSignalLog);
   updateViewportMetrics();
   setupChartResizeObserver();
   window.addEventListener("resize", handleViewportChange);
@@ -492,6 +496,7 @@ function chartLevelEntries(levels = {}) {
 }
 
 function maybeRecordSignal(snapshot) {
+  if (isBackendSignalLogSnapshot(snapshot)) return;
   const backendEntries = Array.isArray(snapshot?.main?.recent_signals) ? snapshot.main.recent_signals : [];
   if (backendEntries.length) return;
   const signal = snapshot.signal || {};
@@ -505,6 +510,10 @@ function maybeRecordSignal(snapshot) {
 
 function maybeBackfillSignalLog(snapshot) {
   const backendEntries = Array.isArray(snapshot?.main?.recent_signals) ? snapshot.main.recent_signals : [];
+  if (isBackendSignalLogSnapshot(snapshot)) {
+    replaceSignalLog(backendEntries);
+    return;
+  }
   if (backendEntries.length) {
     const existing = new Set(state.signalLog.map((item) => item.key));
     const additions = backendEntries
@@ -532,6 +541,29 @@ function maybeBackfillSignalLog(snapshot) {
     .filter(Boolean);
   if (!additions.length) return;
   mergeSignalLog(additions);
+}
+
+function isBackendSignalLogSnapshot(snapshot) {
+  return snapshot?.main?.signal_log_source === "backend" || snapshot?.signal_log?.source === "backend";
+}
+
+function replaceSignalLog(entries) {
+  state.signalLog = normalizeSignalLogEntries(entries);
+  saveSignalLog();
+  renderSignalLog();
+}
+
+function normalizeSignalLogEntries(entries = []) {
+  const seen = new Set();
+  return entries
+    .map(normalizeBackendSignalLogEntry)
+    .filter(Boolean)
+    .sort((a, b) => signalLogTimestamp(b) - signalLogTimestamp(a))
+    .filter((item) => {
+      if (!item?.key || seen.has(item.key)) return false;
+      seen.add(item.key);
+      return true;
+    });
 }
 
 function normalizeBackendSignalLogEntry(entry = {}) {
@@ -1758,6 +1790,17 @@ function renderSettings() {
   setChecked("#repeatStrongAlerts", state.settings.repeatStrongAlerts);
   setChecked("#vibrationEnabled", state.settings.vibrationEnabled);
   setChecked("#saveSignalLog", state.settings.saveSignalLog);
+}
+
+async function clearSignalLog() {
+  state.signalLog = [];
+  localStorage.removeItem(SIGNAL_LOG_KEY);
+  renderSignalLog();
+  try {
+    await fetch(apiUrl("/api/options-signals"), { method: "DELETE", cache: "no-store" });
+  } catch (error) {
+    // Static/offline mode keeps using the local clear above.
+  }
 }
 
 async function saveApiBaseUrl() {

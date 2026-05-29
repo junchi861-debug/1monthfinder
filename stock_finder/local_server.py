@@ -12,7 +12,12 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from stock_finder.options_archive import build_options_replay_payload
-from stock_finder.options_monitor import KST, build_options_monitor_snapshot
+from stock_finder.options_monitor import (
+    KST,
+    build_options_monitor_snapshot,
+    clear_options_signal_log,
+    load_options_signal_log,
+)
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -49,7 +54,7 @@ def serve_local_app(args: argparse.Namespace) -> None:
 class StockFinderRequestHandler(SimpleHTTPRequestHandler):
     def end_headers(self) -> None:
         self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
+        self.send_header("Access-Control-Allow-Methods", "GET, DELETE, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
         super().end_headers()
 
@@ -68,7 +73,17 @@ class StockFinderRequestHandler(SimpleHTTPRequestHandler):
         if parsed.path == "/api/options-replay":
             self._send_options_replay(parsed.query)
             return
+        if parsed.path == "/api/options-signals":
+            self._send_options_signals()
+            return
         super().do_GET()
+
+    def do_DELETE(self) -> None:
+        parsed = urlparse(self.path)
+        if parsed.path == "/api/options-signals":
+            self._clear_options_signals()
+            return
+        self._send_json({"ok": False, "error": "not found"}, 404)
 
     def _send_json(self, payload: dict, status: int = 200) -> None:
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -86,7 +101,7 @@ class StockFinderRequestHandler(SimpleHTTPRequestHandler):
                 "service": "1MonthFinder options backend",
                 "generated_at": datetime.now(KST).isoformat(),
                 "host": self.headers.get("Host", ""),
-                "endpoints": ["/api/options-monitor", "/api/options-replay"],
+                "endpoints": ["/api/options-monitor", "/api/options-replay", "/api/options-signals"],
                 "env_mode": "server",
             }
         )
@@ -113,6 +128,28 @@ class StockFinderRequestHandler(SimpleHTTPRequestHandler):
                     "metrics": {},
                 },
             }
+
+        self._send_json(payload, status)
+
+    def _send_options_signals(self) -> None:
+        try:
+            payload = load_options_signal_log()
+            status = 200
+        except Exception as exc:
+            LOGGER.exception("options signal log payload failed")
+            status = 500
+            payload = {"ok": False, "source": "backend", "error": str(exc), "entries": []}
+
+        self._send_json(payload, status)
+
+    def _clear_options_signals(self) -> None:
+        try:
+            payload = clear_options_signal_log()
+            status = 200
+        except Exception as exc:
+            LOGGER.exception("options signal log clear failed")
+            status = 500
+            payload = {"ok": False, "source": "backend", "error": str(exc), "entries": []}
 
         self._send_json(payload, status)
 
