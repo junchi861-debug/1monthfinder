@@ -9,7 +9,7 @@
       content="KOSPI200 5분봉 기반 위클리 옵션 신호판과 복기 화면"
     />
     <link rel="manifest" href="manifest.webmanifest" />
-    <link rel="stylesheet" href="styles.css?v=20260529-mobile-backend-2" />
+    <link rel="stylesheet" href="styles.css?v=20260529-chart-frame" />
   </head>
   <body>
     <main class="app-shell" aria-live="polite">
@@ -49,7 +49,13 @@
           </article>
         </div>
 
-        <canvas id="liveChart" height="210" aria-label="KOSPI200 5분봉 실시간 차트"></canvas>
+        <div class="chart-frame live-chart-frame">
+          <canvas id="liveChart" height="320" aria-label="KOSPI200 5분봉 실시간 차트"></canvas>
+          <div class="chart-empty" id="liveChartEmpty" hidden>
+            <strong>차트 대기</strong>
+            <span>옵션 감시 API 연결을 확인하는 중입니다.</span>
+          </div>
+        </div>
         <div class="chart-legend" id="liveLegend"></div>
         <div class="trade-strip neutral" id="liveTradePlan" aria-label="실시간 가상 매매 플랜"></div>
 
@@ -98,6 +104,15 @@
             </div>
             <p class="sheet-copy" id="replayRangeText">저장된 최근 1개월 범위를 확인하는 중입니다.</p>
             <p class="data-warning" id="replayDataWarning">데이터 범위를 확인하는 중입니다.</p>
+            <div class="chart-frame replay-chart-frame">
+              <canvas id="replayChart" height="360" aria-label="선택 날짜 복기 차트"></canvas>
+              <div class="chart-empty" id="replayChartEmpty" hidden>
+                <strong>복기 자료 없음</strong>
+                <span>날짜 또는 백엔드 연결 상태를 확인하세요.</span>
+              </div>
+            </div>
+            <div class="chart-legend" id="replayLegend"></div>
+            <p class="sheet-copy replay-cursor-text" id="replayCursorText">09:00 기준</p>
             <div class="replay-stepper" id="replayStepper">
               <button class="soft-button" type="button" id="replayFirst">처음</button>
               <button class="soft-button" type="button" id="replayPrev">이전</button>
@@ -105,16 +120,15 @@
               <button class="soft-button" type="button" id="replayNext">다음</button>
               <button class="soft-button" type="button" id="replayEnd">끝</button>
             </div>
-            <p class="sheet-copy" id="replayCursorText">09:00 기준</p>
-            <canvas id="replayChart" height="320" aria-label="선택 날짜 복기 차트"></canvas>
-            <div class="chart-legend" id="replayLegend"></div>
             <div class="trade-stats" id="replayTradeStats" aria-label="복기 매매 검증 요약"></div>
             <p class="sheet-copy" id="replayText">날짜를 선택하면 해당 일의 공식선과 신호를 표시합니다.</p>
             <div class="replay-list" id="replaySignals"></div>
           </div>
 
           <div class="modal-panel" data-modal-panel="design" hidden>
-            <canvas id="designChart" height="300" aria-label="옵션 전략선 차트"></canvas>
+            <div class="chart-frame design-chart-frame">
+              <canvas id="designChart" height="300" aria-label="옵션 전략선 차트"></canvas>
+            </div>
             <div class="chart-legend" id="designLegend"></div>
             <div class="compact-grid" id="designSummary"></div>
             <div class="replay-list" id="orderPlan"></div>
@@ -184,6 +198,6 @@
       </section>
     </div>
 
-    <script src="script.js?v=20260529-mobile-backend-2"></script>
+    <script src="script.js?v=20260529-chart-frame"></script>
   </body>
 </html>

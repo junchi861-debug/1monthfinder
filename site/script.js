@@ -1509,7 +1509,13 @@ function drawLiveChart(livePlan = buildLiveTradePlan(state.monitor)) {
   const canvas = document.querySelector("#liveChart");
   const candles = Array.isArray(state.monitor?.main?.candles) ? state.monitor.main.candles.slice(-48) : [];
   if (!candles.length) {
-    drawEmptyChart(canvas, "5분봉 대기");
+    const signal = state.monitor?.signal || {};
+    drawEmptyChart(
+      canvas,
+      signal.title || "옵션 감시 연결 대기",
+      320,
+      signal.message || "백엔드 주소와 로컬 서버 실행 상태를 확인하세요.",
+    );
     return;
   }
   const levels = state.monitor?.main?.levels || {};
@@ -1523,7 +1529,8 @@ function drawLiveChart(livePlan = buildLiveTradePlan(state.monitor)) {
     .map((level) => ({ ...level, value: number(levels[level.key]) }))
     .filter((level) => level.value != null);
   drawLineChart(canvas, {
-    height: 210,
+    height: 320,
+    padding: { top: 56, right: 52, bottom: 42, left: 30 },
     points: candles,
     valueKey: "close",
     timeKey: "time",
@@ -1536,7 +1543,7 @@ function drawLiveChart(livePlan = buildLiveTradePlan(state.monitor)) {
 function drawReplayChart(session, tradePlan = null) {
   const canvas = document.querySelector("#replayChart");
   if (!session?.series?.length) {
-    drawEmptyChart(canvas, "복기 자료 없음", 320);
+    drawEmptyChart(canvas, "복기 자료 없음", 360, "날짜 또는 백엔드 연결 상태를 확인하세요.");
     return;
   }
   const levels = session.levels || {};
@@ -1547,7 +1554,9 @@ function drawReplayChart(session, tradePlan = null) {
     { key: "fib_382", label: "38.2", color: "#a95f59", value: levels.fib_382 },
   ].filter((level) => number(level.value) != null);
   drawLineChart(document.querySelector("#replayChart"), {
-    height: 320,
+    height: 360,
+    padding: { top: 70, right: 58, bottom: 46, left: 30 },
+    compactTradeLabels: true,
     points: session.series,
     valueKey: "index",
     timeKey: "time",
@@ -1586,6 +1595,7 @@ function drawDesignChart() {
     .filter((level) => number(level.value) != null);
   drawLineChart(canvas, {
     height: 300,
+    padding: { top: 42, right: 48, bottom: 38, left: 28 },
     points,
     valueKey: "value",
     timeKey: "time",
@@ -1599,24 +1609,32 @@ function drawLineChart(canvas, options) {
   const { context, width, height } = setupCanvas(canvas, options.height || 210);
   context.clearRect(0, 0, width, height);
   if (!points.length) {
-    drawEmpty(context, width, height, "차트 자료 없음");
+    showChartEmpty(canvas, "차트 자료 없음", "표시할 5분봉 데이터가 없습니다.");
     return;
   }
+  hideChartEmpty(canvas);
 
-  const padding = 24;
-  const rightPadding = 46;
+  const padding = chartPadding(options.padding);
   const values = points.map((point) => number(point[options.valueKey]));
   const extraValues = (options.extraSeries || []).flatMap((series) => points.map((point) => number(point[series.key]))).filter((value) => value != null);
   const levelValues = (options.levels || []).map((level) => number(level.value)).filter((value) => value != null);
-  const allValues = values.concat(extraValues, levelValues).filter((value) => value != null);
+  const markerValues = (options.tradeMarkers || options.signals || [])
+    .map((marker) => {
+      const pointIndex = clampIndex(marker.point_index, points.length);
+      return number(marker.index_value ?? points[pointIndex]?.[options.valueKey]);
+    })
+    .filter((value) => value != null);
+  const allValues = values.concat(extraValues, levelValues, markerValues).filter((value) => value != null);
   const min = Math.min(...allValues);
   const max = Math.max(...allValues);
   const span = max - min || 1;
-  const xFor = (index) => padding + index * ((width - padding - rightPadding) / Math.max(points.length - 1, 1));
-  const yFor = (value) => height - padding - ((value - min) / span) * (height - padding * 2);
+  const plotWidth = Math.max(1, width - padding.left - padding.right);
+  const plotHeight = Math.max(1, height - padding.top - padding.bottom);
+  const xFor = (index) => padding.left + index * (plotWidth / Math.max(points.length - 1, 1));
+  const yFor = (value) => height - padding.bottom - ((value - min) / span) * plotHeight;
 
   drawGrid(context, width, height, padding);
-  (options.levels || []).forEach((level) => drawHorizontalLevel(context, width, padding, yFor(number(level.value)), level, rightPadding));
+  (options.levels || []).forEach((level) => drawHorizontalLevel(context, width, padding, yFor(number(level.value)), level));
   (options.extraSeries || []).forEach((series) => {
     drawSeries(context, points.map((point) => number(point[series.key])), xFor, yFor, series.color, series.width || 1.5, series.dash || []);
   });
@@ -1648,6 +1666,7 @@ function drawLatestPoint(context, points, values, xFor, yFor, options) {
 
 function drawSignalMarkers(context, points, xFor, yFor, options) {
   const signals = options.signals || [];
+  const occupied = [];
   signals.forEach((signal, index) => {
     const pointIndex = Math.max(0, Math.min(points.length - 1, Number(signal.point_index ?? 0)));
     const point = points[pointIndex];
@@ -1660,15 +1679,15 @@ function drawSignalMarkers(context, points, xFor, yFor, options) {
     context.arc(x, y, 4.5, 0, Math.PI * 2);
     context.fill();
     if (index % 2 === 0) {
-      context.font = "10px Segoe UI, sans-serif";
-      context.textAlign = "center";
-      context.fillText(signal.label || "신호", x, Math.max(12, y - 8));
+      drawTradeChip(context, x, y, signal.label || "신호", context.fillStyle, signalClass(signal.type), index, occupied);
     }
   });
 }
 
 function drawTradeMarkers(context, points, xFor, yFor, options) {
   const markers = options.tradeMarkers || [];
+  const placed = [];
+  const labelCandidates = [];
   markers.forEach((marker, index) => {
     const pointIndex = clampIndex(marker.point_index, points.length);
     const point = points[pointIndex];
@@ -1679,8 +1698,15 @@ function drawTradeMarkers(context, points, xFor, yFor, options) {
     const y = yFor(value);
     const color = marker.color || TRADE_COLORS[marker.kind] || TRADE_COLORS.watch;
     drawTradeShape(context, x, y, marker.kind, color);
-    drawTradeChip(context, x, y, marker.label || tradeLabel(marker.kind), color, marker.kind, index);
+    if (shouldLabelTradeMarker(marker, options)) {
+      labelCandidates.push({ marker, x, y, color, index });
+    }
   });
+  labelCandidates
+    .sort((a, b) => a.x - b.x || eventPriority(a.marker.kind) - eventPriority(b.marker.kind))
+    .forEach((item) => {
+      drawTradeChip(context, item.x, item.y, item.marker.label || tradeLabel(item.marker.kind), item.color, item.marker.kind, item.index, placed);
+    });
 }
 
 function drawTradeShape(context, x, y, kind, color) {
@@ -1707,6 +1733,9 @@ function drawTradeShape(context, x, y, kind, color) {
     context.lineTo(x + 8, y + 8);
     context.moveTo(x + 8, y - 8);
     context.lineTo(x - 8, y + 8);
+    context.stroke();
+    context.restore();
+    return;
   } else if (kind === "tp1" || kind === "tp2") {
     context.arc(x, y, 7, 0, Math.PI * 2);
   } else {
@@ -1717,21 +1746,36 @@ function drawTradeShape(context, x, y, kind, color) {
   context.restore();
 }
 
-function drawTradeChip(context, x, y, label, color, kind, index) {
+function drawTradeChip(context, x, y, label, color, kind, index, occupied = []) {
   const rect = context.canvas.getBoundingClientRect();
   const canvasWidth = rect.width || context.canvas.width;
   const canvasHeight = rect.height || context.canvas.height;
   const above = kind !== "stop";
-  const laneOffset = (index % 3) * 16;
   const text = String(label || "SIGNAL");
 
   context.save();
   context.font = "bold 11px Segoe UI, sans-serif";
   const width = Math.ceil(context.measureText(text).width) + 14;
   const height = 18;
-  const rawY = above ? y - 31 - laneOffset : y + 13 + laneOffset;
-  const chipX = Math.max(4, Math.min(canvasWidth - width - 4, x - width / 2));
-  const chipY = Math.max(4, Math.min(canvasHeight - height - 4, rawY));
+  let chipX = 4;
+  let chipY = 4;
+  let placed = false;
+  for (let lane = 0; lane < 3; lane += 1) {
+    const laneOffset = lane * 18;
+    const rawY = above ? y - 34 - laneOffset : y + 15 + laneOffset;
+    chipX = Math.max(4, Math.min(canvasWidth - width - 4, x - width / 2));
+    chipY = Math.max(4, Math.min(canvasHeight - height - 4, rawY));
+    const box = { x: chipX, y: chipY, width, height };
+    if (!occupied.some((other) => boxesOverlap(box, other))) {
+      occupied.push(box);
+      placed = true;
+      break;
+    }
+  }
+  if (!placed) {
+    context.restore();
+    return false;
+  }
 
   fillRoundRect(context, chipX, chipY, width, height, 5, color);
   context.fillStyle = "#ffffff";
@@ -1739,6 +1783,7 @@ function drawTradeChip(context, x, y, label, color, kind, index) {
   context.textBaseline = "middle";
   context.fillText(text, chipX + width / 2, chipY + height / 2 + 0.5);
   context.restore();
+  return true;
 }
 
 function fillRoundRect(context, x, y, width, height, radius, color) {
@@ -1760,10 +1805,10 @@ function drawAxisLabels(context, width, height, padding, points, values, timeKey
   context.fillStyle = "#657186";
   context.font = "10px Segoe UI, sans-serif";
   context.textAlign = "left";
-  context.fillText(points[0]?.[timeKey] || "", padding, height - 6);
+  context.fillText(points[0]?.[timeKey] || "", padding.left, height - 8);
   context.textAlign = "right";
-  context.fillText(points[points.length - 1]?.[timeKey] || "", width - padding, height - 6);
-  context.fillText(formatNum(Math.max(...values), 2), width - padding, 13);
+  context.fillText(points[points.length - 1]?.[timeKey] || "", width - padding.right, height - 8);
+  context.fillText(formatNum(Math.max(...values), 2), width - padding.right, padding.top - 12);
 }
 
 function drawGrid(context, width, height, padding) {
@@ -1771,30 +1816,63 @@ function drawGrid(context, width, height, padding) {
   context.strokeStyle = "#dfe5ea";
   context.lineWidth = 1;
   for (let index = 0; index < 4; index += 1) {
-    const y = padding + index * ((height - padding * 2) / 3);
+    const y = padding.top + index * ((height - padding.top - padding.bottom) / 3);
     context.beginPath();
-    context.moveTo(padding, y);
-    context.lineTo(width - padding, y);
+    context.moveTo(padding.left, y);
+    context.lineTo(width - padding.right, y);
     context.stroke();
   }
   context.restore();
 }
 
-function drawHorizontalLevel(context, width, padding, y, level, rightPadding) {
+function drawHorizontalLevel(context, width, padding, y, level) {
   if (!Number.isFinite(y)) return;
   context.save();
   context.strokeStyle = level.color || "#657186";
   context.lineWidth = 1;
   context.setLineDash(level.label === "105" ? [4, 4] : []);
   context.beginPath();
-  context.moveTo(padding, y);
-  context.lineTo(width - rightPadding, y);
+  context.moveTo(padding.left, y);
+  context.lineTo(width - padding.right, y);
   context.stroke();
   context.fillStyle = level.color || "#657186";
   context.font = "10px Segoe UI, sans-serif";
   context.textAlign = "right";
-  context.fillText(level.label || "", width - padding, Math.max(12, y - 3));
+  context.fillText(level.label || "", width - 8, Math.max(padding.top - 10, Math.min(y - 3, heightSafeLabelY(context, padding))));
   context.restore();
+}
+
+function chartPadding(value = {}) {
+  if (typeof value === "number") {
+    return { top: value, right: value, bottom: value, left: value };
+  }
+  return {
+    top: Number(value.top) || 52,
+    right: Number(value.right) || 52,
+    bottom: Number(value.bottom) || 40,
+    left: Number(value.left) || 28,
+  };
+}
+
+function heightSafeLabelY(context, padding) {
+  const rect = context.canvas.getBoundingClientRect();
+  const height = rect.height || context.canvas.height || 210;
+  return Math.max(padding.top, height - padding.bottom + 10);
+}
+
+function shouldLabelTradeMarker(marker, options) {
+  const kind = marker?.kind;
+  if (!options.compactTradeLabels) return true;
+  return ["entry", "test", "stop", "tp1", "tp2", "mixed"].includes(kind);
+}
+
+function boxesOverlap(a, b) {
+  return !(
+    a.x + a.width + 4 < b.x ||
+    b.x + b.width + 4 < a.x ||
+    a.y + a.height + 4 < b.y ||
+    b.y + b.height + 4 < a.y
+  );
 }
 
 function drawSeries(context, values, xFor, yFor, color, width, dash) {
@@ -1819,11 +1897,12 @@ function drawSeries(context, values, xFor, yFor, color, width, dash) {
   context.restore();
 }
 
-function drawEmptyChart(canvas, message, height = 210) {
+function drawEmptyChart(canvas, message, height = 210, detail = "") {
   if (!canvas) return;
   const { context, width, height: canvasHeight } = setupCanvas(canvas, height);
   context.clearRect(0, 0, width, canvasHeight);
   drawEmpty(context, width, canvasHeight, message);
+  showChartEmpty(canvas, message, detail);
 }
 
 function drawEmpty(context, width, height, message) {
@@ -1831,6 +1910,21 @@ function drawEmpty(context, width, height, message) {
   context.font = "14px Segoe UI, sans-serif";
   context.textAlign = "center";
   context.fillText(message, width / 2, height / 2);
+}
+
+function showChartEmpty(canvas, title, detail = "") {
+  const node = document.querySelector(`#${canvas.id}Empty`);
+  if (!node) return;
+  node.hidden = false;
+  const strong = node.querySelector("strong");
+  const span = node.querySelector("span");
+  if (strong) strong.textContent = title || "차트 자료 없음";
+  if (span) span.textContent = detail || "표시할 데이터가 없습니다.";
+}
+
+function hideChartEmpty(canvas) {
+  const node = document.querySelector(`#${canvas.id}Empty`);
+  if (node) node.hidden = true;
 }
 
 function setupCanvas(canvas, height) {

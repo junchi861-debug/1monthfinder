@@ -220,7 +220,7 @@ p {
   font-weight: 800;
 }
 
-#liveChart {
+.live-chart-frame {
   order: 2;
   height: clamp(15rem, 39dvh, 21rem);
 }
@@ -304,6 +304,59 @@ canvas {
   border: 1px solid #edf1f4;
   border-radius: 8px;
   background: #fbfdfe;
+}
+
+.chart-frame {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid #edf1f4;
+  border-radius: 8px;
+  background: #fbfdfe;
+}
+
+.chart-frame canvas {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.replay-chart-frame {
+  height: 360px;
+  min-height: 360px;
+}
+
+.design-chart-frame {
+  height: 300px;
+}
+
+.chart-empty {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: grid;
+  place-content: center;
+  gap: 0.28rem;
+  padding: 1rem;
+  background: #fbfdfe;
+  color: var(--muted);
+  text-align: center;
+}
+
+.chart-empty[hidden] {
+  display: none;
+}
+
+.chart-empty strong {
+  color: var(--ink);
+  font-size: 0.98rem;
+}
+
+.chart-empty span {
+  max-width: 17rem;
+  font-size: 0.78rem;
+  font-weight: 780;
 }
 
 .chart-legend {
@@ -406,6 +459,10 @@ canvas {
   grid-template-columns: auto auto minmax(0, 1fr) auto auto;
   gap: 0.34rem;
   align-items: center;
+  padding: 0.48rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfdfe;
 }
 
 .replay-stepper .soft-button {
@@ -766,6 +823,11 @@ canvas {
   font-weight: 760;
 }
 
+.replay-cursor-text {
+  margin-top: -0.22rem;
+  font-weight: 850;
+}
+
 .setting-row {
   grid-template-columns: auto minmax(0, 1fr);
   align-items: start;
@@ -789,6 +851,11 @@ canvas {
 }
 
 @media (max-width: 380px) {
+  .replay-chart-frame {
+    height: 340px;
+    min-height: 340px;
+  }
+
   .replay-stepper {
     grid-template-columns: repeat(4, minmax(0, 1fr));
   }
