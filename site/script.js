@@ -1,6 +1,5 @@
 const MONITOR_POLL_MS = 60000;
 const SIGNAL_LOG_KEY = "1monthfinder.options.signalLog";
-const SIGNAL_LOG_LIMIT = 12;
 const SETTINGS_KEY = "1monthfinder.options.settings";
 const ANDROID_BACKEND_LOCAL_URL = "http://127.0.0.1:8000";
 const ANDROID_STOP_BACKEND_COMMAND = [
@@ -223,7 +222,7 @@ function apiBaseLabel(base = currentApiBaseUrl()) {
 function loadSignalLog() {
   try {
     const log = JSON.parse(localStorage.getItem(SIGNAL_LOG_KEY) || "[]");
-    return Array.isArray(log) ? log.slice(0, SIGNAL_LOG_LIMIT) : [];
+    return Array.isArray(log) ? log : [];
   } catch (error) {
     return [];
   }
@@ -231,7 +230,7 @@ function loadSignalLog() {
 
 function saveSignalLog() {
   if (!state.settings.saveSignalLog) return;
-  localStorage.setItem(SIGNAL_LOG_KEY, JSON.stringify(state.signalLog.slice(0, SIGNAL_LOG_LIMIT)));
+  localStorage.setItem(SIGNAL_LOG_KEY, JSON.stringify(state.signalLog));
 }
 
 async function init() {
@@ -691,8 +690,7 @@ function mergeSignalLog(additions) {
       if (!item?.key || seen.has(item.key)) return false;
       seen.add(item.key);
       return true;
-    })
-    .slice(0, SIGNAL_LOG_LIMIT);
+    });
   saveSignalLog();
   renderSignalLog();
 }
@@ -711,7 +709,6 @@ function renderSignalLog() {
     return;
   }
   root.innerHTML = state.signalLog
-    .slice(0, SIGNAL_LOG_LIMIT)
     .map((item) => {
       const tp1GainText = item.trade?.tp1Gain != null ? `(+${formatNum(item.trade.tp1Gain, 2)})` : "";
       const runnerText = item.trade?.runnerTargetText || item.trade?.tp2Text || "";
