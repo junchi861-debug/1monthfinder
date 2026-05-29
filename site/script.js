@@ -1106,13 +1106,19 @@ function tradeSetupFromSignal(signal, session, entryOverride = null) {
   const buffer = Math.max(span * 0.012, 0.12);
   const minRisk = Math.max(span * 0.018, 0.35);
   const isResetEntry = action.includes("INDEX_RESET") || action.includes("RESET_MID");
+  const isTenkanPullback = action.includes("TENKAN_PULLBACK") || action.includes("KIJUN_SUPPORT");
+  const metricLevel = (key) => number(signal.metrics?.[key]) ?? number(levels[key]);
   const reference = isResetEntry
     ? number(levels.reset_mid_618_100) ?? number(levels.fib_100)
-    : action.includes("FIB_50")
-      ? number(levels.fib_50)
-      : number(levels.fib_618);
+    : isTenkanPullback
+      ? metricLevel("tenkan_entry") ?? metricLevel("tenkan") ?? number(levels.fib_50)
+      : action.includes("FIB_50")
+        ? number(levels.fib_50)
+        : number(levels.fib_618);
   const stopReference = isResetEntry
     ? number(levels.reset_fib_100) ?? number(levels.fib_105) ?? reference
+    : isTenkanPullback
+      ? metricLevel("kijun_stop") ?? metricLevel("kijun") ?? reference
     : reference;
   const candleLow = number(signal.candle?.low);
   const stopCandidates = [candleLow, stopReference]
@@ -1128,6 +1134,8 @@ function tradeSetupFromSignal(signal, session, entryOverride = null) {
   }
   const targetCandidates = isResetEntry
     ? [levels.fib_100, levels.fib_618, levels.fib_50, levels.fib_382, levels.day_high]
+    : isTenkanPullback
+      ? [levels.day_high, levels.fib_382, levels.fib_50]
     : [levels.fib_50, levels.fib_382, levels.day_high];
   const indexTp1 = targetAbove(indexEntry, targetCandidates, risk);
   const indexTp2 = targetAbove(indexTp1, targetCandidates, risk * 0.8);
@@ -1189,6 +1197,16 @@ function premiumProfile(signal = {}, entry = {}) {
       stopMultiplier: 0.7,
       tp1Multiplier: 1.35,
       tp2Multiplier: 1.55,
+    };
+  }
+
+  if (action.includes("TENKAN_PULLBACK") || action.includes("KIJUN_SUPPORT")) {
+    return {
+      entry: base,
+      contracts: 2,
+      stopMultiplier: 0.68,
+      tp1Multiplier: 1.28,
+      tp2Multiplier: 1.42,
     };
   }
 

@@ -223,6 +223,7 @@ def _signals_for_candles(candles: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "action": rule,
                 "alert": signal.get("label", ""),
                 "trade_decision": signal.get("trade_decision"),
+                "metrics": signal.get("metrics") or {},
                 "filter_pass": (signal.get("metrics") or {}).get("call_entry_filter_pass"),
                 "index_value": latest["close"],
                 "levels": _signal_levels(levels),

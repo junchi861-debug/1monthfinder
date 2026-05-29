@@ -434,6 +434,7 @@ def _signals_for_candles(candles: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "alert": signal.get("label", ""),
                 "alert_level": signal.get("alert_level"),
                 "trade_decision": signal.get("trade_decision"),
+                "metrics": signal.get("metrics") or {},
                 "filter_pass": (signal.get("metrics") or {}).get("call_entry_filter_pass"),
                 "index_value": latest.get("close"),
                 "levels": _signal_levels(levels),
@@ -593,6 +594,22 @@ def _evaluate_signal(candles: list[dict[str, Any]], levels: dict[str, float], ge
             "metrics": _signal_metrics(close, lower_wick_ratio, age_minutes, trend, call_filter_pass),
         }
 
+    tenkan_pullback = _tenkan_pullback_continuation_signal(
+        candles,
+        latest,
+        span,
+        close,
+        open_,
+        low,
+        high,
+        lower_wick_ratio,
+        age_minutes,
+        trend,
+        call_filter_pass,
+    )
+    if tenkan_pullback:
+        return tenkan_pullback
+
     if abs(close - fib_618) <= tolerance:
         return {
             "type": "warning",
@@ -691,6 +708,117 @@ def _index_reset_signal(
             },
         ),
     }
+
+
+def _tenkan_pullback_continuation_signal(
+    candles: list[dict[str, Any]],
+    latest: dict[str, Any],
+    span: float,
+    close: float,
+    open_: float,
+    low: float,
+    high: float,
+    lower_wick_ratio: float,
+    age_minutes: int,
+    trend: dict[str, Any],
+    call_filter_pass: bool,
+) -> dict[str, Any] | None:
+    session = _latest_session_candles(candles)
+    if len(session) < 30:
+        return None
+
+    tenkan = _level(trend, "tenkan")
+    kijun = _level(trend, "kijun")
+    gma_30 = _level(trend, "gma_30")
+    if tenkan is None or kijun is None or gma_30 is None:
+        return None
+
+    tolerance = _trend_touch_tolerance(span)
+    touches_tenkan = low <= tenkan + tolerance and high >= tenkan - tolerance
+    holds_trend = close >= tenkan and close >= kijun and close >= gma_30
+    if not touches_tenkan or not holds_trend:
+        return None
+
+    evidence = _recent_kijun_support_evidence(session[:-1], span)
+    if evidence["kijun_support_count"] < 2:
+        return None
+    if not evidence["tenkan_reclaim_seen"]:
+        return None
+    if evidence["above_gma30_count"] < 1:
+        return None
+
+    return {
+        "type": "candidate",
+        "label": "전환선2",
+        "title": "전환선 재터치 2계약 후보",
+        "message": (
+            f"30분 안에 기준선 {kijun:.2f} 지지가 {evidence['kijun_support_count']}번 반복됐고 "
+            f"30이평 {gma_30:.2f} 위에서 전환선 {tenkan:.2f}을 재터치했습니다. "
+            "피보나치 자리가 아니므로 콜은 2계약 이하로 시작하고 지수가 기준선을 이탈하면 컷 기준입니다."
+        ),
+        "alert_level": "strong",
+        "rule": "TENKAN_PULLBACK_CONTINUATION",
+        "time": latest["time"],
+        "trade_decision": "entry",
+        "metrics": _signal_metrics(
+            close,
+            lower_wick_ratio,
+            age_minutes,
+            trend,
+            call_filter_pass,
+            {
+                "tenkan_pullback_active": True,
+                "tenkan_entry": tenkan,
+                "kijun_stop": kijun,
+                "kijun_support_count": evidence["kijun_support_count"],
+                "above_gma30_count": evidence["above_gma30_count"],
+                "tenkan_reclaim_time": evidence.get("tenkan_reclaim_time"),
+                "contracts": 2,
+                "entry_basis": "tenkan_pullback_after_kijun_support",
+            },
+        ),
+    }
+
+
+def _recent_kijun_support_evidence(session: list[dict[str, Any]], span: float) -> dict[str, Any]:
+    evidence: dict[str, Any] = {
+        "kijun_support_count": 0,
+        "above_gma30_count": 0,
+        "tenkan_reclaim_seen": False,
+        "tenkan_reclaim_time": None,
+    }
+    if len(session) < 30:
+        return evidence
+
+    tolerance = _trend_touch_tolerance(span)
+    support_start = max(1, len(session) - 6)
+    reclaim_start = max(1, len(session) - 12)
+    for index in range(reclaim_start, len(session)):
+        partial = session[: index + 1]
+        context = _trend_context(partial)
+        tenkan = _level(context, "tenkan")
+        kijun = _level(context, "kijun")
+        gma_30 = _level(context, "gma_30")
+        if tenkan is None:
+            continue
+        candle = partial[-1]
+        previous = partial[-2]
+        close = float(candle["close"])
+        previous_close = float(previous["close"])
+        if previous_close < tenkan - tolerance and close >= tenkan:
+            evidence["tenkan_reclaim_seen"] = True
+            evidence["tenkan_reclaim_time"] = candle.get("time")
+        if index < support_start:
+            continue
+        if kijun is not None and float(candle["low"]) <= kijun + tolerance and close >= kijun:
+            evidence["kijun_support_count"] += 1
+        if gma_30 is not None and close >= gma_30:
+            evidence["above_gma30_count"] += 1
+    return evidence
+
+
+def _trend_touch_tolerance(span: float) -> float:
+    return max(span * 0.006, 0.18)
 
 
 def _trend_context(candles: list[dict[str, Any]]) -> dict[str, Any]:
