@@ -11,7 +11,6 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from stock_finder.market_report import build_market_site_data
 from stock_finder.options_archive import build_options_replay_payload
 from stock_finder.options_monitor import KST, build_options_monitor_snapshot
 
@@ -142,6 +141,8 @@ def _refresh_loop(args: argparse.Namespace) -> None:
 
 def _refresh_data(args: argparse.Namespace) -> None:
     try:
+        from stock_finder.market_report import build_market_site_data
+
         LOGGER.info("refreshing market data")
         report = build_market_site_data(
             out_dir=PROJECT_ROOT / "site" / "data",

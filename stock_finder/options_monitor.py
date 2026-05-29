@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import json
 import math
+import re
 import urllib.error
 import urllib.parse
 import urllib.request
+from html import unescape
 from dataclasses import dataclass
 from datetime import datetime, time, timedelta, timezone
 from typing import Any
@@ -12,7 +14,11 @@ from typing import Any
 
 KST = timezone(timedelta(hours=9), "KST")
 YAHOO_CHART_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
+NAVER_INDEX_TIME_URL = "https://finance.naver.com/sise/sise_index_time.naver"
+NAVER_ITEM_TIME_URL = "https://finance.naver.com/item/sise_time.nhn"
 SNAPSHOT_CACHE_SECONDS = 45
+NAVER_RECENT_PAGES = 14
+NAVER_FULL_SESSION_PAGES = 80
 _SNAPSHOT_CACHE: dict[str, Any] = {"created_at": 0.0, "payload": None}
 
 
@@ -22,17 +28,25 @@ class MonitorInstrument:
     symbol: str
     label: str
     provider: str = "yahoo"
+    naver_code: str | None = None
+    naver_kind: str | None = None
 
 
 MAIN_INSTRUMENT = MonitorInstrument(
     role="main",
     symbol="KOSPI200.KS",
     label="KOSPI200 지수",
+    provider="yahoo+naver",
+    naver_code="KPI200",
+    naver_kind="index",
 )
 SECONDARY_INSTRUMENT = MonitorInstrument(
     role="secondary",
     symbol="069500.KS",
     label="KODEX200 보조",
+    provider="yahoo+naver",
+    naver_code="069500",
+    naver_kind="item",
 )
 
 
@@ -52,9 +66,9 @@ def build_options_monitor_snapshot(use_cache: bool = True) -> dict[str, Any]:
         "generated_at": _iso(generated_at),
         "poll_seconds": 60,
         "source": {
-            "name": "Yahoo Finance Chart API",
+            "name": "Yahoo Finance + Naver Finance",
             "key_required": False,
-            "note": "키 없는 분봉 조회용입니다. 주문/계좌 기능은 사용하지 않습니다.",
+            "note": "Yahoo 5분봉에 네이버 장중 시간별 시세를 합쳐 최신 분봉 지연을 줄입니다. 주문/계좌 기능은 사용하지 않습니다.",
         },
         "main": main,
         "secondary": secondary,
@@ -80,7 +94,7 @@ def evaluate_candle_signal(candles: list[dict[str, Any]], levels: dict[str, floa
 
 def _build_instrument_snapshot(instrument: MonitorInstrument, generated_at: datetime) -> dict[str, Any]:
     try:
-        candles = _fetch_yahoo_candles(instrument.symbol)
+        candles = _fetch_monitor_candles(instrument, generated_at)
     except Exception as exc:
         return {
             "ok": False,
@@ -115,6 +129,45 @@ def _build_instrument_snapshot(instrument: MonitorInstrument, generated_at: date
         "raw_levels": _intraday_levels(candles),
         "signal": signal,
     }
+
+
+def _fetch_monitor_candles(instrument: MonitorInstrument, generated_at: datetime) -> list[dict[str, Any]]:
+    yahoo_candles: list[dict[str, Any]] = []
+    errors: list[str] = []
+    try:
+        yahoo_candles = _fetch_yahoo_candles(instrument.symbol)
+    except Exception as exc:
+        errors.append(f"Yahoo: {exc}")
+
+    naver_candles: list[dict[str, Any]] = []
+    if instrument.naver_code and instrument.naver_kind and _is_naver_live_window(generated_at):
+        pages = _naver_page_budget(yahoo_candles, generated_at)
+        try:
+            naver_candles = _fetch_naver_candles(instrument.naver_code, instrument.naver_kind, pages, generated_at)
+        except Exception as exc:
+            errors.append(f"Naver: {exc}")
+
+    candles = _merge_candles(yahoo_candles, naver_candles)
+    if candles:
+        return candles
+    raise RuntimeError("; ".join(errors) or "분봉 데이터 없음")
+
+
+def _naver_page_budget(candles: list[dict[str, Any]], generated_at: datetime) -> int:
+    if not _is_market_time(generated_at) or not candles:
+        return NAVER_RECENT_PAGES
+    latest = _parse_iso(candles[-1]["datetime"])
+    age_minutes = int((generated_at - latest).total_seconds() // 60)
+    if age_minutes > 60 or latest.date() != generated_at.date():
+        return NAVER_FULL_SESSION_PAGES
+    return NAVER_RECENT_PAGES
+
+
+def _is_naver_live_window(moment: datetime) -> bool:
+    if moment.weekday() >= 5:
+        return False
+    current_time = moment.time()
+    return time(8, 55) <= current_time <= time(15, 45)
 
 
 def _fetch_yahoo_candles(symbol: str, range_value: str = "5d") -> list[dict[str, Any]]:
@@ -186,6 +239,156 @@ def _fetch_yahoo_candles(symbol: str, range_value: str = "5d") -> list[dict[str,
     return candles
 
 
+def _fetch_naver_candles(code: str, kind: str, pages: int, generated_at: datetime) -> list[dict[str, Any]]:
+    quotes: list[dict[str, Any]] = []
+    trade_date = generated_at.date()
+    for page in range(1, pages + 1):
+        page_quotes = _fetch_naver_time_page(code, kind, page, generated_at, trade_date)
+        if not page_quotes:
+            break
+        quotes.extend(page_quotes)
+        if page_quotes[-1]["datetime"].time() <= time(9, 0):
+            break
+    candles = _aggregate_minute_quotes(quotes)
+    if not candles:
+        raise RuntimeError("네이버 장중 시세 없음")
+    return candles
+
+
+def _fetch_naver_time_page(
+    code: str,
+    kind: str,
+    page: int,
+    generated_at: datetime,
+    trade_date: Any,
+) -> list[dict[str, Any]]:
+    base_url = NAVER_INDEX_TIME_URL if kind == "index" else NAVER_ITEM_TIME_URL
+    query = urllib.parse.urlencode(
+        {
+            "code": code,
+            "thistime": generated_at.strftime("%Y%m%d%H%M%S"),
+            "page": page,
+        }
+    )
+    url = f"{base_url}?{query}"
+    request = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": "Mozilla/5.0 1MonthFinder options monitor",
+            "Accept": "text/html,*/*",
+            "Referer": "https://finance.naver.com/",
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=6) as response:
+            html = response.read().decode("euc-kr", "replace")
+    except urllib.error.HTTPError as exc:
+        raise RuntimeError(f"Naver 응답 오류 {exc.code}") from exc
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"Naver 연결 실패: {exc.reason}") from exc
+    return _parse_naver_time_rows(html, kind, trade_date)
+
+
+def _parse_naver_time_rows(html: str, kind: str, trade_date: Any) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for row_html in re.findall(r"<tr[^>]*>(.*?)</tr>", html, flags=re.I | re.S):
+        cells = _table_cells(row_html)
+        if len(cells) < 2 or not re.fullmatch(r"\d{2}:\d{2}", cells[0]):
+            continue
+        close = _parse_naver_number(cells[1])
+        if close is None:
+            continue
+        volume_delta = _naver_volume_delta(cells, kind)
+        hour, minute = (int(part) for part in cells[0].split(":"))
+        timestamp = datetime.combine(trade_date, time(hour, minute), tzinfo=KST)
+        rows.append(
+            {
+                "datetime": timestamp,
+                "close": close,
+                "volume_delta": volume_delta,
+            }
+        )
+    return rows
+
+
+def _table_cells(row_html: str) -> list[str]:
+    cells: list[str] = []
+    for cell_html in re.findall(r"<t[dh][^>]*>(.*?)</t[dh]>", row_html, flags=re.I | re.S):
+        text = re.sub(r"<[^>]+>", " ", cell_html)
+        text = unescape(text)
+        text = " ".join(text.split())
+        if text:
+            cells.append(text)
+    return cells
+
+
+def _parse_naver_number(value: str) -> float | None:
+    cleaned = value.replace(",", "").replace("+", "").strip()
+    try:
+        parsed = float(cleaned)
+    except ValueError:
+        return None
+    return parsed if math.isfinite(parsed) else None
+
+
+def _naver_volume_delta(cells: list[str], kind: str) -> int:
+    index = 3 if kind == "index" else 6
+    if len(cells) <= index:
+        return 0
+    value = _parse_naver_number(cells[index])
+    if value is None:
+        return 0
+    multiplier = 1000 if kind == "index" else 1
+    return max(0, int(value * multiplier))
+
+
+def _aggregate_minute_quotes(quotes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if not quotes:
+        return []
+    unique = {quote["datetime"]: quote for quote in quotes}
+    ordered = [unique[key] for key in sorted(unique)]
+    buckets: dict[datetime, dict[str, Any]] = {}
+    for quote in ordered:
+        timestamp: datetime = quote["datetime"]
+        bucket_time = timestamp.replace(minute=(timestamp.minute // 5) * 5, second=0, microsecond=0)
+        close = float(quote["close"])
+        bucket = buckets.get(bucket_time)
+        if bucket is None:
+            buckets[bucket_time] = {
+                "time": bucket_time.strftime("%H:%M"),
+                "datetime": _iso(bucket_time),
+                "date": bucket_time.date().isoformat(),
+                "open": close,
+                "high": close,
+                "low": close,
+                "close": close,
+                "volume": int(quote.get("volume_delta") or 0),
+                "partial": True,
+            }
+            continue
+        bucket["high"] = max(float(bucket["high"]), close)
+        bucket["low"] = min(float(bucket["low"]), close)
+        bucket["close"] = close
+        bucket["volume"] = int(bucket.get("volume") or 0) + int(quote.get("volume_delta") or 0)
+
+    candles = list(buckets.values())
+    for candle in candles:
+        candle["open"] = round(float(candle["open"]), 4)
+        candle["high"] = round(float(candle["high"]), 4)
+        candle["low"] = round(float(candle["low"]), 4)
+        candle["close"] = round(float(candle["close"]), 4)
+    return candles
+
+
+def _merge_candles(base: list[dict[str, Any]], overlay: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    merged: dict[str, dict[str, Any]] = {}
+    for candle in base:
+        merged[str(candle["datetime"])] = candle
+    for candle in overlay:
+        merged[str(candle["datetime"])] = candle
+    return [merged[key] for key in sorted(merged)]
+
+
 def _intraday_levels(candles: list[dict[str, Any]]) -> dict[str, float]:
     if not candles:
         return {}
@@ -196,6 +399,9 @@ def _intraday_levels(candles: list[dict[str, Any]]) -> dict[str, float]:
     low = min(float(candle["low"]) for candle in session)
     span = max(high - low, 0.0001)
     closes = [float(candle["close"]) for candle in session]
+    reset_fib_618 = low
+    reset_fib_100 = high - (span / 0.618)
+    reset_mid_618_100 = (reset_fib_618 + reset_fib_100) / 2
     return {
         "day_high": round(high, 4),
         "day_low": round(low, 4),
@@ -206,6 +412,9 @@ def _intraday_levels(candles: list[dict[str, Any]]) -> dict[str, float]:
         "fib_100": round(low, 4),
         "fib_103": round(high - span * 1.03, 4),
         "fib_105": round(high - span * 1.05, 4),
+        "reset_fib_618": round(reset_fib_618, 4),
+        "reset_fib_100": round(reset_fib_100, 4),
+        "reset_mid_618_100": round(reset_mid_618_100, 4),
         "gma_30": _geometric_average(closes[-30:]),
         "gma_50": _geometric_average(closes[-50:]),
     }
@@ -252,6 +461,21 @@ def _evaluate_signal(candles: list[dict[str, Any]], levels: dict[str, float], ge
             "time": latest["time"],
             "metrics": {"age_minutes": age_minutes},
         }
+
+    index_reset = _index_reset_signal(
+        latest,
+        levels,
+        span,
+        close,
+        open_,
+        low,
+        lower_wick_ratio,
+        age_minutes,
+        trend,
+        call_filter_pass,
+    )
+    if index_reset:
+        return index_reset
 
     if close <= fib_105:
         return {
@@ -342,6 +566,55 @@ def _evaluate_signal(candles: list[dict[str, Any]], levels: dict[str, float], ge
     }
 
 
+def _index_reset_signal(
+    latest: dict[str, Any],
+    levels: dict[str, float],
+    span: float,
+    close: float,
+    open_: float,
+    low: float,
+    lower_wick_ratio: float,
+    age_minutes: int,
+    trend: dict[str, Any],
+    call_filter_pass: bool,
+) -> dict[str, Any] | None:
+    reset_mid = _level(levels, "reset_mid_618_100")
+    reset_100 = _level(levels, "reset_fib_100")
+    reset_618 = _level(levels, "reset_fib_618")
+    fib_105 = _level(levels, "fib_105")
+    if reset_mid is None or reset_100 is None or reset_618 is None or fib_105 is None:
+        return None
+
+    touched_reset_mid = low <= reset_mid <= close
+    broke_core_zone = low <= fib_105 or close <= fib_105
+    bullish_reclaim = close >= open_ and lower_wick_ratio >= 0.30
+    if not broke_core_zone or not touched_reset_mid or not bullish_reclaim:
+        return None
+
+    return {
+        "type": "candidate",
+        "label": "지수R",
+        "title": "지수R 중심라인 회복",
+        "message": f"핵심 자리 이탈 뒤 리셋 중심선 {reset_mid:.2f}를 밑꼬리로 회복했습니다. 프리미엄 1.5~1.8 콜 2~3계약 재시작 후보입니다.",
+        "alert_level": "strong",
+        "rule": "INDEX_RESET_MID_RECLAIM",
+        "time": latest["time"],
+        "trade_decision": "entry",
+        "metrics": _signal_metrics(
+            close,
+            lower_wick_ratio,
+            age_minutes,
+            trend,
+            call_filter_pass,
+            {
+                "index_reset_mid": reset_mid,
+                "index_reset_100": reset_100,
+                "index_reset_active": True,
+            },
+        ),
+    }
+
+
 def _trend_context(candles: list[dict[str, Any]]) -> dict[str, Any]:
     latest_date = candles[-1]["date"] if candles else None
     session = [candle for candle in candles if candle.get("date") == latest_date] or candles
@@ -365,6 +638,7 @@ def _signal_metrics(
     age_minutes: int,
     trend: dict[str, Any] | None = None,
     filter_pass: bool | None = None,
+    extra: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     metrics = {
         "close": round(close, 4),
@@ -375,7 +649,17 @@ def _signal_metrics(
         metrics.update({key: value for key, value in trend.items() if value is not None})
     if filter_pass is not None:
         metrics["call_entry_filter_pass"] = filter_pass
+    if extra:
+        metrics.update(extra)
     return metrics
+
+
+def _level(levels: dict[str, Any], key: str) -> float | None:
+    try:
+        value = float(levels[key])
+    except (KeyError, TypeError, ValueError):
+        return None
+    return value if math.isfinite(value) else None
 
 
 def _empty_signal(type_: str, title: str, message: str) -> dict[str, Any]:

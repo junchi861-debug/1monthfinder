@@ -3,14 +3,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-import pandas as pd
-
-from stock_finder.backtest import walk_forward_scores
-from stock_finder.data import fetch_history, load_watchlist
-from stock_finder.daily_report import build_daily_site_data
 from stock_finder.local_server import serve_local_app
-from stock_finder.market_report import build_market_site_data
-from stock_finder.scoring import score_history
 
 
 def _ensure_parent(path: str | Path) -> None:
@@ -18,6 +11,11 @@ def _ensure_parent(path: str | Path) -> None:
 
 
 def build_candidates(args: argparse.Namespace) -> None:
+    import pandas as pd
+
+    from stock_finder.data import fetch_history, load_watchlist
+    from stock_finder.scoring import score_history
+
     rows: list[dict[str, object]] = []
     for item in load_watchlist(args.watchlist):
         try:
@@ -38,6 +36,11 @@ def build_candidates(args: argparse.Namespace) -> None:
 
 
 def build_backtest(args: argparse.Namespace) -> None:
+    import pandas as pd
+
+    from stock_finder.backtest import walk_forward_scores
+    from stock_finder.data import fetch_history, load_watchlist
+
     frames: list[pd.DataFrame] = []
     for item in load_watchlist(args.watchlist):
         try:
@@ -62,6 +65,8 @@ def build_backtest(args: argparse.Namespace) -> None:
 
 
 def build_daily(args: argparse.Namespace) -> None:
+    from stock_finder.daily_report import build_daily_site_data
+
     report = build_daily_site_data(
         watchlist_path=args.watchlist,
         out_dir=args.out_dir,
@@ -76,6 +81,8 @@ def build_daily(args: argparse.Namespace) -> None:
 
 
 def build_market(args: argparse.Namespace) -> None:
+    from stock_finder.market_report import build_market_site_data
+
     report = build_market_site_data(
         out_dir=args.out_dir,
         domestic_limit=args.domestic_limit,

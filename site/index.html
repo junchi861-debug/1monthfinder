@@ -9,7 +9,7 @@
       content="KOSPI200 5분봉 기반 위클리 옵션 신호판과 복기 화면"
     />
     <link rel="manifest" href="manifest.webmanifest" />
-    <link rel="stylesheet" href="styles.css?v=20260529-chart-frame" />
+    <link rel="stylesheet" href="styles.css?v=20260529-android-backend" />
   </head>
   <body>
     <main class="app-shell" aria-live="polite">
@@ -151,6 +151,34 @@
                 <button class="soft-button" type="button" id="resetApiBaseUrl">현재 주소</button>
               </div>
               <p class="sheet-copy" id="backendStatus">백엔드 연결 상태를 확인하는 중입니다.</p>
+              <div class="android-backend-box">
+                <strong>안드로이드 백엔드</strong>
+                <small>Termux에서 설치 명령을 실행하면 이 폰이 옵션 감시 백엔드가 됩니다.</small>
+                <label class="text-field">
+                  <span>설치 명령</span>
+                  <textarea id="androidInstallCommand" rows="4" readonly></textarea>
+                </label>
+                <div class="backend-actions">
+                  <button class="soft-button" type="button" id="copyAndroidInstallCommand">설치 복사</button>
+                  <button class="soft-button" type="button" id="copyAndroidStartCommand">실행 복사</button>
+                  <button class="soft-button" type="button" id="useAndroidLocalBackend">이 폰 사용</button>
+                </div>
+                <p class="sheet-copy" id="androidBackendStatus">설치 후 Termux에서 서버를 켜고 이 폰 사용을 누르세요.</p>
+              </div>
+              <div class="backend-env-box">
+                <strong>향후 API 크레덴셜</strong>
+                <small>현재는 키가 필요 없습니다. 나중에 키움 API를 붙일 때 이 값을 로컬 백엔드에 전달하도록 확장합니다.</small>
+                <label class="text-field">
+                  <span>환경 변수 초안</span>
+                  <textarea id="backendEnvDraft" rows="7" spellcheck="false"></textarea>
+                </label>
+                <div class="backend-actions env-actions">
+                  <button class="soft-button" type="button" id="saveBackendEnvDraft">초안 저장</button>
+                  <button class="soft-button" type="button" id="resetBackendEnvDraft">템플릿 복원</button>
+                  <button class="soft-button" type="button" id="copyBackendEnvDraft">초안 복사</button>
+                </div>
+                <p class="sheet-copy" id="backendEnvStatus">브라우저에만 저장됩니다. 현재 감시 신호 계산에는 사용하지 않습니다.</p>
+              </div>
             </div>
             <div class="settings-actions">
               <button class="soft-button" type="button" id="testAlert">알림 테스트</button>
@@ -198,6 +226,6 @@
       </section>
     </div>
 
-    <script src="script.js?v=20260529-chart-frame"></script>
+    <script src="script.js?v=20260529-android-backend"></script>
   </body>
 </html>

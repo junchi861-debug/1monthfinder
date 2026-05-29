@@ -238,7 +238,18 @@ def _signals_for_candles(candles: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _signal_levels(levels: dict[str, Any]) -> dict[str, float]:
-    keys = ("day_high", "day_low", "fib_382", "fib_50", "fib_618", "fib_100", "fib_105")
+    keys = (
+        "day_high",
+        "day_low",
+        "fib_382",
+        "fib_50",
+        "fib_618",
+        "fib_100",
+        "fib_105",
+        "reset_fib_618",
+        "reset_fib_100",
+        "reset_mid_618_100",
+    )
     return {key: float(levels[key]) for key in keys if levels.get(key) is not None}
 
 

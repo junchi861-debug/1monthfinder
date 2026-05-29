@@ -1,6 +1,19 @@
 const MONITOR_POLL_MS = 60000;
 const SIGNAL_LOG_KEY = "1monthfinder.options.signalLog";
 const SETTINGS_KEY = "1monthfinder.options.settings";
+const ANDROID_BACKEND_LOCAL_URL = "http://127.0.0.1:8000";
+const ANDROID_INSTALL_COMMAND =
+  "pkg update -y && pkg install -y curl && curl -fsSL https://raw.githubusercontent.com/junchi861-debug/1monthfinder/main/scripts/install_android_backend.sh | sh";
+const ANDROID_START_COMMAND = "1monthfinder-backend";
+const BACKEND_ENV_TEMPLATE = [
+  "OPTIONS_BACKEND_PORT=8000",
+  "KIWOOM_API_MODE=disabled",
+  "KIWOOM_APP_KEY=",
+  "KIWOOM_APP_SECRET=",
+  "KIWOOM_ACCOUNT_NO=",
+  "KIWOOM_CERT_PASSWORD=",
+  "KIWOOM_PIN=",
+].join("\n");
 const TRADE_COLORS = {
   entry: "#2f7f83",
   stop: "#a95f59",
@@ -77,10 +90,18 @@ function loadSettings() {
       saveSignalLog: true,
       alertsEnabled: false,
       apiBaseUrl: "",
+      backendEnvDraft: "",
       ...JSON.parse(localStorage.getItem(SETTINGS_KEY) || "{}"),
     };
   } catch (error) {
-    return { repeatStrongAlerts: true, vibrationEnabled: true, saveSignalLog: true, alertsEnabled: false, apiBaseUrl: "" };
+    return {
+      repeatStrongAlerts: true,
+      vibrationEnabled: true,
+      saveSignalLog: true,
+      alertsEnabled: false,
+      apiBaseUrl: "",
+      backendEnvDraft: "",
+    };
   }
 }
 
@@ -189,6 +210,15 @@ function bindControls() {
   document.querySelector("#testBackend")?.addEventListener("click", () => testBackendConnection());
   document.querySelector("#saveApiBaseUrl")?.addEventListener("click", saveApiBaseUrl);
   document.querySelector("#resetApiBaseUrl")?.addEventListener("click", resetApiBaseUrl);
+  document.querySelector("#copyAndroidInstallCommand")?.addEventListener("click", copyAndroidInstallCommand);
+  document.querySelector("#copyAndroidStartCommand")?.addEventListener("click", copyAndroidStartCommand);
+  document.querySelector("#useAndroidLocalBackend")?.addEventListener("click", useAndroidLocalBackend);
+  document.querySelector("#saveBackendEnvDraft")?.addEventListener("click", saveBackendEnvDraft);
+  document.querySelector("#resetBackendEnvDraft")?.addEventListener("click", resetBackendEnvDraft);
+  document.querySelector("#copyBackendEnvDraft")?.addEventListener("click", copyBackendEnvDraft);
+  document.querySelector("#backendEnvDraft")?.addEventListener("input", (event) => {
+    state.settings.backendEnvDraft = event.target.value;
+  });
   document.querySelector("#cancelAlertConfirm")?.addEventListener("click", closeAlertConfirm);
   document.querySelector("#confirmAlertToggle")?.addEventListener("click", confirmAlertToggle);
   document.querySelector("#alertConfirmBackdrop")?.addEventListener("click", (event) => {
@@ -324,6 +354,7 @@ function renderPriceGrid(latest, secondaryLatest, levels) {
     { label: "메인", value: formatNum(latest.close, 2), text: "KOSPI200" },
     { label: "보조", value: formatNum(secondaryLatest.close, 0), text: "KODEX200" },
     { label: "기준", value: formatNum(levels.fib_618, 2), text: "61.8%" },
+    { label: "지수R", value: formatNum(levels.reset_mid_618_100, 2), text: "리셋 중심" },
   ];
   document.querySelector("#priceGrid").innerHTML = items.map(metricCard).join("");
 }
@@ -343,6 +374,7 @@ function renderLiveLegend(levels) {
     { label: "KOSPI200", color: "#17202a" },
     { label: `61.8 ${formatNum(levels.fib_618, 2)}`, color: "#3b8f70" },
     { label: `50 ${formatNum(levels.fib_50, 2)}`, color: "#5275ad" },
+    { label: `지수R ${formatNum(levels.reset_mid_618_100, 2)}`, color: "#6f6aa6" },
     { label: `105 ${formatNum(levels.fib_105, 2)}`, color: "#a95f59" },
   ];
   document.querySelector("#liveLegend").innerHTML = entries.map(legendItem).join("");
@@ -515,6 +547,7 @@ function levelsForVisibleSeries(series) {
   const high = Math.max(...highs);
   const low = Math.min(...lows);
   const span = Math.max(high - low, 0.0001);
+  const resetFib100 = high - span / 0.618;
   return {
     day_high: high,
     day_low: low,
@@ -523,6 +556,9 @@ function levelsForVisibleSeries(series) {
     fib_618: high - span * 0.618,
     fib_100: low,
     fib_105: high - span * 1.05,
+    reset_fib_618: low,
+    reset_fib_100: resetFib100,
+    reset_mid_618_100: (low + resetFib100) / 2,
   };
 }
 
@@ -873,6 +909,7 @@ function optionSignalSetup(signal, point, activeTrade) {
 
 function signalKind(signal) {
   const decision = signal?.trade_decision;
+  if (decision === "entry") return "entry";
   if (decision === "test") return "test";
   if (decision === "take_profit") return "take_profit";
   if (decision === "risk") return "risk";
@@ -946,9 +983,17 @@ function tradeSetupFromSignal(signal, session, entryOverride = null) {
   const span = levelSpan(levels, indexEntry);
   const buffer = Math.max(span * 0.012, 0.12);
   const minRisk = Math.max(span * 0.018, 0.35);
-  const reference = action.includes("FIB_50") ? number(levels.fib_50) : number(levels.fib_618);
+  const isResetEntry = action.includes("INDEX_RESET") || action.includes("RESET_MID");
+  const reference = isResetEntry
+    ? number(levels.reset_mid_618_100) ?? number(levels.fib_100)
+    : action.includes("FIB_50")
+      ? number(levels.fib_50)
+      : number(levels.fib_618);
+  const stopReference = isResetEntry
+    ? number(levels.reset_fib_100) ?? number(levels.fib_105) ?? reference
+    : reference;
   const candleLow = number(signal.candle?.low);
-  const stopCandidates = [candleLow, reference]
+  const stopCandidates = [candleLow, stopReference]
     .filter((value) => value != null)
     .map((value) => value - buffer)
     .filter((value) => value < indexEntry);
@@ -959,8 +1004,11 @@ function tradeSetupFromSignal(signal, session, entryOverride = null) {
     risk = minRisk;
     indexStop = indexEntry - risk;
   }
-  const indexTp1 = targetAbove(indexEntry, [levels.fib_50, levels.fib_382, levels.day_high], risk);
-  const indexTp2 = targetAbove(indexTp1, [levels.fib_382, levels.day_high], risk * 0.8);
+  const targetCandidates = isResetEntry
+    ? [levels.fib_100, levels.fib_618, levels.fib_50, levels.fib_382, levels.day_high]
+    : [levels.fib_50, levels.fib_382, levels.day_high];
+  const indexTp1 = targetAbove(indexEntry, targetCandidates, risk);
+  const indexTp2 = targetAbove(indexTp1, targetCandidates, risk * 0.8);
   const premium = optionPremiumPlan(signal);
   const mode = signal.trade_decision === "test" ? "test" : "entry";
   const tp1Contracts = premium.contracts > 1 ? 1 : 0;
@@ -1000,6 +1048,7 @@ function optionPremiumPlan(signal = {}) {
 }
 
 function premiumProfile(signal = {}, entry = {}) {
+  const action = String(signal.action || signal.rule || "");
   if (signal.trade_decision === "test") {
     return {
       entry: 1.0,
@@ -1011,6 +1060,16 @@ function premiumProfile(signal = {}, entry = {}) {
   }
 
   const base = averageEntry(entry);
+  if (action.includes("INDEX_RESET") || action.includes("RESET_MID")) {
+    return {
+      entry: base,
+      contracts: 2,
+      stopMultiplier: 0.7,
+      tp1Multiplier: 1.35,
+      tp2Multiplier: 1.55,
+    };
+  }
+
   return {
     entry: base,
     contracts: entry.initial_contracts || 3,
@@ -1256,6 +1315,10 @@ function renderSettings() {
   setText("#toggleWakeLock", state.wakeLock ? "화면유지 끄기" : "화면유지 켜기");
   const apiInput = document.querySelector("#apiBaseUrl");
   if (apiInput) apiInput.value = apiBase;
+  const installCommand = document.querySelector("#androidInstallCommand");
+  if (installCommand) installCommand.value = ANDROID_INSTALL_COMMAND;
+  const envDraft = document.querySelector("#backendEnvDraft");
+  if (envDraft) envDraft.value = state.settings.backendEnvDraft || BACKEND_ENV_TEMPLATE;
   setChecked("#repeatStrongAlerts", state.settings.repeatStrongAlerts);
   setChecked("#vibrationEnabled", state.settings.vibrationEnabled);
   setChecked("#saveSignalLog", state.settings.saveSignalLog);
@@ -1281,6 +1344,43 @@ async function resetApiBaseUrl() {
   await loadMonitor(true);
   await refreshReplayFromApi();
   setText("#backendStatus", "현재 주소 저장됨 · API 연결 적용");
+}
+
+async function copyAndroidInstallCommand() {
+  await copyText(ANDROID_INSTALL_COMMAND, "#androidBackendStatus", "설치 명령을 복사했습니다. Termux에 붙여넣어 실행하세요.");
+}
+
+async function copyAndroidStartCommand() {
+  await copyText(ANDROID_START_COMMAND, "#androidBackendStatus", "실행 명령을 복사했습니다. 설치 후 Termux에서 실행하세요.");
+}
+
+async function useAndroidLocalBackend() {
+  state.settings.apiBaseUrl = ANDROID_BACKEND_LOCAL_URL;
+  saveSettings();
+  renderSettings();
+  setText("#androidBackendStatus", "이 폰의 로컬 백엔드 주소를 적용했습니다.");
+  await testBackendConnection(ANDROID_BACKEND_LOCAL_URL);
+  await loadMonitor(true);
+  await refreshReplayFromApi();
+}
+
+function saveBackendEnvDraft() {
+  const draft = document.querySelector("#backendEnvDraft")?.value || "";
+  state.settings.backendEnvDraft = draft;
+  saveSettings();
+  setText("#backendEnvStatus", "환경 변수 초안을 브라우저에 저장했습니다.");
+}
+
+function resetBackendEnvDraft() {
+  state.settings.backendEnvDraft = BACKEND_ENV_TEMPLATE;
+  saveSettings();
+  renderSettings();
+  setText("#backendEnvStatus", "키움 API용 템플릿을 복원했습니다.");
+}
+
+async function copyBackendEnvDraft() {
+  const draft = document.querySelector("#backendEnvDraft")?.value || BACKEND_ENV_TEMPLATE;
+  await copyText(draft, "#backendEnvStatus", "환경 변수 초안을 복사했습니다.");
 }
 
 async function testBackendConnection(baseOverride = apiBaseUrlFromInput()) {
@@ -1524,6 +1624,7 @@ function drawLiveChart(livePlan = buildLiveTradePlan(state.monitor)) {
     { key: "fib_618", label: "61.8", color: "#3b8f70" },
     { key: "fib_50", label: "50", color: "#5275ad" },
     { key: "fib_100", label: "100", color: "#a97022" },
+    { key: "reset_mid_618_100", label: "지수R", color: "#6f6aa6" },
     { key: "fib_105", label: "105", color: "#a95f59" },
   ]
     .map((level) => ({ ...level, value: number(levels[level.key]) }))
@@ -1551,6 +1652,7 @@ function drawReplayChart(session, tradePlan = null) {
     { key: "fib_618", label: "61.8", color: "#3b8f70", value: levels.fib_618 },
     { key: "fib_50", label: "50", color: "#5275ad", value: levels.fib_50 },
     { key: "fib_100", label: "100", color: "#a97022", value: levels.fib_100 },
+    { key: "reset_mid_618_100", label: "지수R", color: "#6f6aa6", value: levels.reset_mid_618_100 },
     { key: "fib_382", label: "38.2", color: "#a95f59", value: levels.fib_382 },
   ].filter((level) => number(level.value) != null);
   drawLineChart(document.querySelector("#replayChart"), {
@@ -1974,6 +2076,27 @@ function setText(selector, value) {
 function setChecked(selector, checked) {
   const node = document.querySelector(selector);
   if (node) node.checked = Boolean(checked);
+}
+
+async function copyText(text, statusSelector, successText) {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+    } else {
+      const textarea = document.createElement("textarea");
+      textarea.value = text;
+      textarea.setAttribute("readonly", "");
+      textarea.style.position = "fixed";
+      textarea.style.left = "-9999px";
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand("copy");
+      textarea.remove();
+    }
+    setText(statusSelector, successText);
+  } catch (error) {
+    setText(statusSelector, "복사에 실패했습니다. 명령을 길게 눌러 직접 복사하세요.");
+  }
 }
 
 function signalClass(type) {

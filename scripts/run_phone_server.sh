@@ -9,5 +9,7 @@ if [ ! -d ".venv" ]; then
 fi
 
 . .venv/bin/activate
-python -m pip install -r requirements.txt
+if [ "${INSTALL_FULL_REQUIREMENTS:-0}" = "1" ]; then
+  python -m pip install -r requirements.txt
+fi
 python -m stock_finder.cli serve --host 0.0.0.0 --port "${PORT:-8000}" --refresh-minutes "${REFRESH_MINUTES:-0}" "$@"

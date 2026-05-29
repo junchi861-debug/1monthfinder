@@ -260,8 +260,15 @@ p {
 .price-grid,
 .compact-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 0.45rem;
+}
+
+.price-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.compact-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .price-grid article,
@@ -713,9 +720,9 @@ canvas {
   font-weight: 900;
 }
 
-.text-field input {
+.text-field input,
+.text-field textarea {
   width: 100%;
-  min-height: 2.4rem;
   padding: 0.44rem 0.5rem;
   border: 1px solid var(--line);
   border-radius: 7px;
@@ -725,10 +732,50 @@ canvas {
   font-weight: 850;
 }
 
+.text-field input {
+  min-height: 2.4rem;
+}
+
+.text-field textarea {
+  min-height: 5.2rem;
+  resize: vertical;
+  line-height: 1.35;
+  font-family: Consolas, "SFMono-Regular", ui-monospace, monospace;
+  font-size: 0.76rem;
+}
+
 .backend-actions {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 0.45rem;
+}
+
+.android-backend-box,
+.backend-env-box {
+  display: grid;
+  gap: 0.45rem;
+  padding: 0.65rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f8fafb;
+}
+
+.android-backend-box strong,
+.backend-env-box strong {
+  font-size: 0.86rem;
+  font-weight: 950;
+}
+
+.android-backend-box small,
+.backend-env-box small {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 760;
+  line-height: 1.35;
+}
+
+.env-actions {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .bottom-sheet {
@@ -876,6 +923,10 @@ canvas {
   .price-grid,
   .compact-grid {
     gap: 0.34rem;
+  }
+
+  .price-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .price-grid article,
