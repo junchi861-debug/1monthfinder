@@ -533,13 +533,15 @@ function renderReplayStepper(session, cursorIndex, missing) {
 }
 
 function clipReplaySession(session, cursorIndex) {
-  const series = Array.isArray(session?.series) ? session.series.slice(0, cursorIndex + 1) : [];
+  const fullSeries = Array.isArray(session?.series) ? session.series : [];
+  const series = fullSeries.slice(0, cursorIndex + 1);
   const signals = (Array.isArray(session?.signals) ? session.signals : []).filter((signal) => Number(signal.point_index || 0) <= cursorIndex);
   return {
     ...session,
     series,
+    fullSeries,
     signals,
-    levels: levelsForVisibleSeries(series),
+    levels: session.levels || levelsForVisibleSeries(series),
   };
 }
 
@@ -1664,6 +1666,8 @@ function drawReplayChart(session, tradePlan = null) {
     padding: { top: 70, right: 58, bottom: 46, left: 30 },
     compactTradeLabels: true,
     points: session.series,
+    axisPoints: session.fullSeries || session.series,
+    scalePoints: session.fullSeries || session.series,
     valueKey: "index",
     timeKey: "time",
     levels: levelEntries,
@@ -1712,6 +1716,10 @@ function drawDesignChart() {
 function drawLineChart(canvas, options) {
   if (!canvas) return;
   const points = (options.points || []).filter((point) => number(point[options.valueKey]) != null);
+  const axisPoints = Array.isArray(options.axisPoints) && options.axisPoints.length ? options.axisPoints : points;
+  const scalePoints = (Array.isArray(options.scalePoints) && options.scalePoints.length ? options.scalePoints : points).filter(
+    (point) => number(point[options.valueKey]) != null,
+  );
   const { context, width, height } = setupCanvas(canvas, options.height || 210);
   context.clearRect(0, 0, width, height);
   if (!points.length) {
@@ -1722,7 +1730,8 @@ function drawLineChart(canvas, options) {
 
   const padding = chartPadding(options.padding, width, height);
   const values = points.map((point) => number(point[options.valueKey]));
-  const extraValues = (options.extraSeries || []).flatMap((series) => points.map((point) => number(point[series.key]))).filter((value) => value != null);
+  const scaleValues = scalePoints.map((point) => number(point[options.valueKey])).filter((value) => value != null);
+  const extraValues = (options.extraSeries || []).flatMap((series) => scalePoints.map((point) => number(point[series.key]))).filter((value) => value != null);
   const levelValues = (options.levels || []).map((level) => number(level.value)).filter((value) => value != null);
   const markerValues = (options.tradeMarkers || options.signals || [])
     .map((marker) => {
@@ -1730,7 +1739,7 @@ function drawLineChart(canvas, options) {
       return number(marker.index_value ?? points[pointIndex]?.[options.valueKey]);
     })
     .filter((value) => value != null);
-  const allValues = values.concat(extraValues, levelValues, markerValues).filter((value) => value != null);
+  const allValues = scaleValues.concat(extraValues, levelValues, markerValues).filter((value) => value != null);
   const rawMin = Math.min(...allValues);
   const rawMax = Math.max(...allValues);
   const rawSpan = rawMax - rawMin || 1;
@@ -1740,7 +1749,8 @@ function drawLineChart(canvas, options) {
   const span = max - min || 1;
   const plotWidth = Math.max(1, width - padding.left - padding.right);
   const plotHeight = Math.max(1, height - padding.top - padding.bottom);
-  const xFor = (index) => padding.left + index * (plotWidth / Math.max(points.length - 1, 1));
+  const xDomainLength = Math.max(axisPoints.length, points.length, 1);
+  const xFor = (index) => padding.left + index * (plotWidth / Math.max(xDomainLength - 1, 1));
   const yFor = (value) => height - padding.bottom - ((value - min) / span) * plotHeight;
 
   drawGrid(context, width, height, padding);
@@ -1755,7 +1765,7 @@ function drawLineChart(canvas, options) {
   } else {
     drawSignalMarkers(context, points, xFor, yFor, options);
   }
-  drawAxisLabels(context, width, height, padding, points, values, options.timeKey);
+  drawAxisLabels(context, width, height, padding, axisPoints, scaleValues.length ? scaleValues : values, options.timeKey);
 }
 
 function drawLatestPoint(context, points, values, xFor, yFor, options) {
@@ -2051,15 +2061,18 @@ function setupCanvas(canvas, height) {
   const rect = canvas.getBoundingClientRect();
   const frameRect = frame?.getBoundingClientRect();
   const viewportWidth = window.visualViewport?.width || document.documentElement.clientWidth || window.innerWidth || 320;
-  const measuredWidth = rect.width || frameRect?.width || canvas.parentElement?.clientWidth || 320;
-  const cssWidth = Math.max(1, Math.min(measuredWidth, frameRect?.width || measuredWidth, viewportWidth));
+  const frameWidth = frame?.clientWidth || frameRect?.width || canvas.parentElement?.clientWidth || 320;
+  const measuredWidth = rect.width || frameWidth;
+  const cssWidth = Math.max(1, Math.min(measuredWidth, frameWidth, viewportWidth));
   const measuredHeight = frameRect?.height || rect.height || height;
   const cssHeight = measuredHeight && measuredHeight > 20 ? measuredHeight : height;
-  const scale = window.devicePixelRatio || 1;
-  canvas.style.width = "100%";
+  const scale = 1;
+  canvas.style.width = `${Math.round(cssWidth)}px`;
+  canvas.style.maxWidth = "100%";
   canvas.style.height = `${Math.round(cssHeight)}px`;
   canvas.width = Math.max(1, Math.floor(cssWidth * scale));
   canvas.height = Math.max(1, Math.floor(cssHeight * scale));
+  canvas.setAttribute("width", String(Math.round(cssWidth)));
   canvas.setAttribute("height", String(Math.round(cssHeight)));
   const context = canvas.getContext("2d");
   context.setTransform(scale, 0, 0, scale, 0, 0);
