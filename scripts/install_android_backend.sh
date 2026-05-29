@@ -153,6 +153,8 @@ chmod +x "$START_BIN"
 
 say ""
 say "1MonthFinder Android backend installed."
+say "Command check:"
+say "  command -v 1monthfinder-backend || echo \"$START_BIN\""
 say "Doctor command:"
 say "  $START_BIN doctor"
 say "Status command:"

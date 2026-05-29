@@ -108,8 +108,10 @@ pkg update -y && pkg install -y curl git python && curl -fsSL https://raw.github
 
 ```sh
 export PATH="$PREFIX/bin:$HOME/.local/bin:$PATH"
-1monthfinder-backend doctor
-1monthfinder-backend status || 1monthfinder-backend
+BACKEND_BIN="$(command -v 1monthfinder-backend || printf "%s" "${PREFIX:-$HOME/.local}/bin/1monthfinder-backend")"
+echo "$BACKEND_BIN"
+"$BACKEND_BIN" doctor
+"$BACKEND_BIN" status || "$BACKEND_BIN"
 ```
 
 현재 옵션 감시는 공개 분봉만 사용하므로 API 키가 필요 없습니다. 향후 키움 API를 붙일 때 사용할 환경 변수 초안은 `config/backend.env.example`에 있으며, 모바일 웹앱 설정의 `향후 API 크레덴셜` 칸에도 같은 템플릿을 저장해 둘 수 있습니다.
