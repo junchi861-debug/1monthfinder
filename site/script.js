@@ -3,8 +3,9 @@ const SIGNAL_LOG_KEY = "1monthfinder.options.signalLog";
 const SETTINGS_KEY = "1monthfinder.options.settings";
 const ANDROID_BACKEND_LOCAL_URL = "http://127.0.0.1:8000";
 const ANDROID_INSTALL_COMMAND =
-  "pkg update -y && pkg install -y curl git python && curl -fsSL https://raw.githubusercontent.com/junchi861-debug/1monthfinder/main/scripts/install_android_backend.sh | sh";
-const ANDROID_START_COMMAND = "1monthfinder-backend doctor && 1monthfinder-backend";
+  'pkg update -y && pkg install -y curl git python && curl -fsSL https://raw.githubusercontent.com/junchi861-debug/1monthfinder/main/scripts/install_android_backend.sh -o "$HOME/install_1monthfinder.sh" && NO_START=1 sh "$HOME/install_1monthfinder.sh"';
+const ANDROID_START_COMMAND =
+  'export PATH="$PREFIX/bin:$HOME/.local/bin:$PATH"; 1monthfinder-backend doctor && { 1monthfinder-backend status || 1monthfinder-backend; }';
 const BACKEND_ENV_TEMPLATE = [
   "OPTIONS_BACKEND_PORT=8000",
   "KIWOOM_API_MODE=disabled",

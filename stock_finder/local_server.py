@@ -30,7 +30,12 @@ def serve_local_app(args: argparse.Namespace) -> None:
         thread.start()
 
     handler = functools.partial(StockFinderRequestHandler, directory=str(PROJECT_ROOT))
-    server = ThreadingHTTPServer((args.host, args.port), handler)
+    try:
+        server = ThreadingHTTPServer((args.host, args.port), handler)
+    except OSError as exc:
+        LOGGER.error("server could not start on %s:%s (%s)", args.host, args.port, exc)
+        LOGGER.error("if another server is already running, open http://127.0.0.1:%s/site/ or try PORT=8010 1monthfinder-backend", args.port)
+        raise SystemExit(1) from exc
     LOGGER.info("serving 1MonthFinder at http://%s:%s/site/", args.host, args.port)
     LOGGER.info("same Wi-Fi phone URL is usually http://<computer-ip>:%s/site/", args.port)
     try:

@@ -70,7 +70,6 @@ cat > "$START_BIN" <<EOF
 set -eu
 APP_DIR="$APP_DIR"
 DEFAULT_PORT="$PORT"
-LOG_FILE="\${LOG_FILE:-\$APP_DIR/termux-backend.log}"
 
 find_python() {
   if command -v python >/dev/null 2>&1; then
@@ -92,6 +91,22 @@ PYTHON_BIN="\$(find_python)" || {
   exit 1
 }
 
+health_check() {
+  "\$PYTHON_BIN" - "\$PORT" <<'PY' >/dev/null 2>&1
+import json
+import sys
+import urllib.request
+
+port = sys.argv[1]
+try:
+    with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/health", timeout=2) as response:
+        payload = json.loads(response.read().decode("utf-8"))
+except Exception:
+    sys.exit(1)
+sys.exit(0 if payload.get("ok") else 1)
+PY
+}
+
 case "\$command_name" in
   doctor)
     echo "1MonthFinder backend doctor"
@@ -103,23 +118,33 @@ case "\$command_name" in
     "\$PYTHON_BIN" -m py_compile stock_finder/cli.py stock_finder/local_server.py stock_finder/options_monitor.py stock_finder/options_archive.py
     echo "OK: backend files compile."
     ;;
+  status)
+    if health_check; then
+      echo "OK: backend is already running at http://127.0.0.1:\$PORT/site/"
+    else
+      echo "STOPPED: backend is not responding on port \$PORT."
+      echo "Start it with: 1monthfinder-backend"
+      exit 1
+    fi
+    ;;
   update)
     git -C "\$APP_DIR" pull --ff-only
     ;;
   start|"")
+    if health_check; then
+      echo "OK: backend is already running at http://127.0.0.1:\$PORT/site/"
+      echo "Open Chrome: http://127.0.0.1:\$PORT/site/"
+      exit 0
+    fi
     if command -v termux-wake-lock >/dev/null 2>&1; then
       termux-wake-lock || true
     fi
     echo "Starting 1MonthFinder backend on http://127.0.0.1:\$PORT/site/"
-    echo "Log file: \$LOG_FILE"
-    if command -v tee >/dev/null 2>&1; then
-      "\$PYTHON_BIN" -m stock_finder.cli serve --host 0.0.0.0 --port "\$PORT" 2>&1 | tee -a "\$LOG_FILE"
-    else
-      "\$PYTHON_BIN" -m stock_finder.cli serve --host 0.0.0.0 --port "\$PORT"
-    fi
+    echo "Keep this Termux session open while using the phone browser."
+    "\$PYTHON_BIN" -m stock_finder.cli serve --host 0.0.0.0 --port "\$PORT"
     ;;
   *)
-    echo "Usage: 1monthfinder-backend [start|doctor|update]"
+    echo "Usage: 1monthfinder-backend [start|doctor|status|update]"
     exit 2
     ;;
 esac
@@ -130,6 +155,8 @@ say ""
 say "1MonthFinder Android backend installed."
 say "Doctor command:"
 say "  $START_BIN doctor"
+say "Status command:"
+say "  $START_BIN status"
 say "Start command:"
 say "  $START_BIN"
 say ""
@@ -142,4 +169,6 @@ say ""
 
 if [ "${NO_START:-0}" != "1" ]; then
   exec "$START_BIN"
+else
+  say "Install-only mode: server was not started."
 fi

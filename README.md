@@ -101,14 +101,15 @@ sh scripts/run_phone_server.sh
 처음 설치하는 폰이라면 웹앱의 `설정 -> 안드로이드 백엔드 -> 설치 복사`를 누른 뒤 Termux에 붙여넣어 실행할 수 있습니다. 같은 명령을 직접 입력하려면 다음과 같습니다.
 
 ```sh
-pkg update -y && pkg install -y curl git python && curl -fsSL https://raw.githubusercontent.com/junchi861-debug/1monthfinder/main/scripts/install_android_backend.sh | sh
+pkg update -y && pkg install -y curl git python && curl -fsSL https://raw.githubusercontent.com/junchi861-debug/1monthfinder/main/scripts/install_android_backend.sh -o "$HOME/install_1monthfinder.sh" && NO_START=1 sh "$HOME/install_1monthfinder.sh"
 ```
 
 설치가 끝난 뒤에는 Termux에서 아래 명령으로 다시 켤 수 있습니다.
 
 ```sh
+export PATH="$PREFIX/bin:$HOME/.local/bin:$PATH"
 1monthfinder-backend doctor
-1monthfinder-backend
+1monthfinder-backend status || 1monthfinder-backend
 ```
 
 현재 옵션 감시는 공개 분봉만 사용하므로 API 키가 필요 없습니다. 향후 키움 API를 붙일 때 사용할 환경 변수 초안은 `config/backend.env.example`에 있으며, 모바일 웹앱 설정의 `향후 API 크레덴셜` 칸에도 같은 템플릿을 저장해 둘 수 있습니다.
