@@ -133,9 +133,7 @@ const state = {
 };
 
 const modalMeta = {
-  replay: { eyebrow: "차트 검증", title: "설계선과 복기" },
-  design: { eyebrow: "옵션 프리미엄", title: "설계선" },
-  guide: { eyebrow: "전략 기준", title: "설명" },
+  replay: { eyebrow: "차트 검증", title: "복기" },
   settings: { eyebrow: "알림", title: "설정" },
 };
 
@@ -256,6 +254,12 @@ async function init() {
   renderSettings();
   await loadMonitor(true);
   startPolling();
+  openStartupPanelFromUrl();
+}
+
+function openStartupPanelFromUrl() {
+  const panel = new URLSearchParams(window.location.search).get("panel");
+  if (panel && modalMeta[panel]) openModal(panel);
 }
 
 async function loadOptionalJson(path) {
@@ -364,6 +368,7 @@ async function registerServiceWorker() {
   if (!("serviceWorker" in navigator)) return;
   try {
     state.serviceWorkerRegistration = await navigator.serviceWorker.register("sw.js");
+    state.serviceWorkerRegistration.update().catch(() => {});
   } catch (error) {
     state.serviceWorkerRegistration = null;
   }
@@ -488,6 +493,8 @@ function chartLevelEntries(levels = {}) {
 }
 
 function maybeRecordSignal(snapshot) {
+  const backendEntries = Array.isArray(snapshot?.main?.recent_signals) ? snapshot.main.recent_signals : [];
+  if (backendEntries.length) return;
   const signal = snapshot.signal || {};
   if (!isLoggableSignal(signal)) return;
   const latest = snapshot.main?.latest || {};
@@ -498,6 +505,16 @@ function maybeRecordSignal(snapshot) {
 }
 
 function maybeBackfillSignalLog(snapshot) {
+  const backendEntries = Array.isArray(snapshot?.main?.recent_signals) ? snapshot.main.recent_signals : [];
+  if (backendEntries.length) {
+    const existing = new Set(state.signalLog.map((item) => item.key));
+    const additions = backendEntries
+      .map(normalizeBackendSignalLogEntry)
+      .filter((entry) => entry && !existing.has(entry.key));
+    if (additions.length) mergeSignalLog(additions);
+    return;
+  }
+
   const signals = Array.isArray(snapshot?.main?.signals) ? snapshot.main.signals : [];
   if (!signals.length) return;
   const candles = Array.isArray(snapshot?.main?.candles) ? snapshot.main.candles : [];
@@ -516,6 +533,22 @@ function maybeBackfillSignalLog(snapshot) {
     .filter(Boolean);
   if (!additions.length) return;
   mergeSignalLog(additions);
+}
+
+function normalizeBackendSignalLogEntry(entry = {}) {
+  if (!entry.key) return null;
+  return {
+    key: entry.key,
+    type: entry.type || "watch",
+    title: entry.title || "Signal",
+    message: entry.message || "",
+    time: entry.time || "-",
+    close: entry.close,
+    trade: entry.trade || null,
+    sourceAt: entry.sourceAt || entry.datetime || "",
+    createdAt: entry.createdAt || new Date().toISOString(),
+    source: entry.source || "backend",
+  };
 }
 
 function isLoggableSignal(signal = {}) {
@@ -698,8 +731,6 @@ function renderSignalLog() {
 
 function renderStaticPanels() {
   renderReplay();
-  renderDesign();
-  renderGuide();
 }
 
 function activeReplaySession() {
@@ -959,6 +990,16 @@ function buildLiveTradePlan(snapshot) {
   const latest = snapshot?.main?.latest || {};
   const close = number(latest.close);
   if (!snapshot?.ok || close == null) return standbyTradePlan("대기");
+
+  const backendPlan = snapshot?.main?.trade_plan;
+  if (backendPlan?.status) {
+    return {
+      ...standbyTradePlan(backendPlan.status),
+      ...backendPlan,
+      markers: Array.isArray(backendPlan.markers) ? backendPlan.markers : [],
+      backend: true,
+    };
+  }
 
   const candles = Array.isArray(snapshot.main?.candles) ? snapshot.main.candles.slice(-48) : [];
   const signal = snapshot.signal || {};
@@ -2004,6 +2045,20 @@ async function toggleWakeLock() {
 }
 
 function buildLiveReplaySession(snapshot = state.monitor) {
+  const backendSeries = Array.isArray(snapshot?.main?.series) ? snapshot.main.series : [];
+  if (backendSeries.length) {
+    return {
+      id: backendSeries[0]?.date || "live",
+      date: backendSeries[0]?.date,
+      series: backendSeries,
+      signals: Array.isArray(snapshot?.main?.signals) ? snapshot.main.signals : [],
+      levels: snapshot?.main?.levels || {},
+      markers: Array.isArray(snapshot?.main?.markers) ? snapshot.main.markers : [],
+      events: Array.isArray(snapshot?.main?.events) ? snapshot.main.events : [],
+      backend: true,
+    };
+  }
+
   const rawCandles = Array.isArray(snapshot?.main?.candles) ? snapshot.main.candles : [];
   const candles = latestSessionCandles(rawCandles);
   if (!candles.length) return null;
@@ -2081,8 +2136,14 @@ function drawLiveChart(livePlan = buildLiveTradePlan(state.monitor)) {
     );
     return;
   }
-  const replayPlan = buildReplayTradePlan(liveSession, { closeOpenTrade: false });
-  const tradeMarkers = mergeLiveTradeMarkers(replayPlan.events, livePlan?.markers || [], liveSession.series);
+  const backendMarkers = Array.isArray(liveSession.markers) ? liveSession.markers : [];
+  const backendEvents = Array.isArray(liveSession.events) ? liveSession.events : [];
+  const replayEvents = backendMarkers.length || backendEvents.length
+    ? backendEvents
+    : buildReplayTradePlan(liveSession, { closeOpenTrade: false }).events;
+  const tradeMarkers = backendMarkers.length
+    ? backendMarkers
+    : mergeLiveTradeMarkers(replayEvents, livePlan?.markers || [], liveSession.series);
   drawLineChart(canvas, {
     height: 320,
     padding: { top: 56, right: 52, bottom: 42, left: 30 },
@@ -2558,7 +2619,6 @@ function redrawCharts() {
     const visibleSession = active ? clipReplaySession(active, cursorIndex) : null;
     drawReplayChart(visibleSession, visibleSession ? buildReplayTradePlan(visibleSession) : null);
   }
-  if (state.activeModal === "design") drawDesignChart();
 }
 
 function averageEntry(entry) {

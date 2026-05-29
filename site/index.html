@@ -4,12 +4,21 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>옵션 감시 | 1MonthFinder</title>
+    <meta name="theme-color" content="#17202a" />
+    <meta name="color-scheme" content="light" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="옵션감시" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta
       name="description"
       content="KOSPI200 5분봉 기반 위클리 옵션 신호판과 복기 화면"
     />
     <link rel="manifest" href="manifest.webmanifest" />
-    <link rel="stylesheet" href="styles.css?v=20260529-164533" />
+    <link rel="icon" href="icons/icon.svg" type="image/svg+xml" />
+    <link rel="icon" href="icons/icon-192.png" sizes="192x192" type="image/png" />
+    <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
+    <link rel="stylesheet" href="styles.css?v=20260529-171737" />
   </head>
   <body>
     <main class="app-shell" aria-live="polite">
@@ -19,7 +28,7 @@
           <span id="topStatusText">데이터 대기</span>
         </div>
         <div class="top-actions">
-          <small class="app-updated-at" aria-label="앱 업데이트 시각">2026-05-29 16:45:33</small>
+          <small class="app-updated-at" aria-label="앱 업데이트 시각">2026-05-29 17:17:37</small>
           <button class="ghost-button" type="button" id="refreshMonitor">새로고침</button>
         </div>
       </header>
@@ -80,8 +89,6 @@
 
       <nav class="modal-nav" aria-label="추가 화면">
         <button type="button" data-open-modal="replay">복기</button>
-        <button type="button" data-open-modal="design">설계선</button>
-        <button type="button" data-open-modal="guide">설명</button>
         <button type="button" data-open-modal="settings">설정</button>
       </nav>
     </main>
@@ -126,20 +133,6 @@
             <div class="trade-stats" id="replayTradeStats" aria-label="복기 매매 검증 요약"></div>
             <p class="sheet-copy" id="replayText">날짜를 선택하면 해당 일의 공식선과 신호를 표시합니다.</p>
             <div class="replay-list" id="replaySignals"></div>
-          </div>
-
-          <div class="modal-panel" data-modal-panel="design" hidden>
-            <div class="chart-frame design-chart-frame">
-              <canvas id="designChart" height="300" aria-label="옵션 전략선 차트"></canvas>
-            </div>
-            <div class="chart-legend" id="designLegend"></div>
-            <div class="compact-grid" id="designSummary"></div>
-            <div class="replay-list" id="orderPlan"></div>
-          </div>
-
-          <div class="modal-panel" data-modal-panel="guide" hidden>
-            <div class="compact-grid" id="riskSummary"></div>
-            <div class="guide-list" id="guideList"></div>
           </div>
 
           <div class="modal-panel" data-modal-panel="settings" hidden>
@@ -229,6 +222,6 @@
       </section>
     </div>
 
-    <script src="script.js?v=20260529-164533"></script>
+    <script src="script.js?v=20260529-171737"></script>
   </body>
 </html>

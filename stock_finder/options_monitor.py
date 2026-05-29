@@ -8,7 +8,7 @@ import urllib.parse
 import urllib.request
 from html import unescape
 from dataclasses import dataclass
-from datetime import datetime, time, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Any
 
 
@@ -21,6 +21,18 @@ NAVER_RECENT_PAGES = 14
 NAVER_FULL_SESSION_PAGES = 80
 _SNAPSHOT_CACHE: dict[str, Any] = {"created_at": 0.0, "payload": None}
 CODEX_EXPERIMENTAL_PROFIT_EXTENSION_TAG = "codex_experimental_profit_extension"
+TRADE_COLORS = {
+    "entry": "#2f7f83",
+    "stop": "#a95f59",
+    "tp1": "#5275ad",
+    "tp2": "#315f9d",
+    "exit": "#657186",
+    "mixed": "#b07a2a",
+    "watch": "#a97022",
+    "test": "#a97022",
+    "risk": "#a95f59",
+    "take_profit": "#5275ad",
+}
 
 
 @dataclass(frozen=True)
@@ -61,15 +73,32 @@ def build_options_monitor_snapshot(use_cache: bool = True) -> dict[str, Any]:
     generated_at = datetime.now(KST)
     main = _build_instrument_snapshot(MAIN_INSTRUMENT, generated_at)
     secondary = _build_instrument_snapshot(SECONDARY_INSTRUMENT, generated_at)
+    etf_context = _build_etf_fibonacci_context(generated_at, secondary.get("candles") or [])
+    if etf_context:
+        main["etf_context"] = etf_context
+        secondary["etf_context"] = etf_context
+        main["signal"] = _attach_etf_context_to_signal(main.get("signal") or {}, etf_context)
+        if main.get("ok"):
+            session_candles = _latest_session_candles(main.get("candles") or [])
+            main.update(
+                _dashboard_payload(
+                    session_candles,
+                    main.get("levels") or {},
+                    main.get("signals") or [],
+                    main["signal"],
+                    generated_at,
+                )
+            )
     payload = {
         "ok": bool(main.get("ok")),
         "mode": "monitor_only",
         "generated_at": _iso(generated_at),
         "poll_seconds": 60,
+        "etf_context": etf_context,
         "source": {
             "name": "Yahoo Finance + Naver Finance",
             "key_required": False,
-            "note": "Yahoo 5분봉과 네이버 1분 장중 시세를 합쳐 1분 예비 감지와 5분 확정 신호를 나눕니다. 주문/계좌 기능은 사용하지 않습니다.",
+            "note": "Yahoo 5분봉과 네이버 1분 장중 시세를 합쳐 1분 예비 감지와 5분 확정 신호를 나눕니다. KODEX200 피보나치 컨텍스트는 ETF 분할매수 원칙이라 옵션 직접 비중 규칙으로 쓰지 않습니다. 주문/계좌 기능은 사용하지 않습니다.",
         },
         "main": main,
         "secondary": secondary,
@@ -127,6 +156,11 @@ def _build_instrument_snapshot(instrument: MonitorInstrument, generated_at: date
     if minute_signal and _prefer_minute_signal(signal):
         signal = minute_signal
     signals = _signals_for_candles(session_candles) if instrument.role == "main" else []
+    dashboard = (
+        _dashboard_payload(session_candles, levels, signals, signal, generated_at)
+        if instrument.role == "main"
+        else {}
+    )
     return {
         "ok": bool(candles),
         "role": instrument.role,
@@ -143,6 +177,7 @@ def _build_instrument_snapshot(instrument: MonitorInstrument, generated_at: date
         "minute_signal": minute_signal,
         "signals": signals,
         "signal": signal,
+        **dashboard,
     }
 
 
@@ -200,11 +235,11 @@ def _is_naver_live_window(moment: datetime) -> bool:
     return time(8, 55) <= current_time <= time(15, 45)
 
 
-def _fetch_yahoo_candles(symbol: str, range_value: str = "5d") -> list[dict[str, Any]]:
+def _fetch_yahoo_candles(symbol: str, range_value: str = "5d", interval: str = "5m") -> list[dict[str, Any]]:
     query = urllib.parse.urlencode(
         {
             "range": range_value,
-            "interval": "5m",
+            "interval": interval,
             "includePrePost": "false",
             "events": "history",
         }
@@ -265,8 +300,242 @@ def _fetch_yahoo_candles(symbol: str, range_value: str = "5d") -> list[dict[str,
         )
 
     if not candles:
-        raise RuntimeError("유효한 5분봉 없음")
+        raise RuntimeError(f"유효한 {interval} 봉 없음")
     return candles
+
+
+def _build_etf_fibonacci_context(generated_at: datetime, intraday_candles: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """KODEX200 ETF staged-buy context. This is not a direct options sizing rule."""
+
+    daily_context = None
+    try:
+        daily_context = _daily_etf_fibonacci_context(
+            _fetch_yahoo_candles(SECONDARY_INSTRUMENT.symbol, range_value="3mo", interval="1d"),
+            generated_at,
+        )
+    except Exception:
+        daily_context = None
+
+    thirty_min_context = _thirty_minute_etf_context(intraday_candles)
+    if not daily_context and not thirty_min_context:
+        return None
+
+    return {
+        "source_asset": "KODEX200 ETF",
+        "applicability": "ETF staged allocation rule; options context only",
+        "is_direct_options_rule": False,
+        "expert_context": True,
+        "daily": daily_context,
+        "thirty_minute": thirty_min_context,
+        "allocation_model": {
+            "first_tranche_pct": 30,
+            "second_tranche_pct": 30,
+            "third_tranche_pct": 20,
+            "emergency_cash_pct": 20,
+            "scout_pct_range": [5, 10],
+            "second_tranche_cut_if_50_break_pct": 70,
+            "cut_amount_of_total_pct": 20,
+            "readd_plan": "If 50% fails on confirmed candle, remove about 70% of the second tranche and redeploy it with the third tranche near 61.8%, or chase only after a clean 50% reclaim.",
+        },
+        "options_usage": {
+            "rule": "Use only as KODEX200/KOSPI200 higher-frame confluence. Do not map ETF 30/30/20/20 sizing to weekly option contracts.",
+            "entry_bias": "Prefer option entries only when the 5m option signal aligns with KODEX200 daily/30m support and KOSPI200 5m kijun or 30MA support.",
+            "risk_bias": "If KODEX200 confirms below the 30m 50% line, treat call option entries as test/watch until the 50% line is reclaimed or 61.8% support is tested.",
+        },
+    }
+
+
+def _daily_etf_fibonacci_context(candles: list[dict[str, Any]], generated_at: datetime) -> dict[str, Any] | None:
+    if not candles:
+        return None
+    anchor_date = date(generated_at.year, 4, 10)
+    if generated_at.date() < anchor_date:
+        anchor_date = date(generated_at.year - 1, 4, 10)
+    scoped = [candle for candle in candles if str(candle.get("date", "")) >= anchor_date.isoformat()]
+    if not scoped:
+        scoped = candles[-40:]
+    if len(scoped) < 2:
+        return None
+
+    anchor = scoped[0]
+    high_candle = max(scoped, key=lambda candle: float(candle["high"]))
+    anchor_low = float(anchor["low"])
+    high = float(high_candle["high"])
+    span = high - anchor_low
+    if span <= 0:
+        return None
+    close = float(scoped[-1]["close"])
+    pullback_236 = high - span * 0.236
+    pullback_382 = high - span * 0.382
+    pullback_50 = high - span * 0.5
+    if close >= pullback_236:
+        zone = "above_daily_23_6"
+        message = "Daily trend remains above the first 23.6% pullback zone."
+    elif close >= pullback_382:
+        zone = "daily_23_6_to_38_2_bounce_zone"
+        message = "Daily price is between 23.6% and 38.2%; a bounce here supports trend continuation."
+    elif close >= pullback_50:
+        zone = "below_daily_38_2_watch"
+        message = "Daily 38.2% support is damaged; use only cautious option confirmation."
+    else:
+        zone = "deep_daily_pullback"
+        message = "Daily pullback is deeper than 50%; call option entries need strong 5m reclaim evidence."
+
+    return {
+        "anchor_date": str(anchor.get("date")),
+        "anchor_low": round(anchor_low, 4),
+        "high_date": str(high_candle.get("date")),
+        "high": round(high, 4),
+        "close": round(close, 4),
+        "pullback_236": round(pullback_236, 4),
+        "pullback_382": round(pullback_382, 4),
+        "pullback_50": round(pullback_50, 4),
+        "zone": zone,
+        "message": message,
+    }
+
+
+def _thirty_minute_etf_context(candles: list[dict[str, Any]]) -> dict[str, Any] | None:
+    if len(candles) < 12:
+        return None
+    session = _latest_session_candles(candles)
+    bars = _aggregate_candles_to_minutes(session if len(session) >= 12 else candles[-96:], 30)
+    if len(bars) < 4:
+        return None
+
+    sample = bars[-10:]
+    high = max(float(candle["high"]) for candle in sample)
+    low = min(float(candle["low"]) for candle in sample)
+    span = high - low
+    if span <= 0:
+        return None
+    latest = bars[-1]
+    close = float(latest["close"])
+    previous_close = float(bars[-2]["close"]) if len(bars) >= 2 else close
+    tolerance = max(span * 0.01, 0.01)
+    pullback_382 = high - span * 0.382
+    fib_50 = high - span * 0.5
+    fib_618 = high - span * 0.618
+    ma5 = sum(float(candle["close"]) for candle in bars[-5:]) / min(len(bars), 5)
+
+    if close < fib_50 - tolerance:
+        stance = "confirmed_below_50_reduce_second"
+        action = "ETF rule says the 50% area is a falling-knife zone; reduce 70% of the second tranche and keep call options in test/watch mode."
+        option_bias = "risk_overlay"
+    elif previous_close < fib_50 <= close:
+        stance = "reclaimed_50_chase_allowed"
+        action = "A 50% reclaim allows a later chase, but options still need 5m tenkan/kijun confirmation."
+        option_bias = "reclaim_confirmation"
+    elif close <= fib_618 + tolerance:
+        stance = "near_61_8_readd_zone"
+        action = "ETF redeploy zone; for options, wait for a 5m lower-wick reclaim instead of averaging down."
+        option_bias = "support_test"
+    elif close >= pullback_382 and close >= ma5:
+        stance = "first_bounce_scout_only"
+        action = "30m 5MA first bounce is early; ETF scout is 5~10%, and options should stay small unless 5m support confirms."
+        option_bias = "scout_only"
+    else:
+        stance = "between_levels_wait"
+        action = "Wait for 30m fib support or 5m kijun/30MA confirmation."
+        option_bias = "neutral"
+
+    return {
+        "time": latest.get("time"),
+        "datetime": latest.get("datetime"),
+        "box_high": round(high, 4),
+        "box_low": round(low, 4),
+        "close": round(close, 4),
+        "pullback_382_from_high": round(pullback_382, 4),
+        "fib_50": round(fib_50, 4),
+        "fib_618": round(fib_618, 4),
+        "ma5": round(ma5, 4),
+        "stance": stance,
+        "action": action,
+        "option_bias": option_bias,
+    }
+
+
+def _aggregate_candles_to_minutes(candles: list[dict[str, Any]], minutes: int) -> list[dict[str, Any]]:
+    grouped: dict[tuple[str, int, int], list[dict[str, Any]]] = {}
+    for candle in candles:
+        moment = _parse_iso(str(candle["datetime"]))
+        bucket_minute = (moment.minute // minutes) * minutes
+        key = (moment.date().isoformat(), moment.hour, bucket_minute)
+        grouped.setdefault(key, []).append(candle)
+
+    output: list[dict[str, Any]] = []
+    for key in sorted(grouped):
+        rows = grouped[key]
+        first = rows[0]
+        last = rows[-1]
+        output.append(
+            {
+                "date": first["date"],
+                "time": first["time"],
+                "datetime": first["datetime"],
+                "open": first["open"],
+                "high": round(max(float(row["high"]) for row in rows), 4),
+                "low": round(min(float(row["low"]) for row in rows), 4),
+                "close": last["close"],
+                "volume": sum(int(row.get("volume") or 0) for row in rows),
+            }
+        )
+    return output
+
+
+def _attach_etf_context_to_signal(signal: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
+    if not signal:
+        return signal
+    metrics = dict(signal.get("metrics") or {})
+    daily = context.get("daily") or {}
+    thirty = context.get("thirty_minute") or {}
+    metrics.update(
+        {
+            "etf_context_active": True,
+            "etf_context_source_asset": context.get("source_asset"),
+            "etf_context_is_direct_options_rule": False,
+            "etf_daily_zone": daily.get("zone"),
+            "etf_daily_pullback_236": daily.get("pullback_236"),
+            "etf_daily_pullback_382": daily.get("pullback_382"),
+            "etf_30m_stance": thirty.get("stance"),
+            "etf_30m_fib_382": thirty.get("pullback_382_from_high"),
+            "etf_30m_fib_50": thirty.get("fib_50"),
+            "etf_30m_fib_618": thirty.get("fib_618"),
+            "etf_30m_option_bias": thirty.get("option_bias"),
+            "etf_allocation_model": context.get("allocation_model"),
+        }
+    )
+    updated = {**signal, "metrics": metrics}
+    if signal.get("rule") in {"WAIT", "NO_DATA"} or signal.get("alert_level") == "silent":
+        return updated
+
+    note = _etf_context_note(context)
+    if note and note not in str(updated.get("message") or ""):
+        updated["message"] = f"{updated.get('message') or ''} {note}".strip()
+
+    if thirty.get("option_bias") == "risk_overlay" and signal.get("trade_decision") == "entry":
+        updated["type"] = "watch"
+        updated["label"] = "CALL 보초"
+        updated["title"] = f"ETF 30분 50% 이탈: {signal.get('title') or '콜 후보'} 보수 전환"
+        updated["trade_decision"] = "test"
+        updated["alert_level"] = "normal"
+        updated["message"] = (
+            f"{signal.get('message') or ''} KODEX200 30분 박스 50%가 확정 이탈된 상태라 원문 ETF 규칙상 떨어지는 칼날 구간입니다. "
+            "옵션은 직접 분할매수하지 말고 보초/테스트만 허용하며, 50% 재회복 또는 61.8% 밑꼬리 확인 후 다시 판단합니다."
+        )
+        updated["metrics"]["etf_context_downgraded_option_entry"] = True
+    return updated
+
+
+def _etf_context_note(context: dict[str, Any]) -> str:
+    daily = context.get("daily") or {}
+    thirty = context.get("thirty_minute") or {}
+    parts = ["KODEX200 피보나치 컨텍스트는 ETF 분할매수용이라 옵션 계약수로 직접 환산하지 않습니다."]
+    if daily.get("pullback_236") and daily.get("pullback_382"):
+        parts.append(f"일봉 23.6/38.2는 {daily['pullback_236']:.2f}/{daily['pullback_382']:.2f}.")
+    if thirty.get("fib_50") and thirty.get("fib_618"):
+        parts.append(f"30분 50/61.8은 {thirty['fib_50']:.2f}/{thirty['fib_618']:.2f}, 판단은 {thirty.get('stance')}.")
+    return " ".join(parts)
 
 
 def _fetch_naver_candles(code: str, kind: str, pages: int, generated_at: datetime) -> list[dict[str, Any]]:
@@ -526,6 +795,747 @@ def _signals_for_candles(candles: list[dict[str, Any]]) -> list[dict[str, Any]]:
             }
         )
     return signals[-24:]
+
+
+def _dashboard_payload(
+    session_candles: list[dict[str, Any]],
+    levels: dict[str, float],
+    signals: list[dict[str, Any]],
+    current_signal: dict[str, Any],
+    generated_at: datetime,
+) -> dict[str, Any]:
+    series = _series_for_dashboard(session_candles)
+    trade_plan = _trade_plan_for_signal(current_signal, session_candles, levels)
+    events = _trade_events_for_dashboard(series, signals, levels, close_open_trade=False)
+    current_marker = _marker_from_trade_plan(trade_plan, current_signal, series)
+    markers = _merge_dashboard_markers(events, [current_marker] if current_marker else [])
+    return {
+        "series": series,
+        "markers": markers,
+        "events": events,
+        "trade_plan": trade_plan,
+        "recent_signals": _recent_signal_entries(signals, markers, generated_at),
+        "dashboard_schema": 1,
+    }
+
+
+def _series_for_dashboard(candles: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    series: list[dict[str, Any]] = []
+    closes: list[float] = []
+    for index, candle in enumerate(candles):
+        close = float(candle["close"])
+        closes.append(close)
+        partial = candles[: index + 1]
+        series.append(
+            {
+                **candle,
+                "index": round(close, 4),
+                "gma30": _geometric_average(closes[-30:]),
+                "gma50": _geometric_average(closes[-50:]),
+                "tenkan": _ichimoku_mid(partial, 9),
+                "kijun": _ichimoku_mid(partial, 26),
+            }
+        )
+    return series
+
+
+def _trade_events_for_dashboard(
+    series: list[dict[str, Any]],
+    signals: list[dict[str, Any]],
+    levels: dict[str, Any],
+    close_open_trade: bool,
+) -> list[dict[str, Any]]:
+    events: list[dict[str, Any]] = []
+    grouped: dict[int, list[dict[str, Any]]] = {}
+    for signal in signals:
+        index = _clamp_index(signal.get("point_index"), len(series))
+        grouped.setdefault(index, []).append(signal)
+
+    active: dict[str, Any] | None = None
+    trade_count = 0
+    for index, point in enumerate(series):
+        if active and index > int(active["entry_index"]):
+            exit_event = _update_active_trade(active, point, index)
+            if exit_event:
+                events.append(exit_event)
+                active = None
+
+        for signal in grouped.get(index, []):
+            if _is_entry_signal(signal):
+                if active:
+                    continue
+                setup = _trade_setup_from_signal(signal, levels, _num(point.get("index")))
+                if not setup:
+                    continue
+                trade_count += 1
+                kind = "test" if setup.get("mode") == "test" else "entry"
+                events.append(_trade_event(kind, trade_count, point, index, setup))
+                active = {
+                    "id": trade_count,
+                    "setup": setup,
+                    "entry_index": index,
+                    "tp1_hit": False,
+                    "open_contracts": setup.get("contracts", 1),
+                    "realized_profit": 0.0,
+                    "ambiguous_count": 0,
+                    "best_premium": setup.get("entry", 0),
+                }
+                continue
+
+            event = _signal_event(signal, point, index, active)
+            if active and event["kind"] == "take_profit":
+                events.append(event)
+                active = None
+            else:
+                events.append(event)
+
+    if active and close_open_trade and series:
+        last_index = len(series) - 1
+        events.append(_trade_event("exit", int(active["id"]), series[last_index], last_index, active["setup"], series[last_index].get("index")))
+
+    return sorted(events[-36:], key=lambda item: (int(item.get("point_index", 0)), _event_priority(item.get("kind"))))
+
+
+def _trade_plan_for_signal(signal: dict[str, Any], candles: list[dict[str, Any]], levels: dict[str, Any]) -> dict[str, Any]:
+    latest = candles[-1] if candles else {}
+    close = _num(latest.get("close"))
+    if close is None:
+        return _standby_trade_plan()
+
+    signal_like = {
+        **signal,
+        "point_index": max(0, len(candles) - 1),
+        "index_value": close,
+        "levels": levels,
+        "candle": latest,
+    }
+    setup = _trade_setup_from_signal(signal_like, levels, close)
+    if setup:
+        kind = "test" if setup.get("mode") == "test" else "entry"
+        return {
+            "tone": "warning" if kind == "test" else "buy",
+            "status": f"CALL ENTRY {setup['contracts']}" if setup.get("contracts", 1) > 1 else "CALL TEST",
+            "entry": setup.get("entry"),
+            "stop": setup.get("stop"),
+            "tp1": setup.get("tp1"),
+            "tp2": setup.get("tp2"),
+            "stopLabel": setup.get("stop_label"),
+            "stopText": setup.get("stop_text"),
+            "tp2Label": setup.get("tp2_label"),
+            "tp2Text": setup.get("tp2_text"),
+            "contracts": setup.get("contracts"),
+            "tp1Gain": setup.get("tp1_gain"),
+            "runnerTargetText": setup.get("runner_target_text"),
+            "markerKind": kind,
+        }
+
+    if _is_late_session_signal(signal):
+        premium = _option_premium_plan(signal)
+        plan = _late_session_trade_plan(signal, premium)
+        return {
+            "tone": "buy" if signal.get("trade_decision") == "hold" else "warning",
+            "status": plan["status"],
+            "entry": plan["entry"],
+            "stop": plan["stop"],
+            "tp1": plan["tp1"],
+            "tp2": plan["tp2"],
+            "stopLabel": "기준",
+            "stopText": plan["stopText"],
+            "tp2Label": "시간",
+            "tp2Text": plan["tp2Text"],
+            "contracts": plan["contracts"],
+            "markerKind": "watch" if signal.get("trade_decision") == "hold" else "take_profit",
+        }
+
+    rule = str(signal.get("rule") or signal.get("action") or "")
+    if signal.get("trade_decision") == "take_profit" or "RUNNER_EXIT" in rule:
+        premium = _option_premium_plan(signal)
+        runner_exit = _num((signal.get("metrics") or {}).get("option_runner_exit_premium")) or premium["entry"]
+        return {
+            "tone": "warning",
+            "status": "잔량청산",
+            "entry": premium["entry"],
+            "stop": runner_exit,
+            "tp1": premium["tp1"],
+            "tp2": runner_exit,
+            "stopLabel": "잔량",
+            "stopText": f"3회차 본청 {runner_exit:.2f}",
+            "tp2Label": "판단",
+            "tp2Text": "청산확인",
+            "contracts": int((signal.get("metrics") or {}).get("option_runner_exit_contracts") or 1),
+            "markerKind": "take_profit",
+        }
+
+    if signal.get("type") == "sell" or "BREAK" in rule:
+        premium = _option_premium_plan(signal)
+        return {
+            "tone": "sell",
+            "status": "STOP/EXIT",
+            "entry": premium["entry"],
+            "stop": premium["stop"],
+            "tp1": premium["tp1"],
+            "tp2": premium["tp2"],
+            "markerKind": "stop",
+        }
+
+    if signal.get("type") == "warning":
+        plan = _standby_trade_plan("WATCH")
+        plan["tone"] = "warning"
+        plan["markerKind"] = "watch"
+        return plan
+
+    return _standby_trade_plan()
+
+
+def _standby_trade_plan(status: str = "대기") -> dict[str, Any]:
+    return {
+        "tone": "neutral",
+        "status": status,
+        "entry": None,
+        "stop": None,
+        "tp1": None,
+        "tp2": None,
+        "markers": [],
+    }
+
+
+def _marker_from_trade_plan(
+    plan: dict[str, Any],
+    signal: dict[str, Any],
+    series: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    if not series or not plan or plan.get("status") == "대기":
+        return None
+    latest_index = len(series) - 1
+    latest = series[latest_index]
+    premium = {
+        "entry": plan.get("entry") or 1.6,
+        "stop": plan.get("stop") or plan.get("entry") or 1.6,
+        "tp1": plan.get("tp1") or plan.get("entry") or 1.6,
+        "tp2": plan.get("tp2") or plan.get("entry") or 1.6,
+        "contracts": plan.get("contracts") or 1,
+    }
+    setup = {
+        **premium,
+        "current_stop": plan.get("stop") or premium["stop"],
+        "index_entry": latest.get("index") or latest.get("close"),
+        "index_stop": latest.get("index") or latest.get("close"),
+        "index_tp1": latest.get("index") or latest.get("close"),
+        "index_tp2": latest.get("index") or latest.get("close"),
+        "risk": 1,
+    }
+    kind = plan.get("markerKind") or _signal_kind(signal)
+    return _trade_event(kind, 1, latest, latest_index, setup, latest.get("index") or latest.get("close"))
+
+
+def _merge_dashboard_markers(events: list[dict[str, Any]], live_markers: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    merged: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for marker in [*events, *live_markers]:
+        key = f"{marker.get('kind')}:{marker.get('point_index')}:{marker.get('label')}:{marker.get('premium')}"
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(marker)
+    return merged[-40:]
+
+
+def _recent_signal_entries(
+    signals: list[dict[str, Any]],
+    markers: list[dict[str, Any]],
+    generated_at: datetime,
+) -> list[dict[str, Any]]:
+    entries: list[dict[str, Any]] = []
+    for signal in signals:
+        rule = signal.get("rule") or signal.get("action")
+        if not rule or rule == "WAIT" or signal.get("alert_level") == "silent":
+            continue
+        candle = signal.get("candle") or {}
+        source_at = signal.get("datetime") or candle.get("datetime") or ""
+        key = f"{rule}:{source_at or signal.get('time', '')}:{signal.get('index_value', '')}"
+        entries.append(
+            {
+                "key": key,
+                "type": signal.get("type", "watch"),
+                "title": signal.get("title") or signal.get("label") or "신호",
+                "message": signal.get("message") or "",
+                "time": signal.get("time") or candle.get("time") or "-",
+                "close": signal.get("index_value") or candle.get("close"),
+                "trade": _log_trade_from_signal(signal),
+                "sourceAt": source_at,
+                "createdAt": _iso(generated_at),
+                "source": "backend_signal",
+            }
+        )
+    for marker in markers:
+        if marker.get("kind") not in {"entry", "test", "tp1", "tp2", "stop", "take_profit", "risk", "watch", "mixed"}:
+            continue
+        key = f"chart:{marker.get('kind')}:{marker.get('point_index')}:{marker.get('time')}:{marker.get('premium')}"
+        entries.append(
+            {
+                "key": key,
+                "type": _event_type(marker.get("kind")),
+                "title": marker.get("title") or marker.get("label") or "차트 이벤트",
+                "message": marker.get("detail") or "",
+                "time": marker.get("time") or "-",
+                "close": marker.get("index_value"),
+                "trade": marker.get("trade"),
+                "sourceAt": marker.get("datetime") or "",
+                "createdAt": _iso(generated_at),
+                "source": "backend_chart_event",
+            }
+        )
+    return sorted(entries, key=lambda item: item.get("sourceAt") or item.get("time") or "", reverse=True)[:36]
+
+
+def _log_trade_from_signal(signal: dict[str, Any]) -> dict[str, Any] | None:
+    premium = _option_premium_plan(signal)
+    if _is_entry_signal(signal):
+        return {
+            "status": "CALL ENTRY" if premium["contracts"] > 1 else "CALL TEST",
+            "entry": premium["entry"],
+            "stop": premium["stop"],
+            "tp1": premium["tp1"],
+            "tp2": premium["tp2"],
+            "contracts": premium["contracts"],
+        }
+    if _is_late_session_signal(signal):
+        return _late_session_trade_plan(signal, premium)
+    if signal.get("trade_decision") in {"take_profit", "stop", "risk"}:
+        return {
+            "status": "잔량청산" if signal.get("trade_decision") == "take_profit" else "위험확인",
+            "entry": premium["entry"],
+            "stop": premium["stop"],
+            "tp1": premium["tp1"],
+            "tp2": premium["tp2"],
+            "contracts": premium["contracts"],
+        }
+    return None
+
+
+def _is_entry_signal(signal: dict[str, Any]) -> bool:
+    decision = signal.get("trade_decision")
+    if decision:
+        return decision in {"entry", "test"}
+    action = str(signal.get("action") or signal.get("rule") or "")
+    return signal.get("type") == "candidate" and "FIB_618" in action and signal.get("filter_pass") is not False
+
+
+def _is_late_session_signal(signal: dict[str, Any]) -> bool:
+    rule = str(signal.get("rule") or signal.get("action") or "")
+    return "LATE_SESSION" in rule or "FINAL_1530" in rule
+
+
+def _late_session_trade_plan(signal: dict[str, Any], premium: dict[str, Any]) -> dict[str, Any]:
+    rule = str(signal.get("rule") or signal.get("action") or "")
+    metrics = signal.get("metrics") or {}
+    is_final = "FINAL_1530" in rule
+    is_aggressive = "ACCELERATION_HOLD" in rule or signal.get("trade_decision") == "hold"
+    is_exit_prep = "EXIT_PREP" in rule
+    trailing_stop = _num(metrics.get("option_trailing_stop_after_3_3"))
+    return {
+        "status": "최종청산" if is_final else "공격홀딩" if is_aggressive else "장후반청산" if is_exit_prep else "시간관리",
+        "entry": premium["entry"],
+        "stop": trailing_stop if trailing_stop is not None else premium["stop"],
+        "tp1": premium["tp1"],
+        "tp2": premium["tp2"],
+        "stopText": f"3.3 후 {trailing_stop:.2f} 방어" if is_aggressive and trailing_stop is not None else "기준/전환 확인",
+        "tp2Text": "15:30까지" if is_aggressive else "15:30 준비",
+        "contracts": 1,
+        "experimentalTag": metrics.get("codex_experimental_tag") or CODEX_EXPERIMENTAL_PROFIT_EXTENSION_TAG,
+    }
+
+
+def _trade_setup_from_signal(signal: dict[str, Any], levels: dict[str, Any], entry_override: float | None = None) -> dict[str, Any] | None:
+    if not _is_entry_signal(signal):
+        return None
+    index_entry = entry_override if entry_override is not None else _num(signal.get("index_value"))
+    if index_entry is None:
+        return None
+
+    action = str(signal.get("action") or signal.get("rule") or "")
+    span = _level_span(levels, index_entry)
+    buffer = max(span * 0.012, 0.12)
+    min_risk = max(span * 0.018, 0.35)
+    is_reset_entry = "INDEX_RESET" in action or "RESET_MID" in action
+    is_tenkan_pullback = "TENKAN_PULLBACK" in action or "KIJUN_SUPPORT" in action
+    metrics = signal.get("metrics") or {}
+
+    def metric_level(key: str) -> float | None:
+        return _num(metrics.get(key)) if metrics.get(key) is not None else _num(levels.get(key))
+
+    if is_reset_entry:
+        reference = _num(levels.get("reset_mid_618_100")) or _num(levels.get("fib_100"))
+        stop_reference = _num(levels.get("reset_fib_100")) or _num(levels.get("fib_105")) or reference
+    elif is_tenkan_pullback:
+        reference = metric_level("tenkan_entry") or metric_level("tenkan") or _num(levels.get("fib_50"))
+        stop_reference = metric_level("kijun_stop") or metric_level("kijun") or reference
+    else:
+        reference = _num(levels.get("fib_50")) if "FIB_50" in action else _num(levels.get("fib_618"))
+        stop_reference = reference
+
+    candle_low = _num((signal.get("candle") or {}).get("low"))
+    stop_candidates = [
+        value - buffer
+        for value in (candle_low, stop_reference)
+        if value is not None and value - buffer < index_entry
+    ]
+    if is_tenkan_pullback and stop_reference is not None:
+        index_stop = stop_reference
+    else:
+        index_stop = min(stop_candidates) if stop_candidates else index_entry - min_risk
+    risk = index_entry - index_stop
+    if is_tenkan_pullback and (not math.isfinite(risk) or risk <= 0):
+        risk = min_risk
+        index_stop = index_entry - risk
+    elif not is_tenkan_pullback and (not math.isfinite(risk) or risk < min_risk):
+        risk = min_risk
+        index_stop = index_entry - risk
+
+    if is_reset_entry:
+        targets = [levels.get("fib_100"), levels.get("fib_618"), levels.get("fib_50"), levels.get("fib_382"), levels.get("day_high")]
+    elif is_tenkan_pullback:
+        targets = [levels.get("day_high"), levels.get("fib_382"), levels.get("fib_50")]
+    else:
+        targets = [levels.get("fib_50"), levels.get("fib_382"), levels.get("day_high")]
+    index_tp1 = _target_above(index_entry, targets, risk)
+    index_tp2 = _target_above(index_tp1, targets, risk * 0.8)
+    premium = _option_premium_plan(signal)
+    tp1_gain = _num(metrics.get("option_tp1_gain"))
+    extension_target = _num(metrics.get("runner_extension_target"))
+    return {
+        "direction": "CALL",
+        "mode": "test" if signal.get("trade_decision") == "test" else "entry",
+        "entry": premium["entry"],
+        "stop": premium["stop"],
+        "current_stop": premium["stop"],
+        "tp1": premium["tp1"],
+        "tp2": premium["tp2"],
+        "contracts": premium["contracts"],
+        "tp1_contracts": 1 if premium["contracts"] > 1 else 0,
+        "stop_label": "지수컷" if is_tenkan_pullback and stop_reference is not None else None,
+        "stop_text": f"기준 {stop_reference:.2f} · 선물확인" if is_tenkan_pullback and stop_reference is not None else None,
+        "tp2_label": "잔량" if is_tenkan_pullback else None,
+        "tp2_text": "트레일" if is_tenkan_pullback else None,
+        "tp1_gain": tp1_gain if tp1_gain is not None else premium["tp1"] - premium["entry"],
+        "runner_target_text": f"1.6배 {extension_target:.2f}" if is_tenkan_pullback and extension_target is not None else "1.6배 홀딩" if is_tenkan_pullback else None,
+        "index_entry": index_entry,
+        "index_stop": index_stop,
+        "index_tp1": index_tp1,
+        "index_tp2": index_tp2,
+        "risk": risk,
+    }
+
+
+def _option_premium_plan(signal: dict[str, Any]) -> dict[str, Any]:
+    profile = _premium_profile(signal)
+    entry = profile["entry"]
+    return {
+        "entry": entry,
+        "stop": profile.get("stop", entry * profile.get("stop_multiplier", 0.7)),
+        "tp1": profile.get("tp1", entry * profile.get("tp1_multiplier", 1.3)),
+        "tp2": profile.get("tp2", entry * profile.get("tp2_multiplier", 1.45)),
+        "contracts": int(profile.get("contracts") or 1),
+    }
+
+
+def _premium_profile(signal: dict[str, Any]) -> dict[str, Any]:
+    metrics = signal.get("metrics") or {}
+    action = str(signal.get("action") or signal.get("rule") or "")
+    if signal.get("trade_decision") == "test":
+        return {"entry": 1.0, "contracts": 1, "stop_multiplier": 0.6, "tp1_multiplier": 1.3, "tp2_multiplier": 1.45}
+    explicit_entry = _num(metrics.get("option_entry_premium"))
+    if explicit_entry is not None:
+        explicit_tp1 = _num(metrics.get("option_tp1_premium")) or explicit_entry * 1.13
+        return {
+            "entry": explicit_entry,
+            "contracts": int(metrics.get("contracts") or metrics.get("option_runner_exit_contracts") or 1),
+            "stop_multiplier": 0.68,
+            "tp1": explicit_tp1,
+            "tp2": max(explicit_tp1, explicit_entry * 1.37),
+        }
+    if "INDEX_RESET" in action or "RESET_MID" in action:
+        return {"entry": 1.6, "contracts": 2, "stop_multiplier": 0.7, "tp1_multiplier": 1.35, "tp2_multiplier": 1.55}
+    if "TENKAN_PULLBACK" in action or "KIJUN_SUPPORT" in action:
+        return {"entry": 2.3, "contracts": 2, "stop_multiplier": 0.68, "tp1": 2.6, "tp2": max(2.6, 2.3 * 1.37)}
+    return {"entry": 1.6, "contracts": 3, "stop_multiplier": 0.7, "tp1_multiplier": 1.3, "tp2_multiplier": 1.45}
+
+
+def _update_active_trade(active: dict[str, Any], point: dict[str, Any], point_index: int) -> dict[str, Any] | None:
+    setup = active["setup"]
+    price = _num(point.get("index"))
+    high = _num(point.get("high")) or price
+    low = _num(point.get("low")) or price
+    if price is None or high is None or low is None:
+        return None
+    active_stop = max(setup["index_stop"], setup["index_entry"]) if active.get("tp1_hit") else setup["index_stop"]
+    hit_stop = low <= active_stop
+    hit_tp1 = not active.get("tp1_hit") and high >= setup["index_tp1"]
+    hit_tp2 = high >= setup["index_tp2"]
+    mixed_path = hit_stop and (hit_tp1 or hit_tp2)
+    if mixed_path:
+        active["ambiguous_count"] = int(active.get("ambiguous_count", 0)) + 1
+    if hit_stop and (not mixed_path or price < setup["index_entry"]):
+        return _trade_event("stop", int(active["id"]), point, point_index, setup, active_stop)
+    if hit_tp1:
+        active["tp1_hit"] = True
+        setup["index_stop"] = max(setup["index_stop"], setup["index_entry"])
+        setup["current_stop"] = setup["entry"]
+        closed = min(int(active.get("open_contracts", 0)), int(setup.get("tp1_contracts", 0)))
+        active["open_contracts"] = max(0, int(active.get("open_contracts", 0)) - closed)
+        active["realized_profit"] = float(active.get("realized_profit", 0)) + (setup["tp1"] - setup["entry"]) * closed
+        active["best_premium"] = max(float(active.get("best_premium", 0)), setup["tp1"])
+    if hit_tp2:
+        active["best_premium"] = max(float(active.get("best_premium", 0)), setup["tp2"])
+        return _trade_event("tp2", int(active["id"]), point, point_index, setup, setup["index_tp2"])
+    if hit_tp1:
+        return _trade_event("tp1", int(active["id"]), point, point_index, setup, setup["index_tp1"])
+    if mixed_path:
+        return _trade_event("mixed", int(active["id"]), point, point_index, setup, price)
+    return None
+
+
+def _signal_event(signal: dict[str, Any], point: dict[str, Any], point_index: int, active: dict[str, Any] | None) -> dict[str, Any]:
+    kind = _signal_kind(signal)
+    setup = active["setup"] if active else _option_signal_setup(signal, point)
+    return {
+        "kind": kind,
+        "trade_id": int(active["id"]) if active else 0,
+        "point_index": point_index,
+        "time": point.get("time") or signal.get("time") or "-",
+        "datetime": point.get("datetime") or signal.get("datetime"),
+        "index_value": _num(signal.get("index_value")) or _num(point.get("index")),
+        "premium": setup["entry"],
+        "label": _signal_label(kind),
+        "title": _signal_title(kind, signal, active),
+        "detail": _signal_detail(kind, signal, setup, active),
+        "color": TRADE_COLORS.get(kind, TRADE_COLORS["watch"]),
+        "trade": _trade_for_marker(setup, kind),
+    }
+
+
+def _option_signal_setup(signal: dict[str, Any], point: dict[str, Any]) -> dict[str, Any]:
+    premium = _option_premium_plan(signal)
+    index_value = _num(signal.get("index_value")) or _num(point.get("index")) or 0
+    return {
+        **premium,
+        "mode": "test" if signal.get("trade_decision") == "test" else "signal",
+        "current_stop": premium["stop"],
+        "tp1_contracts": 1 if premium["contracts"] > 1 else 0,
+        "index_entry": index_value,
+        "index_stop": index_value,
+        "index_tp1": index_value,
+        "index_tp2": index_value,
+        "risk": 1,
+    }
+
+
+def _trade_event(kind: str, trade_id: int, point: dict[str, Any], point_index: int, setup: dict[str, Any], override_price: Any = None) -> dict[str, Any]:
+    price = _num(override_price) or _num(point.get("index")) or _num(point.get("close")) or setup.get("index_entry")
+    premium = _premium_for_event(kind, setup, price)
+    return {
+        "kind": kind,
+        "trade_id": trade_id,
+        "point_index": point_index,
+        "time": point.get("time") or "-",
+        "datetime": point.get("datetime"),
+        "index_value": price,
+        "premium": premium,
+        "label": _trade_label(kind),
+        "title": _trade_title(kind, trade_id),
+        "detail": _trade_detail(kind, setup, premium),
+        "color": TRADE_COLORS.get(kind, TRADE_COLORS["watch"]),
+        "trade": _trade_for_marker(setup, kind),
+    }
+
+
+def _premium_for_event(kind: str, setup: dict[str, Any], index_price: Any = None) -> float:
+    if kind == "exit":
+        return _planned_premium_at_index(setup, index_price)
+    return {
+        "entry": setup["entry"],
+        "test": setup["entry"],
+        "stop": setup.get("current_stop", setup["stop"]),
+        "tp1": setup["tp1"],
+        "tp2": setup["tp2"],
+        "mixed": _planned_premium_at_index(setup, index_price),
+        "watch": setup["entry"],
+        "take_profit": setup.get("current_stop", setup["entry"]),
+    }.get(kind, setup["entry"])
+
+
+def _planned_premium_at_index(setup: dict[str, Any], index_price: Any) -> float:
+    price = _num(index_price)
+    if price is None:
+        return setup["entry"]
+    anchors = sorted(
+        [
+            (setup.get("index_stop"), setup.get("current_stop", setup["stop"])),
+            (setup.get("index_entry"), setup.get("entry")),
+            (setup.get("index_tp1"), setup.get("tp1")),
+            (setup.get("index_tp2"), setup.get("tp2")),
+        ],
+        key=lambda item: item[0] if item[0] is not None else 0,
+    )
+    anchors = [(float(index), float(premium)) for index, premium in anchors if index is not None and premium is not None]
+    if not anchors:
+        return setup["entry"]
+    if price <= anchors[0][0]:
+        return anchors[0][1]
+    for index in range(1, len(anchors)):
+        prev_index, prev_premium = anchors[index - 1]
+        next_index, next_premium = anchors[index]
+        if price <= next_index:
+            distance = next_index - prev_index or 1
+            ratio = (price - prev_index) / distance
+            return prev_premium + (next_premium - prev_premium) * ratio
+    return anchors[-1][1]
+
+
+def _trade_for_marker(setup: dict[str, Any], kind: str) -> dict[str, Any]:
+    return {
+        "status": _trade_label(kind),
+        "entry": setup.get("entry"),
+        "stop": setup.get("current_stop", setup.get("stop")),
+        "tp1": setup.get("tp1"),
+        "tp2": setup.get("tp2"),
+        "contracts": setup.get("contracts", 1),
+    }
+
+
+def _signal_kind(signal: dict[str, Any]) -> str:
+    decision = signal.get("trade_decision")
+    if decision == "entry":
+        return "entry"
+    if decision == "test":
+        return "test"
+    if decision == "take_profit":
+        return "take_profit"
+    if decision == "risk":
+        return "risk"
+    if decision == "stop":
+        return "stop"
+    return "watch"
+
+
+def _event_type(kind: Any) -> str:
+    if kind in {"entry", "tp1", "tp2"}:
+        return "candidate"
+    if kind in {"stop", "risk"}:
+        return "sell"
+    return "watch"
+
+
+def _signal_label(kind: str) -> str:
+    return {"test": "TEST", "take_profit": "TP CHECK", "risk": "RISK", "stop": "STOP", "watch": "WATCH"}.get(kind, _trade_label(kind))
+
+
+def _signal_title(kind: str, signal: dict[str, Any], active: dict[str, Any] | None) -> str:
+    if kind == "take_profit" and active:
+        return f"#{active['id']} TP CHECK"
+    if kind == "stop" and active:
+        return f"#{active['id']} STOP CHECK"
+    return signal.get("label") or signal.get("title") or _signal_label(kind)
+
+
+def _signal_detail(kind: str, signal: dict[str, Any], setup: dict[str, Any], active: dict[str, Any] | None) -> str:
+    if kind == "test":
+        return f"테스트 관찰 · 계획프리 {setup['entry']:.2f} · {signal.get('message') or ''}"
+    if kind == "take_profit":
+        return (
+            f"보유 플랜 청산 확인 · 1차 {setup['tp1']:.2f} · 2차 {setup['tp2']:.2f}"
+            if active
+            else f"청산 후보 · 보유 포지션 없음 · {signal.get('message') or ''}"
+        )
+    if kind in {"risk", "stop"}:
+        return (
+            f"위험 확인 · 계획손절 {setup.get('current_stop', setup['stop']):.2f}"
+            if active
+            else f"위험 신호 · 보유 포지션 없음 · {signal.get('message') or ''}"
+        )
+    return signal.get("message") or signal.get("alert") or "백엔드 계산 차트 이벤트"
+
+
+def _trade_label(kind: str) -> str:
+    return {
+        "entry": "ENTRY",
+        "stop": "STOP",
+        "tp1": "TP1",
+        "tp2": "TP2",
+        "mixed": "MIX",
+        "exit": "EXIT",
+        "watch": "WATCH",
+        "test": "TEST",
+        "risk": "RISK",
+        "take_profit": "TP CHECK",
+    }.get(kind, "SIGNAL")
+
+
+def _trade_title(kind: str, trade_id: int) -> str:
+    prefix = f"#{trade_id}"
+    return {
+        "entry": f"{prefix} CALL ENTRY",
+        "stop": f"{prefix} STOP",
+        "tp1": f"{prefix} TP1",
+        "tp2": f"{prefix} TP2 EXIT",
+        "mixed": f"{prefix} MIXED 5M",
+        "exit": f"{prefix} TIME EXIT",
+        "watch": "WATCH",
+        "test": f"{prefix} CALL TEST",
+        "risk": "RISK",
+        "take_profit": "TP CHECK",
+    }.get(kind, f"{prefix} SIGNAL")
+
+
+def _trade_detail(kind: str, setup: dict[str, Any], output: float) -> str:
+    if kind in {"entry", "test"}:
+        if setup.get("tp2_text"):
+            runner = f" · {setup['runner_target_text']}" if setup.get("runner_target_text") else ""
+            stop = setup.get("stop_text") or f"손절 {setup['stop']:.2f}"
+            return f"{setup['contracts']}계약 · TP1 {setup['tp1']:.2f} · 잔량 {setup['tp2_text']}{runner} · {stop}"
+        return f"{setup['contracts']}계약 · 계획손절 {setup['stop']:.2f} · TP1 · TP2 {setup['tp2']:.2f}"
+    if kind == "tp1":
+        return f"계획프리 {output:.2f} · 잔량 {setup.get('runner_target_text') or setup.get('tp2_text') or '본전스탑'}"
+    if kind == "mixed":
+        return "같은 5분봉에서 손절/목표가 함께 닿은 모호 구간"
+    if kind == "watch":
+        return "진입 전 관찰 구간"
+    return f"계획프리 {output:.2f} · 진입 {setup['entry']:.2f}"
+
+
+def _event_priority(kind: Any) -> int:
+    return {"stop": 1, "tp1": 2, "tp2": 3, "mixed": 4, "entry": 5, "test": 6, "take_profit": 7, "risk": 8, "watch": 9, "exit": 10}.get(str(kind), 10)
+
+
+def _target_above(entry: float, candidates: list[Any], fallback_distance: float) -> float:
+    usable = sorted(value for value in (_num(candidate) for candidate in candidates) if value is not None and value > entry)
+    return usable[0] if usable else entry + max(fallback_distance, 0.35)
+
+
+def _level_span(levels: dict[str, Any], fallback: float) -> float:
+    high = _num(levels.get("day_high"))
+    low = _num(levels.get("day_low"))
+    if high is not None and low is not None and high > low:
+        return high - low
+    return max((fallback or 100) * 0.01, 1)
+
+
+def _clamp_index(value: Any, length: int) -> int:
+    if length <= 0:
+        return 0
+    try:
+        index = int(value)
+    except (TypeError, ValueError):
+        index = 0
+    return max(0, min(length - 1, index))
+
+
+def _num(value: Any) -> float | None:
+    try:
+        output = float(value)
+    except (TypeError, ValueError):
+        return None
+    return output if math.isfinite(output) else None
 
 
 def _minute_precheck_signal(
