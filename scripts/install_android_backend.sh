@@ -63,6 +63,95 @@ shutil.rmtree(tmp, ignore_errors=True)
 PY
 }
 
+stop_existing_backend() {
+  target_port="${1:-$PORT}"
+  say "Stopping existing 1MonthFinder backend on port $target_port..."
+  "$PYTHON_BIN" - "$target_port" <<'PY' || true
+import os
+import signal
+import sys
+import time
+
+port = int(sys.argv[1])
+socket_inodes = set()
+
+def collect_listeners(path):
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            rows = handle.read().splitlines()[1:]
+    except OSError:
+        return
+    for row in rows:
+        fields = row.split()
+        if len(fields) < 10:
+            continue
+        local_address, state, inode = fields[1], fields[3], fields[9]
+        try:
+            local_port = int(local_address.rsplit(":", 1)[1], 16)
+        except (IndexError, ValueError):
+            continue
+        if local_port == port and state == "0A":
+            socket_inodes.add(inode)
+
+collect_listeners("/proc/net/tcp")
+collect_listeners("/proc/net/tcp6")
+
+current_pid = os.getpid()
+killed = set()
+for name in os.listdir("/proc"):
+    if not name.isdigit():
+        continue
+    pid = int(name)
+    if pid == current_pid:
+        continue
+    cmdline = ""
+    try:
+        with open(f"/proc/{pid}/cmdline", "rb") as handle:
+            cmdline = handle.read().replace(b"\0", b" ").decode("utf-8", "ignore")
+    except OSError:
+        pass
+    backend_cmd = ("stock_finder.cli" in cmdline and "serve" in cmdline) or "stock_finder.local_server" in cmdline
+    owns_socket = False
+    if socket_inodes:
+        fd_dir = f"/proc/{pid}/fd"
+        try:
+            for fd_name in os.listdir(fd_dir):
+                try:
+                    target = os.readlink(f"{fd_dir}/{fd_name}")
+                except OSError:
+                    continue
+                if target.startswith("socket:[") and target[8:-1] in socket_inodes:
+                    owns_socket = True
+                    break
+        except OSError:
+            pass
+    if not backend_cmd and not owns_socket:
+        continue
+    try:
+        os.kill(pid, signal.SIGTERM)
+        killed.add(pid)
+    except (PermissionError, ProcessLookupError):
+        pass
+
+if killed:
+    time.sleep(1)
+    for pid in list(killed):
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            continue
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except (PermissionError, ProcessLookupError):
+            pass
+    print(f"Stopped backend process(es): {', '.join(str(pid) for pid in sorted(killed))}")
+else:
+    print("No existing backend process found.")
+PY
+}
+
+stop_existing_backend "$PORT"
+
 if [ -d "$APP_DIR/.git" ]; then
   if ! git -C "$APP_DIR" pull --ff-only; then
     say "Git update failed. Keeping the existing app copy and continuing."
@@ -144,6 +233,93 @@ sys.exit(0 if payload.get("ok") else 1)
 PY
 }
 
+stop_existing_backend() {
+  target_port="\${1:-\$PORT}"
+  echo "Stopping existing 1MonthFinder backend on port \$target_port..."
+  "\$PYTHON_BIN" - "\$target_port" <<'PY' || true
+import os
+import signal
+import sys
+import time
+
+port = int(sys.argv[1])
+socket_inodes = set()
+
+def collect_listeners(path):
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            rows = handle.read().splitlines()[1:]
+    except OSError:
+        return
+    for row in rows:
+        fields = row.split()
+        if len(fields) < 10:
+            continue
+        local_address, state, inode = fields[1], fields[3], fields[9]
+        try:
+            local_port = int(local_address.rsplit(":", 1)[1], 16)
+        except (IndexError, ValueError):
+            continue
+        if local_port == port and state == "0A":
+            socket_inodes.add(inode)
+
+collect_listeners("/proc/net/tcp")
+collect_listeners("/proc/net/tcp6")
+
+current_pid = os.getpid()
+killed = set()
+for name in os.listdir("/proc"):
+    if not name.isdigit():
+        continue
+    pid = int(name)
+    if pid == current_pid:
+        continue
+    cmdline = ""
+    try:
+        with open(f"/proc/{pid}/cmdline", "rb") as handle:
+            cmdline = handle.read().replace(b"\0", b" ").decode("utf-8", "ignore")
+    except OSError:
+        pass
+    backend_cmd = ("stock_finder.cli" in cmdline and "serve" in cmdline) or "stock_finder.local_server" in cmdline
+    owns_socket = False
+    if socket_inodes:
+        fd_dir = f"/proc/{pid}/fd"
+        try:
+            for fd_name in os.listdir(fd_dir):
+                try:
+                    target = os.readlink(f"{fd_dir}/{fd_name}")
+                except OSError:
+                    continue
+                if target.startswith("socket:[") and target[8:-1] in socket_inodes:
+                    owns_socket = True
+                    break
+        except OSError:
+            pass
+    if not backend_cmd and not owns_socket:
+        continue
+    try:
+        os.kill(pid, signal.SIGTERM)
+        killed.add(pid)
+    except (PermissionError, ProcessLookupError):
+        pass
+
+if killed:
+    time.sleep(1)
+    for pid in list(killed):
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            continue
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except (PermissionError, ProcessLookupError):
+            pass
+    print(f"Stopped backend process(es): {', '.join(str(pid) for pid in sorted(killed))}")
+else:
+    print("No existing backend process found.")
+PY
+}
+
 case "\$command_name" in
   doctor)
     echo "1MonthFinder backend doctor"
@@ -165,6 +341,7 @@ case "\$command_name" in
     fi
     ;;
   update)
+    stop_existing_backend "\$PORT"
     if [ -d "\$APP_DIR/.git" ]; then
       git -C "\$APP_DIR" pull --ff-only
     else
