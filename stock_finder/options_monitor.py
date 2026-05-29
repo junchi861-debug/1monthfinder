@@ -758,6 +758,21 @@ def _evaluate_signal(candles: list[dict[str, Any]], levels: dict[str, float], ge
     if kijun_runner_exit:
         return kijun_runner_exit
 
+    late_session = _late_session_management_signal(
+        candles,
+        latest,
+        span,
+        close,
+        low,
+        high,
+        lower_wick_ratio,
+        age_minutes,
+        trend,
+        call_filter_pass,
+    )
+    if late_session:
+        return late_session
+
     if low <= fib_618 <= close and close >= open_ and lower_wick_ratio >= 0.35:
         if not call_filter_pass:
             return {
@@ -966,6 +981,112 @@ def _kijun_repeat_runner_exit_signal(
                 "underlying_line_basis": "KOSPI200 futures confirm required",
             },
         ),
+    }
+
+
+def _late_session_management_signal(
+    candles: list[dict[str, Any]],
+    latest: dict[str, Any],
+    span: float,
+    close: float,
+    low: float,
+    high: float,
+    lower_wick_ratio: float,
+    age_minutes: int,
+    trend: dict[str, Any],
+    call_filter_pass: bool,
+) -> dict[str, Any] | None:
+    latest_clock = _parse_iso(str(latest["datetime"])).time()
+    if latest_clock < time(14, 30) or latest_clock > time(15, 32):
+        return None
+
+    session = _latest_session_candles(candles)
+    if len(session) < 30:
+        return None
+
+    tenkan = _level(trend, "tenkan")
+    kijun = _level(trend, "kijun")
+    gma_30 = _level(trend, "gma_30")
+    if tenkan is None or kijun is None:
+        return None
+
+    tolerance = _trend_touch_tolerance(span)
+    holds_kijun = close >= kijun
+    holds_tenkan = close >= tenkan
+    reclaimed_kijun = low <= kijun + tolerance and close >= kijun
+    final_window = latest_clock >= time(15, 30)
+
+    metrics = {
+        "late_session_active": True,
+        "late_session_start": "14:30",
+        "final_exit_window": "15:30~15:32",
+        "loss_prepare_threshold_pct": -10,
+        "profit_hold_threshold_krw": 200000,
+        "kijun_stop": kijun,
+        "tenkan_entry": tenkan,
+        "gma30_reference": gma_30,
+        "holds_kijun": holds_kijun,
+        "holds_tenkan": holds_tenkan,
+        "reclaimed_kijun": reclaimed_kijun,
+        "requires_manual_pnl_check": True,
+        "open_interest_close_window": True,
+        "option_entry_premium": 2.3,
+        "option_tp1_premium": 2.6,
+        "option_runner_exit_contracts": 1,
+    }
+
+    if final_window:
+        return {
+            "type": "watch",
+            "label": "최종청산",
+            "title": "15:30 전후 최종 청산 준비",
+            "message": (
+                "15:30~15:32는 미결 청산으로 막판 변동이 커질 수 있는 구간입니다. "
+                "보유 잔량은 전환선/기준선 지지가 살아 있어도 MTS에서 최종 청산을 준비하세요."
+            ),
+            "alert_level": "strong",
+            "rule": "FINAL_1530_EXIT_PREP",
+            "time": latest["time"],
+            "trade_decision": "take_profit",
+            "metrics": _signal_metrics(close, lower_wick_ratio, age_minutes, trend, call_filter_pass, metrics),
+        }
+
+    if not holds_kijun:
+        return {
+            "type": "watch",
+            "label": "장후반청산",
+            "title": "14:30 이후 기준선 이탈",
+            "message": (
+                f"14:30 이후 KOSPI200이 기준선 {kijun:.2f}을 지키지 못하고 있습니다. "
+                "보유 잔량이 있으면 -10% 이상 큰 손실만 아니라는 전제에서 정리 우선으로 봅니다."
+            ),
+            "alert_level": "normal",
+            "rule": "LATE_SESSION_KIJUN_EXIT_PREP",
+            "time": latest["time"],
+            "trade_decision": "take_profit",
+            "metrics": _signal_metrics(close, lower_wick_ratio, age_minutes, trend, call_filter_pass, metrics),
+        }
+
+    hold_note = (
+        "기준선을 터치한 뒤 다시 말아올린 상태입니다. "
+        if reclaimed_kijun
+        else "기준선 위에서 장후반 추세가 유지되고 있습니다. "
+    )
+    runner_note = (
+        "확보 수익이 20만원 이상이고 청산조건이 나오지 않으면 15:30 전까지 잔량 플레이가 가능합니다."
+        if holds_tenkan
+        else "전환선 아래에서는 잔량을 길게 끌기보다 청산 준비를 우선합니다."
+    )
+    return {
+        "type": "watch",
+        "label": "장후반관리",
+        "title": "14:30 이후 잔량 시간관리",
+        "message": hold_note + runner_note,
+        "alert_level": "normal",
+        "rule": "LATE_SESSION_RUNNER_MANAGEMENT",
+        "time": latest["time"],
+        "trade_decision": "watch",
+        "metrics": _signal_metrics(close, lower_wick_ratio, age_minutes, trend, call_filter_pass, metrics),
     }
 
 

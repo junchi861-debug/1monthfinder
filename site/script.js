@@ -101,6 +101,13 @@ const TRADE_COLORS = {
   take_profit: "#5275ad",
 };
 
+const CHART_EXTRA_SERIES = [
+  { key: "gma30", label: "30이평", color: "#2f7f83", width: 1.5, dash: [] },
+  { key: "gma50", label: "50이평", color: "#95a3b7", width: 1.5, dash: [5, 4] },
+  { key: "tenkan", label: "전환", color: "#b07a2a", width: 1.5, dash: [] },
+  { key: "kijun", label: "기준", color: "#657186", width: 1.8, dash: [] },
+];
+
 const state = {
   weeklyOptions: null,
   replay: null,
@@ -454,16 +461,27 @@ function metricCard(item) {
 function renderLiveLegend(levels) {
   const entries = [
     { label: "KOSPI200", color: "#17202a" },
-    { label: `61.8 ${formatNum(levels.fib_618, 2)}`, color: "#3b8f70" },
-    { label: `50 ${formatNum(levels.fib_50, 2)}`, color: "#5275ad" },
-    { label: `지수R ${formatNum(levels.reset_mid_618_100, 2)}`, color: "#6f6aa6" },
-    { label: `105 ${formatNum(levels.fib_105, 2)}`, color: "#a95f59" },
+    ...chartLevelEntries(levels).map((level) => ({ label: `${level.label} ${formatNum(level.value, 2)}`, color: level.color })),
+    ...CHART_EXTRA_SERIES.map((line) => ({ label: line.label, color: line.color })),
   ];
   document.querySelector("#liveLegend").innerHTML = entries.map(legendItem).join("");
 }
 
 function legendItem(item) {
   return `<span style="color:${escapeAttr(item.color)}"><i></i>${escapeHtml(item.label)}</span>`;
+}
+
+function chartLevelEntries(levels = {}) {
+  return [
+    { key: "fib_618", label: "61.8", color: "#3b8f70" },
+    { key: "fib_50", label: "50", color: "#5275ad" },
+    { key: "fib_100", label: "100", color: "#a97022" },
+    { key: "reset_mid_618_100", label: "지수R", color: "#6f6aa6" },
+    { key: "fib_382", label: "38.2", color: "#a95f59" },
+    { key: "fib_105", label: "105", color: "#7c4f48" },
+  ]
+    .map((level) => ({ ...level, value: number(levels[level.key]) }))
+    .filter((level) => level.value != null);
 }
 
 function maybeRecordSignal(snapshot) {
@@ -504,6 +522,11 @@ function isLoggableSignal(signal = {}) {
 
 function signalLogRule(signal = {}) {
   return signal.rule || signal.action || "";
+}
+
+function isLateSessionSignal(signal = {}) {
+  const rule = String(signalLogRule(signal));
+  return rule.includes("LATE_SESSION") || rule.includes("FINAL_1530");
 }
 
 function signalLogCandle(signal = {}, fallback = {}) {
@@ -570,6 +593,19 @@ function backfilledTradePlan(snapshot, signal, candle) {
       contracts: setup.contracts,
       tp1Gain: setup.tp1Gain,
       runnerTargetText: setup.runnerTargetText,
+    };
+  }
+  if (isLateSessionSignal(signal)) {
+    const premium = optionPremiumPlan(signal);
+    return {
+      status: String(signalLogRule(signal)).includes("FINAL_1530") ? "최종청산" : "시간관리",
+      entry: premium.entry,
+      stop: premium.stop,
+      tp1: premium.tp1,
+      tp2: premium.tp2,
+      stopText: "기준/전환 확인",
+      tp2Text: "15:30 준비",
+      contracts: 1,
     };
   }
   if (signal.trade_decision === "take_profit" || String(signalLogRule(signal)).includes("RUNNER_EXIT")) {
@@ -942,6 +978,35 @@ function buildLiveTradePlan(snapshot) {
     };
   }
 
+  if (isLateSessionSignal(signal)) {
+    const premium = optionPremiumPlan(signal);
+    const lateSetup = {
+      ...premium,
+      mode: "signal",
+      currentStop: premium.stop,
+      tp1Contracts: 1,
+      indexEntry: close,
+      indexStop: close,
+      indexTp1: close,
+      indexTp2: close,
+      risk: 1,
+    };
+    return {
+      tone: "warning",
+      status: String(signal.rule || "").includes("FINAL_1530") ? "최종청산" : "시간관리",
+      entry: premium.entry,
+      stop: premium.stop,
+      tp1: premium.tp1,
+      tp2: premium.tp2,
+      stopLabel: "기준",
+      stopText: "기준/전환 확인",
+      tp2Label: "시간",
+      tp2Text: "15:30 준비",
+      contracts: 1,
+      markers: [tradeEvent("take_profit", 1, candles[pointIndex] || latest, pointIndex, lateSetup, close)],
+    };
+  }
+
   if (signal.trade_decision === "take_profit" || String(signal.rule || "").includes("RUNNER_EXIT")) {
     const premium = optionPremiumPlan(signal);
     const runnerExit = number(signal.metrics?.option_runner_exit_premium) ?? premium.entry;
@@ -997,11 +1062,12 @@ function buildLiveTradePlan(snapshot) {
   return standbyTradePlan("대기");
 }
 
-function buildReplayTradePlan(session) {
+function buildReplayTradePlan(session, options = {}) {
   if (!session?.series?.length) return emptyReplayTradePlan();
   const plan = emptyReplayTradePlan();
   const series = session.series;
   const signalsByIndex = groupSignalsByIndex(session.signals, series.length);
+  const closeOpenTrade = options.closeOpenTrade !== false;
   let activeTrade = null;
 
   series.forEach((point, index) => {
@@ -1037,11 +1103,17 @@ function buildReplayTradePlan(session) {
         return;
       }
 
-      plan.events.push(signalEvent(signal, point, index, activeTrade));
+      const event = signalEvent(signal, point, index, activeTrade);
+      if (activeTrade && event.kind === "take_profit") {
+        closeReplayTrade(activeTrade, event, plan);
+        activeTrade = null;
+        return;
+      }
+      plan.events.push(event);
     });
   });
 
-  if (activeTrade) {
+  if (activeTrade && closeOpenTrade) {
     const lastIndex = series.length - 1;
     const exitEvent = tradeEvent("exit", activeTrade.id, series[lastIndex], lastIndex, activeTrade.setup, number(series[lastIndex]?.index));
     closeReplayTrade(activeTrade, exitEvent, plan);
@@ -1339,6 +1411,18 @@ function premiumProfile(signal = {}, entry = {}) {
     };
   }
 
+  const explicitEntryPremium = number(signal.metrics?.option_entry_premium);
+  if (explicitEntryPremium != null) {
+    const explicitTp1 = number(signal.metrics?.option_tp1_premium) ?? explicitEntryPremium * 1.13;
+    return {
+      entry: explicitEntryPremium,
+      contracts: number(signal.metrics?.contracts) || number(signal.metrics?.option_runner_exit_contracts) || 1,
+      stopMultiplier: 0.68,
+      tp1: explicitTp1,
+      tp2: Math.max(explicitTp1, explicitEntryPremium * 1.37),
+    };
+  }
+
   const base = averageEntry(entry);
   if (action.includes("INDEX_RESET") || action.includes("RESET_MID")) {
     return {
@@ -1517,6 +1601,7 @@ function clampIndex(value, length) {
 function renderReplayLegend() {
   const entries = [
     { label: "지수", color: "#17202a" },
+    ...CHART_EXTRA_SERIES.map((line) => ({ label: line.label, color: line.color })),
     { label: "ENTRY", color: TRADE_COLORS.entry },
     { label: "TEST", color: TRADE_COLORS.test },
     { label: "STOP", color: TRADE_COLORS.stop },
@@ -1902,10 +1987,75 @@ async function toggleWakeLock() {
   renderSettings();
 }
 
+function buildLiveReplaySession(snapshot = state.monitor) {
+  const rawCandles = Array.isArray(snapshot?.main?.candles) ? snapshot.main.candles : [];
+  const candles = latestSessionCandles(rawCandles);
+  if (!candles.length) return null;
+  return {
+    id: candles[0]?.date || "live",
+    date: candles[0]?.date,
+    series: seriesFromCandles(candles),
+    signals: Array.isArray(snapshot?.main?.signals) ? snapshot.main.signals : [],
+    levels: snapshot?.main?.levels || {},
+  };
+}
+
+function latestSessionCandles(candles) {
+  const latestDate = candles[candles.length - 1]?.date;
+  if (!latestDate) return candles;
+  return candles.filter((candle) => candle.date === latestDate);
+}
+
+function seriesFromCandles(candles) {
+  const closes = [];
+  return candles.map((candle, index) => {
+    const close = number(candle.close);
+    if (close != null) closes.push(close);
+    const partial = candles.slice(0, index + 1);
+    return {
+      ...candle,
+      index: close,
+      gma30: chartGeometricAverage(closes.slice(-30)),
+      gma50: chartGeometricAverage(closes.slice(-50)),
+      tenkan: chartIchimokuMid(partial, 9),
+      kijun: chartIchimokuMid(partial, 26),
+    };
+  });
+}
+
+function chartGeometricAverage(values) {
+  const sample = values.filter((value) => value != null && value > 0);
+  if (!sample.length) return null;
+  return Math.exp(sample.reduce((sum, value) => sum + Math.log(value), 0) / sample.length);
+}
+
+function chartIchimokuMid(candles, windowSize) {
+  if (candles.length < windowSize) return null;
+  const sample = candles.slice(-windowSize);
+  const highs = sample.map((candle) => number(candle.high)).filter((value) => value != null);
+  const lows = sample.map((candle) => number(candle.low)).filter((value) => value != null);
+  if (!highs.length || !lows.length) return null;
+  return (Math.max(...highs) + Math.min(...lows)) / 2;
+}
+
+function mergeLiveTradeMarkers(replayEvents, liveMarkers, series) {
+  const latestIndex = Math.max(0, (series?.length || 1) - 1);
+  const normalizedLive = (liveMarkers || []).map((marker) => ({ ...marker, point_index: latestIndex }));
+  const merged = [];
+  const seen = new Set();
+  replayEvents.concat(normalizedLive).forEach((marker) => {
+    const key = `${marker.kind || ""}:${marker.point_index}:${marker.label || ""}:${formatNum(marker.premium, 2)}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    merged.push(marker);
+  });
+  return merged;
+}
+
 function drawLiveChart(livePlan = buildLiveTradePlan(state.monitor)) {
   const canvas = document.querySelector("#liveChart");
-  const candles = Array.isArray(state.monitor?.main?.candles) ? state.monitor.main.candles : [];
-  if (!candles.length) {
+  const liveSession = buildLiveReplaySession(state.monitor);
+  if (!liveSession?.series?.length) {
     const signal = state.monitor?.signal || {};
     drawEmptyChart(
       canvas,
@@ -1915,26 +2065,19 @@ function drawLiveChart(livePlan = buildLiveTradePlan(state.monitor)) {
     );
     return;
   }
-  const levels = state.monitor?.main?.levels || {};
-  const values = candles.map((candle) => number(candle.close)).filter((value) => value != null);
-  const levelEntries = [
-    { key: "fib_618", label: "61.8", color: "#3b8f70" },
-    { key: "fib_50", label: "50", color: "#5275ad" },
-    { key: "fib_100", label: "100", color: "#a97022" },
-    { key: "reset_mid_618_100", label: "지수R", color: "#6f6aa6" },
-    { key: "fib_105", label: "105", color: "#a95f59" },
-  ]
-    .map((level) => ({ ...level, value: number(levels[level.key]) }))
-    .filter((level) => level.value != null);
+  const replayPlan = buildReplayTradePlan(liveSession, { closeOpenTrade: false });
+  const tradeMarkers = mergeLiveTradeMarkers(replayPlan.events, livePlan?.markers || [], liveSession.series);
   drawLineChart(canvas, {
     height: 320,
     padding: { top: 56, right: 52, bottom: 42, left: 30 },
-    points: candles,
-    valueKey: "close",
+    compactTradeLabels: true,
+    points: liveSession.series,
+    valueKey: "index",
     timeKey: "time",
-    levels: levelEntries,
+    levels: chartLevelEntries(liveSession.levels),
+    extraSeries: CHART_EXTRA_SERIES,
     marker: state.monitor?.signal?.type !== "neutral",
-    tradeMarkers: livePlan?.markers || [],
+    tradeMarkers,
   });
 }
 
@@ -1944,14 +2087,6 @@ function drawReplayChart(session, tradePlan = null) {
     drawEmptyChart(canvas, "복기 자료 없음", 360, "날짜 또는 백엔드 연결 상태를 확인하세요.");
     return;
   }
-  const levels = session.levels || {};
-  const levelEntries = [
-    { key: "fib_618", label: "61.8", color: "#3b8f70", value: levels.fib_618 },
-    { key: "fib_50", label: "50", color: "#5275ad", value: levels.fib_50 },
-    { key: "fib_100", label: "100", color: "#a97022", value: levels.fib_100 },
-    { key: "reset_mid_618_100", label: "지수R", color: "#6f6aa6", value: levels.reset_mid_618_100 },
-    { key: "fib_382", label: "38.2", color: "#a95f59", value: levels.fib_382 },
-  ].filter((level) => number(level.value) != null);
   drawLineChart(document.querySelector("#replayChart"), {
     height: 360,
     padding: { top: 70, right: 58, bottom: 46, left: 30 },
@@ -1959,11 +2094,8 @@ function drawReplayChart(session, tradePlan = null) {
     points: session.series,
     valueKey: "index",
     timeKey: "time",
-    levels: levelEntries,
-    extraSeries: [
-      { key: "gma30", color: "#2f7f83", width: 1.5, dash: [] },
-      { key: "gma50", color: "#95a3b7", width: 1.5, dash: [5, 4] },
-    ],
+    levels: chartLevelEntries(session.levels || {}),
+    extraSeries: CHART_EXTRA_SERIES,
     tradeMarkers: (tradePlan || buildReplayTradePlan(session)).events,
   });
 }
