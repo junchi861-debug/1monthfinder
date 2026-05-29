@@ -1,10 +1,10 @@
-const PWA_VERSION = "20260529-184750";
+const PWA_VERSION = "20260530-us-signals-1";
 const APP_CACHE = `1monthfinder-app-${PWA_VERSION}`;
 const APP_SHELL = [
   "./",
   "./index.html",
-  "./styles.css?v=20260529-184750",
-  "./script.js?v=20260529-184750",
+  "./styles.css?v=20260530-us-signals-1",
+  "./script.js?v=20260530-us-signals-1",
   "./manifest.webmanifest",
   "./icons/icon.svg",
   "./icons/icon-192.png",

@@ -127,6 +127,10 @@ def fetch_main_candles(range_value: str = "1mo") -> list[dict[str, Any]]:
     return _fetch_yahoo_candles(MAIN_INSTRUMENT.symbol, range_value=range_value)
 
 
+def fetch_symbol_candles(symbol: str, range_value: str = "1y", interval: str = "1d") -> list[dict[str, Any]]:
+    return _fetch_yahoo_candles(symbol, range_value=range_value, interval=interval)
+
+
 def load_options_signal_log() -> dict[str, Any]:
     with SIGNAL_LOG_LOCK:
         archive = _read_signal_log()

@@ -11,6 +11,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+from stock_finder.asset_archive import build_asset_archive_payload
 from stock_finder.options_archive import build_options_replay_payload
 from stock_finder.options_monitor import (
     KST,
@@ -76,6 +77,9 @@ class StockFinderRequestHandler(SimpleHTTPRequestHandler):
         if parsed.path == "/api/options-signals":
             self._send_options_signals()
             return
+        if parsed.path == "/api/asset-archive":
+            self._send_asset_archive(parsed.query)
+            return
         super().do_GET()
 
     def do_DELETE(self) -> None:
@@ -101,7 +105,7 @@ class StockFinderRequestHandler(SimpleHTTPRequestHandler):
                 "service": "1MonthFinder options backend",
                 "generated_at": datetime.now(KST).isoformat(),
                 "host": self.headers.get("Host", ""),
-                "endpoints": ["/api/options-monitor", "/api/options-replay", "/api/options-signals"],
+                "endpoints": ["/api/options-monitor", "/api/options-replay", "/api/options-signals", "/api/asset-archive"],
                 "env_mode": "server",
             }
         )
@@ -170,6 +174,19 @@ class StockFinderRequestHandler(SimpleHTTPRequestHandler):
                 "sessions": [],
                 "active_session": None,
             }
+
+        self._send_json(payload, status)
+
+    def _send_asset_archive(self, query: str) -> None:
+        params = parse_qs(query)
+        date = (params.get("date") or [None])[0]
+        try:
+            payload = build_asset_archive_payload(date=date)
+            status = 200 if payload.get("ok") else 502
+        except Exception as exc:
+            LOGGER.exception("asset archive payload failed")
+            status = 500
+            payload = {"ok": False, "error": str(exc)}
 
         self._send_json(payload, status)
 

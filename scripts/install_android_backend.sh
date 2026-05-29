@@ -342,12 +342,18 @@ case "\$command_name" in
     ;;
   update)
     stop_existing_backend "\$PORT"
+    if command -v pkg >/dev/null 2>&1; then
+      pkg update -y
+      pkg install -y git python
+    fi
     if [ -d "\$APP_DIR/.git" ]; then
       git -C "\$APP_DIR" pull --ff-only
     else
       echo "This install was created from a source archive, not git."
       echo "Run the install command again to refresh the app files."
     fi
+    "\$PYTHON_BIN" -m py_compile stock_finder/cli.py stock_finder/local_server.py stock_finder/options_monitor.py stock_finder/options_archive.py
+    echo "OK: app files are updated and backend files compile."
     ;;
   start|"")
     if health_check; then
@@ -380,6 +386,8 @@ say "Status command:"
 say "  $START_BIN status"
 say "Start command:"
 say "  $START_BIN"
+say "Update command:"
+say "  $START_BIN update"
 say ""
 say "Phone browser:"
 say "  http://127.0.0.1:$PORT/site/"

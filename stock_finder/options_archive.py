@@ -14,7 +14,8 @@ from stock_finder.options_monitor import KST, evaluate_candle_signal, fetch_main
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 ARCHIVE_PATH = PROJECT_ROOT / "site" / "data" / "options_replay_archive.json"
 ARCHIVE_VERSION = 1
-RETENTION_DAYS = 31
+RETENTION_DAYS = 90
+SUMMARY_RETENTION_DAYS = 365
 REFRESH_SECONDS = 30 * 60
 
 
@@ -30,9 +31,15 @@ def build_options_replay_payload(date: str | None = None, refresh: bool = False)
     return {
         "ok": bool(sessions),
         "status": "local_archive",
-        "label": "최근 1개월 복기",
+        "label": "최근 90일 상세 복기",
         "generated_at": _iso_now(),
         "retention_days": RETENTION_DAYS,
+        "summary_retention_days": SUMMARY_RETENTION_DAYS,
+        "archive_policy": {
+            "detail_days": RETENTION_DAYS,
+            "summary_days": SUMMARY_RETENTION_DAYS,
+            "description": "최근 90일은 5분봉 상세 복기, 최근 1년은 요약 아카이브 기준으로 봅니다.",
+        },
         "date_range": date_range,
         "selected_date": selected_date,
         "sessions": sessions,
@@ -48,13 +55,13 @@ def _refresh_archive_if_needed(refresh: bool = False) -> dict[str, Any]:
     if not refresh and not is_stale and archive.get("days"):
         return archive
 
-    try:
-        candles = fetch_main_candles("1mo")
-    except Exception:
+    candles = []
+    for range_value in ("60d", "1mo", "5d"):
         try:
-            candles = fetch_main_candles("5d")
+            candles = fetch_main_candles(range_value)
+            break
         except Exception:
-            return archive
+            candles = []
 
     if candles:
         archive = _merge_candles(archive, candles)
@@ -108,6 +115,8 @@ def _merge_candles(archive: dict[str, Any], candles: list[dict[str, Any]]) -> di
             days[day] = {"candles": day_candles}
 
     archive["days"] = days
+    archive["retention_days"] = RETENTION_DAYS
+    archive["summary_retention_days"] = SUMMARY_RETENTION_DAYS
     archive["refreshed_at"] = _iso_now()
     return archive
 

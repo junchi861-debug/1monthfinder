@@ -4,8 +4,8 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>옵션 감시 | 1MonthFinder</title>
-    <meta name="theme-color" content="#17202a" />
-    <meta name="color-scheme" content="light" />
+    <meta name="theme-color" content="#0d141d" />
+    <meta name="color-scheme" content="dark" />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-title" content="옵션감시" />
@@ -18,78 +18,248 @@
     <link rel="icon" href="icons/icon.svg" type="image/svg+xml" />
     <link rel="icon" href="icons/icon-192.png" sizes="192x192" type="image/png" />
     <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
-    <link rel="stylesheet" href="styles.css?v=20260529-184750" />
+    <link rel="stylesheet" href="styles.css?v=20260530-us-signals-1" />
   </head>
   <body>
     <main class="app-shell" aria-live="polite">
       <header class="top-bar">
         <div>
-          <strong>옵션 감시</strong>
+          <strong>1MonthFinder</strong>
           <span id="topStatusText">데이터 대기</span>
         </div>
         <div class="top-actions">
-          <small class="app-updated-at" aria-label="앱 업데이트 시각">2026-05-29 18:47:50</small>
+          <small class="app-updated-at" aria-label="앱 업데이트 시각">2026-05-30</small>
           <button class="ghost-button" type="button" id="refreshMonitor">새로고침</button>
+          <button class="ghost-button" type="button" data-open-modal="settings">설정</button>
         </div>
       </header>
 
-      <section class="signal-board neutral" id="signalBoard" aria-labelledby="signalTitle">
-        <div class="signal-meta">
-          <span class="signal-pill neutral" id="signalBadge">대기</span>
-          <span id="latestCandleTime">최신봉 -</span>
-          <span id="delayText">지연 -</span>
-        </div>
+      <section class="date-toolbar" aria-label="날짜 선택">
+        <label>
+          <span>날짜</span>
+          <input id="globalDateSelector" type="date" />
+        </label>
+        <button class="soft-button" type="button" id="datePrev">이전</button>
+        <button class="soft-button" type="button" id="dateToday">오늘</button>
+        <button class="soft-button" type="button" id="dateNext">다음</button>
+        <span class="signal-pill neutral" id="dateModeBadge">실시간</span>
+        <small id="dateModeText">오늘은 실시간, 과거는 복기/요약으로 봅니다.</small>
+      </section>
 
-        <h1 id="signalTitle">신호 대기</h1>
-        <p id="signalMessage">KOSPI200 5분봉 데이터를 기다리고 있습니다.</p>
-
-        <div class="price-grid" id="priceGrid">
-          <article>
-            <span>메인</span>
-            <strong>-</strong>
-            <small>KOSPI200</small>
-          </article>
-          <article>
-            <span>보조</span>
-            <strong>-</strong>
-            <small>KODEX200</small>
-          </article>
-          <article>
-            <span>기준</span>
-            <strong>-</strong>
-            <small>61.8%</small>
-          </article>
-        </div>
-
-        <div class="chart-frame live-chart-frame">
-          <canvas id="liveChart" height="320" aria-label="KOSPI200 5분봉 실시간 차트"></canvas>
-          <div class="chart-empty" id="liveChartEmpty" hidden>
-            <strong>차트 대기</strong>
-            <span>옵션 감시 API 연결을 확인하는 중입니다.</span>
+      <section class="tab-panel active" data-tab-panel="collection">
+        <section class="signal-board neutral" id="collectionBoard">
+          <div class="signal-meta">
+            <span class="signal-pill neutral" id="collectionBadge">모음</span>
+            <span id="collectionDateText">-</span>
           </div>
-        </div>
-        <div class="chart-legend" id="liveLegend"></div>
-        <div class="trade-strip neutral" id="liveTradePlan" aria-label="실시간 가상 매매 플랜"></div>
-
-        <div class="action-row">
-          <button class="primary-button" type="button" id="enableAlerts">알림 켜기</button>
-        </div>
-        <p class="board-status" id="boardStatus">소리 대기 · 진동 ON · 화면유지 OFF</p>
+          <h1>모음</h1>
+          <p id="collectionMessage">기본 감시와 선택 관심종목을 한 화면에서 확인합니다.</p>
+          <div class="price-grid" id="collectionMetricGrid"></div>
+          <div class="collection-section">
+            <div class="section-title">
+              <h2>기본 감시</h2>
+              <span>옵션 · ETF · BTC · ETH</span>
+            </div>
+            <div class="watch-card-grid" id="coreWatchGrid"></div>
+          </div>
+          <div class="collection-section">
+            <div class="section-title">
+              <h2>선택 감시</h2>
+              <span>국장 · 미장 관심종목</span>
+            </div>
+            <div class="watch-card-grid" id="customWatchGrid"></div>
+          </div>
+        </section>
       </section>
 
-      <section class="log-panel" aria-labelledby="signalLogTitle">
-        <div class="section-title">
-          <h2 id="signalLogTitle">최근 신호</h2>
-          <span id="logCount">0개</span>
-        </div>
-        <div class="signal-log" id="signalLog">
-          <article class="empty-log">아직 기록된 신호가 없습니다.</article>
-        </div>
+      <div class="tab-panel" data-tab-panel="options" hidden>
+        <section class="signal-board neutral" id="signalBoard" aria-labelledby="signalTitle">
+          <div class="signal-meta">
+            <span class="signal-pill neutral" id="signalBadge">대기</span>
+            <span id="latestCandleTime">최신봉 -</span>
+            <span id="delayText">지연 -</span>
+          </div>
+
+          <h1 id="signalTitle">신호 대기</h1>
+          <p id="signalMessage">KOSPI200 5분봉 데이터를 기다리고 있습니다.</p>
+
+          <div class="price-grid" id="priceGrid">
+            <article>
+              <span>메인</span>
+              <strong>-</strong>
+              <small>KOSPI200</small>
+            </article>
+            <article>
+              <span>보조</span>
+              <strong>-</strong>
+              <small>KODEX200</small>
+            </article>
+            <article>
+              <span>기준</span>
+              <strong>-</strong>
+              <small>61.8%</small>
+            </article>
+          </div>
+
+          <div class="chart-frame live-chart-frame">
+            <canvas id="liveChart" height="320" aria-label="KOSPI200 5분봉 실시간 차트"></canvas>
+            <div class="chart-empty" id="liveChartEmpty" hidden>
+              <strong>차트 대기</strong>
+              <span>옵션 감시 API 연결을 확인하는 중입니다.</span>
+            </div>
+          </div>
+          <div class="chart-legend" id="liveLegend"></div>
+          <div class="trade-strip neutral" id="liveTradePlan" aria-label="실시간 가상 매매 플랜"></div>
+
+          <div class="action-row action-row-two">
+            <button class="primary-button" type="button" id="enableAlerts">알림 켜기</button>
+            <button class="soft-button" type="button" data-open-modal="replay">복기</button>
+          </div>
+          <p class="board-status" id="boardStatus">소리 대기 · 진동 ON · 화면유지 OFF</p>
+        </section>
+
+        <section class="log-panel archive-panel" id="optionArchivePanel" aria-labelledby="optionArchiveTitle" hidden>
+          <div class="section-title">
+            <h2 id="optionArchiveTitle">옵션 복기</h2>
+            <span id="optionArchiveCount">0개</span>
+          </div>
+          <div class="price-grid" id="optionArchiveSummary"></div>
+          <div class="chart-frame replay-chart-frame">
+            <canvas id="optionArchiveChart" height="320" aria-label="옵션 선택 날짜 복기 차트"></canvas>
+            <div class="chart-empty" id="optionArchiveChartEmpty" hidden>
+              <strong>복기 자료 없음</strong>
+              <span>저장된 거래일을 선택하세요.</span>
+            </div>
+          </div>
+          <div class="chart-legend" id="optionArchiveLegend"></div>
+          <div class="replay-list" id="optionArchiveSignals"></div>
+        </section>
+
+        <section class="log-panel" id="signalLogPanel" aria-labelledby="signalLogTitle">
+          <div class="section-title">
+            <h2 id="signalLogTitle">최근 신호</h2>
+            <span id="logCount">0개</span>
+          </div>
+          <div class="signal-log" id="signalLog">
+            <article class="empty-log">아직 기록된 신호가 없습니다.</article>
+          </div>
+        </section>
+      </div>
+
+      <section class="tab-panel" data-tab-panel="etf" hidden>
+        <section class="signal-board watch" id="etfBoard">
+          <div class="signal-meta">
+            <span class="signal-pill watch" id="etfBadge">관찰</span>
+            <span id="etfDateText">-</span>
+          </div>
+          <h1 id="etfTitle">KODEX200 ETF</h1>
+          <p id="etfMessage">KODEX200 분할매수 컨텍스트를 불러오는 중입니다.</p>
+          <div class="price-grid" id="etfMetricGrid"></div>
+          <div class="chart-frame asset-chart-frame">
+            <canvas id="etfChart" height="260" aria-label="ETF 일봉 흐름 차트"></canvas>
+            <div class="chart-empty" id="etfChartEmpty" hidden>
+              <strong>ETF 차트 대기</strong>
+              <span>KODEX200 일봉 데이터를 확인하는 중입니다.</span>
+            </div>
+          </div>
+          <div class="chart-legend" id="etfLegend"></div>
+          <div class="guide-list" id="etfGuideList"></div>
+        </section>
       </section>
 
-      <nav class="modal-nav" aria-label="추가 화면">
-        <button type="button" data-open-modal="replay">복기</button>
-        <button type="button" data-open-modal="settings">설정</button>
+      <section class="tab-panel" data-tab-panel="stocks" hidden>
+        <section class="signal-board neutral" id="stocksBoard">
+          <div class="signal-meta">
+            <span class="signal-pill neutral" id="stocksBadge">주식 전용</span>
+            <span id="stocksDateText">-</span>
+          </div>
+          <h1 id="stocksTitle">국장 종목</h1>
+          <p id="stocksMessage">국내 주식 후보와 지수 추종 필터를 불러오는 중입니다.</p>
+          <div class="price-grid" id="stocksMetricGrid"></div>
+          <div class="chart-frame asset-chart-frame">
+            <canvas id="stocksChart" height="260" aria-label="국장 종목 지수 필터 차트"></canvas>
+            <div class="chart-empty" id="stocksChartEmpty" hidden>
+              <strong>국장 종목 차트 대기</strong>
+              <span>지수 필터 데이터를 확인하는 중입니다.</span>
+            </div>
+          </div>
+          <div class="chart-legend" id="stocksLegend"></div>
+          <div class="watch-tools" aria-label="국장 관심종목 추가">
+            <input id="domesticWatchInput" type="text" inputmode="search" placeholder="국장 관심 종목 추가" />
+            <button class="soft-button" type="button" id="addDomesticWatch">추가</button>
+          </div>
+          <div class="search-results" id="domesticSearchResults"></div>
+          <div class="asset-list" id="domesticWatchList"></div>
+          <div class="asset-list" id="stocksCandidateList"></div>
+        </section>
+      </section>
+
+      <section class="tab-panel" data-tab-panel="usStocks" hidden>
+        <section class="signal-board neutral" id="usStocksBoard">
+          <div class="signal-meta">
+            <span class="signal-pill neutral" id="usStocksBadge">미장 준비</span>
+            <span id="usStocksDateText">-</span>
+          </div>
+          <h1>미장 종목</h1>
+          <p id="usStocksMessage">SPY/QQQ 상대강도, 20/50/200일선, 거래량 필터를 기준으로 확장할 화면입니다.</p>
+          <div class="price-grid" id="usStocksMetricGrid"></div>
+          <div class="chart-frame asset-chart-frame">
+            <canvas id="usStocksChart" height="260" aria-label="미장 종목 추세 차트"></canvas>
+            <div class="chart-empty" id="usStocksChartEmpty" hidden>
+              <strong>미장 종목 차트 대기</strong>
+              <span>SPY/QQQ와 관심종목 일봉 데이터를 확인하는 중입니다.</span>
+            </div>
+          </div>
+          <div class="chart-legend" id="usStocksLegend"></div>
+          <div class="watch-tools" aria-label="미장 관심종목 추가">
+            <input id="usWatchInput" type="text" inputmode="search" placeholder="AAPL, MSFT, NVDA" />
+            <button class="soft-button" type="button" id="addUsWatch">추가</button>
+          </div>
+          <div class="search-results" id="usSearchResults"></div>
+          <div class="asset-list" id="usWatchList"></div>
+          <div class="guide-list" id="usFilterGuideList"></div>
+        </section>
+      </section>
+
+      <section class="tab-panel" data-tab-panel="crypto" hidden>
+        <section class="signal-board neutral" id="cryptoBoard">
+          <div class="signal-meta">
+            <span class="signal-pill neutral" id="cryptoBadge">관찰</span>
+            <span id="cryptoDateText">-</span>
+          </div>
+          <h1 id="cryptoTitle">코인</h1>
+          <p id="cryptoMessage">BTC/ETH 기본 감시 데이터를 불러오는 중입니다.</p>
+          <div class="sub-tab-row" id="cryptoSubTabs" aria-label="코인 상세 탭">
+            <button type="button" data-crypto-tab="all">전체</button>
+            <button type="button" data-crypto-tab="btc">비트코인</button>
+            <button type="button" data-crypto-tab="eth">이더리움</button>
+          </div>
+          <div class="sub-tab-row crypto-frame-row" id="cryptoTimeframeTabs" aria-label="코인 차트 주기" hidden>
+            <button type="button" data-crypto-frame="240m">240분</button>
+            <button type="button" data-crypto-frame="60m">60분</button>
+            <button type="button" data-crypto-frame="1d">일봉</button>
+          </div>
+          <div class="price-grid" id="cryptoMetricGrid"></div>
+          <div class="chart-frame asset-chart-frame">
+            <canvas id="cryptoChart" height="260" aria-label="비트코인 이더리움 비교 차트"></canvas>
+            <div class="chart-empty" id="cryptoChartEmpty" hidden>
+              <strong>코인 차트 대기</strong>
+              <span>비트코인과 이더리움 일봉 데이터를 확인하는 중입니다.</span>
+            </div>
+          </div>
+          <div class="chart-legend" id="cryptoLegend"></div>
+          <div class="crypto-signal-list" id="cryptoSignalList"></div>
+          <div class="asset-list" id="cryptoAssetList"></div>
+        </section>
+      </section>
+
+      <nav class="modal-nav" aria-label="메인 탭">
+        <button type="button" data-tab-target="collection">모음</button>
+        <button type="button" data-tab-target="options">옵션</button>
+        <button type="button" data-tab-target="etf">ETF</button>
+        <button type="button" data-tab-target="stocks">국장</button>
+        <button type="button" data-tab-target="usStocks">미장</button>
+        <button type="button" data-tab-target="crypto">코인</button>
       </nav>
     </main>
 
@@ -156,6 +326,7 @@
                 </label>
                 <div class="backend-actions">
                   <button class="soft-button" type="button" id="copyAndroidInstallCommand">설치 복사</button>
+                  <button class="soft-button" type="button" id="copyAndroidUpdateCommand">업데이트 복사</button>
                   <button class="soft-button" type="button" id="copyAndroidStartCommand">실행 복사</button>
                   <button class="soft-button" type="button" id="useAndroidLocalBackend">이 폰 사용</button>
                 </div>
@@ -222,6 +393,6 @@
       </section>
     </div>
 
-    <script src="script.js?v=20260529-184750"></script>
+    <script src="script.js?v=20260530-us-signals-1"></script>
   </body>
 </html>

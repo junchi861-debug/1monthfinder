@@ -121,6 +121,14 @@ echo "$BACKEND_BIN"
 "$BACKEND_BIN" status || "$BACKEND_BIN"
 ```
 
+앱이 업데이트된 뒤 Termux 복사본도 최신화하려면 아래 명령을 실행합니다. 실행 중인 폰 백엔드를 멈추고, 저장소를 fast-forward로 당긴 뒤, 백엔드 파일 검증 후 다시 시작합니다.
+
+```sh
+export PATH="$PREFIX/bin:$HOME/.local/bin:$PATH"
+BACKEND_BIN="$(command -v 1monthfinder-backend || printf "%s" "${PREFIX:-$HOME/.local}/bin/1monthfinder-backend")"
+"$BACKEND_BIN" update && "$BACKEND_BIN" doctor && "$BACKEND_BIN"
+```
+
 현재 옵션 감시는 공개 분봉만 사용하므로 API 키가 필요 없습니다. 향후 키움 API를 붙일 때 사용할 환경 변수 초안은 `config/backend.env.example`에 있으며, 모바일 웹앱 설정의 `향후 API 크레덴셜` 칸에도 같은 템플릿을 저장해 둘 수 있습니다.
 
 같은 스마트폰 브라우저에서는 `http://127.0.0.1:8000/site/`로 접속하고, 같은 Wi-Fi의 다른 기기에서는 `http://스마트폰IP:8000/site/`로 접속합니다.
