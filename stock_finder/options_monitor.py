@@ -106,6 +106,7 @@ def _build_instrument_snapshot(instrument: MonitorInstrument, generated_at: date
             "candles": [],
             "latest": None,
             "levels": {},
+            "signals": [],
             "signal": _empty_signal(
                 "warning" if instrument.role == "main" else "neutral",
                 "데이터 조회 실패",
@@ -116,6 +117,8 @@ def _build_instrument_snapshot(instrument: MonitorInstrument, generated_at: date
     levels = _confirmed_levels(candles)
     latest = candles[-1] if candles else None
     signal = _evaluate_signal(candles, levels, generated_at)
+    session_candles = _latest_session_candles(candles)
+    signals = _signals_for_candles(session_candles) if instrument.role == "main" else []
     return {
         "ok": bool(candles),
         "role": instrument.role,
@@ -127,6 +130,7 @@ def _build_instrument_snapshot(instrument: MonitorInstrument, generated_at: date
         "latest": latest,
         "levels": levels,
         "raw_levels": _intraday_levels(candles),
+        "signals": signals,
         "signal": signal,
     }
 
@@ -387,6 +391,80 @@ def _merge_candles(base: list[dict[str, Any]], overlay: list[dict[str, Any]]) ->
     for candle in overlay:
         merged[str(candle["datetime"])] = candle
     return [merged[key] for key in sorted(merged)]
+
+
+def _latest_session_candles(candles: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if not candles:
+        return []
+    latest_date = candles[-1].get("date")
+    if not latest_date:
+        return candles
+    return [candle for candle in candles if candle.get("date") == latest_date] or candles
+
+
+def _signals_for_candles(candles: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    signals: list[dict[str, Any]] = []
+    last_rule = None
+    for index in range(7, len(candles)):
+        partial = candles[: index + 1]
+        levels = _confirmed_levels(partial)
+        signal = evaluate_candle_signal(partial, levels)
+        rule = signal.get("rule")
+        if not rule:
+            continue
+        if rule == "WAIT":
+            last_rule = None
+            continue
+        if rule == last_rule:
+            continue
+        last_rule = rule
+        latest = partial[-1]
+        signals.append(
+            {
+                "point_index": index,
+                "time": latest.get("time"),
+                "datetime": latest.get("datetime"),
+                "date": latest.get("date"),
+                "type": signal.get("type", "watch"),
+                "label": signal.get("label", ""),
+                "title": signal.get("title") or signal.get("label") or "Signal",
+                "message": signal.get("message") or "",
+                "action": rule,
+                "rule": rule,
+                "alert": signal.get("label", ""),
+                "alert_level": signal.get("alert_level"),
+                "trade_decision": signal.get("trade_decision"),
+                "filter_pass": (signal.get("metrics") or {}).get("call_entry_filter_pass"),
+                "index_value": latest.get("close"),
+                "levels": _signal_levels(levels),
+                "candle": {
+                    "time": latest.get("time"),
+                    "datetime": latest.get("datetime"),
+                    "date": latest.get("date"),
+                    "open": latest.get("open"),
+                    "high": latest.get("high"),
+                    "low": latest.get("low"),
+                    "close": latest.get("close"),
+                },
+            }
+        )
+    return signals[-24:]
+
+
+def _signal_levels(levels: dict[str, Any]) -> dict[str, float]:
+    keys = (
+        "day_high",
+        "day_low",
+        "fib_382",
+        "fib_50",
+        "fib_618",
+        "fib_100",
+        "fib_105",
+        "reset_fib_618",
+        "reset_fib_100",
+        "reset_mid_618_100",
+    )
+    return {key: float(levels[key]) for key in keys if levels.get(key) is not None}
 
 
 def _intraday_levels(candles: list[dict[str, Any]]) -> dict[str, float]:

@@ -1,5 +1,6 @@
 const MONITOR_POLL_MS = 60000;
 const SIGNAL_LOG_KEY = "1monthfinder.options.signalLog";
+const SIGNAL_LOG_LIMIT = 12;
 const SETTINGS_KEY = "1monthfinder.options.settings";
 const ANDROID_BACKEND_LOCAL_URL = "http://127.0.0.1:8000";
 const ANDROID_INSTALL_COMMAND = [
@@ -150,7 +151,7 @@ function apiBaseLabel(base = currentApiBaseUrl()) {
 function loadSignalLog() {
   try {
     const log = JSON.parse(localStorage.getItem(SIGNAL_LOG_KEY) || "[]");
-    return Array.isArray(log) ? log.slice(0, 12) : [];
+    return Array.isArray(log) ? log.slice(0, SIGNAL_LOG_LIMIT) : [];
   } catch (error) {
     return [];
   }
@@ -158,7 +159,7 @@ function loadSignalLog() {
 
 function saveSignalLog() {
   if (!state.settings.saveSignalLog) return;
-  localStorage.setItem(SIGNAL_LOG_KEY, JSON.stringify(state.signalLog.slice(0, 12)));
+  localStorage.setItem(SIGNAL_LOG_KEY, JSON.stringify(state.signalLog.slice(0, SIGNAL_LOG_LIMIT)));
 }
 
 async function init() {
@@ -306,6 +307,7 @@ async function loadMonitor(manual = false) {
     const snapshot = await response.json();
     state.monitor = snapshot;
     renderMonitor();
+    maybeBackfillSignalLog(snapshot);
     maybeRecordSignal(snapshot);
     maybeFireAlert(snapshot);
   } catch (error) {
@@ -402,18 +404,69 @@ function legendItem(item) {
 
 function maybeRecordSignal(snapshot) {
   const signal = snapshot.signal || {};
-  if (!signal.rule || signal.rule === "WAIT" || signal.alert_level === "silent") return;
+  if (!isLoggableSignal(signal)) return;
   const latest = snapshot.main?.latest || {};
   const tradePlan = buildLiveTradePlan(snapshot);
-  const key = `${signal.rule}:${latest.datetime || signal.time}:${latest.close || ""}`;
-  if (state.signalLog[0]?.key === key) return;
-  state.signalLog.unshift({
+  const entry = signalLogEntry(signal, signalLogCandle(signal, latest), tradePlan);
+  if (!entry || state.signalLog.some((item) => item.key === entry.key)) return;
+  mergeSignalLog([entry]);
+}
+
+function maybeBackfillSignalLog(snapshot) {
+  const signals = Array.isArray(snapshot?.main?.signals) ? snapshot.main.signals : [];
+  if (!signals.length) return;
+  const candles = Array.isArray(snapshot?.main?.candles) ? snapshot.main.candles : [];
+  const latest = snapshot?.main?.latest || {};
+  const existing = new Set(state.signalLog.map((item) => item.key));
+  const additions = signals
+    .map((signal) => {
+      if (!isLoggableSignal(signal)) return null;
+      const fallback = candles[clampIndex(signal.point_index, candles.length)] || latest;
+      const candle = signalLogCandle(signal, fallback);
+      const entry = signalLogEntry(signal, candle, backfilledTradePlan(snapshot, signal, candle));
+      if (!entry || existing.has(entry.key)) return null;
+      existing.add(entry.key);
+      return entry;
+    })
+    .filter(Boolean);
+  if (!additions.length) return;
+  mergeSignalLog(additions);
+}
+
+function isLoggableSignal(signal = {}) {
+  const rule = signalLogRule(signal);
+  return Boolean(rule && rule !== "WAIT" && signal.alert_level !== "silent");
+}
+
+function signalLogRule(signal = {}) {
+  return signal.rule || signal.action || "";
+}
+
+function signalLogCandle(signal = {}, fallback = {}) {
+  const candle = signal.candle || {};
+  return {
+    ...fallback,
+    ...candle,
+    time: signal.time || candle.time || fallback.time,
+    datetime: signal.datetime || candle.datetime || fallback.datetime,
+    date: signal.date || candle.date || fallback.date,
+    close: signal.index_value ?? candle.close ?? fallback.close,
+  };
+}
+
+function signalLogEntry(signal, candle, tradePlan = null) {
+  const rule = signalLogRule(signal);
+  const close = number(candle.close ?? signal.index_value);
+  const sourceAt = candle.datetime || signal.datetime || "";
+  const key = `${rule}:${sourceAt || signal.time || candle.time || ""}:${close ?? ""}`;
+  if (!rule || !key) return null;
+  return {
     key,
     type: signal.type || "watch",
     title: signal.title || signal.label || "신호",
     message: signal.message || "",
-    time: signal.time || latest.time || "-",
-    close: latest.close,
+    time: signal.time || candle.time || "-",
+    close,
     trade: tradePlan?.status ? {
       status: tradePlan.status,
       entry: tradePlan.entry,
@@ -421,11 +474,61 @@ function maybeRecordSignal(snapshot) {
       tp1: tradePlan.tp1,
       tp2: tradePlan.tp2,
     } : null,
+    sourceAt,
     createdAt: new Date().toISOString(),
-  });
-  state.signalLog = state.signalLog.slice(0, 12);
+  };
+}
+
+function backfilledTradePlan(snapshot, signal, candle) {
+  const close = number(candle.close ?? signal.index_value);
+  const levels = signal.levels || snapshot?.main?.levels || {};
+  const signalLike = {
+    ...signal,
+    levels,
+    candle,
+    index_value: close,
+  };
+  const setup = tradeSetupFromSignal(signalLike, { levels }, close);
+  if (setup) {
+    return {
+      status: setup.contracts > 1 ? "CALL ENTRY" : "CALL TEST",
+      entry: setup.entry,
+      stop: setup.stop,
+      tp1: setup.tp1,
+      tp2: setup.tp2,
+    };
+  }
+  if (signal.type === "sell" || String(signalLogRule(signal)).includes("BREAK")) {
+    const premium = optionPremiumPlan(signalLike);
+    return {
+      status: "STOP/EXIT",
+      entry: premium.entry,
+      stop: premium.stop,
+      tp1: premium.tp1,
+      tp2: premium.tp2,
+    };
+  }
+  return null;
+}
+
+function mergeSignalLog(additions) {
+  const seen = new Set();
+  state.signalLog = additions
+    .concat(state.signalLog)
+    .sort((a, b) => signalLogTimestamp(b) - signalLogTimestamp(a))
+    .filter((item) => {
+      if (!item?.key || seen.has(item.key)) return false;
+      seen.add(item.key);
+      return true;
+    })
+    .slice(0, SIGNAL_LOG_LIMIT);
   saveSignalLog();
   renderSignalLog();
+}
+
+function signalLogTimestamp(item = {}) {
+  const parsed = Date.parse(item.sourceAt || item.createdAt || "");
+  return Number.isFinite(parsed) ? parsed : 0;
 }
 
 function renderSignalLog() {
