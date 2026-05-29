@@ -548,12 +548,13 @@ function clipReplaySession(session, cursorIndex) {
   const fullSeries = Array.isArray(session?.series) ? session.series : [];
   const series = fullSeries.slice(0, cursorIndex + 1);
   const signals = (Array.isArray(session?.signals) ? session.signals : []).filter((signal) => Number(signal.point_index || 0) <= cursorIndex);
+  const visibleLevels = levelsForVisibleSeries(series);
   return {
     ...session,
     series,
     fullSeries,
     signals,
-    levels: session.levels || levelsForVisibleSeries(series),
+    levels: visibleLevels,
   };
 }
 
@@ -1678,8 +1679,6 @@ function drawReplayChart(session, tradePlan = null) {
     padding: { top: 70, right: 58, bottom: 46, left: 30 },
     compactTradeLabels: true,
     points: session.series,
-    axisPoints: session.fullSeries || session.series,
-    scalePoints: session.fullSeries || session.series,
     valueKey: "index",
     timeKey: "time",
     levels: levelEntries,
@@ -2127,7 +2126,12 @@ function scheduleChartRedraw() {
 
 function redrawCharts() {
   drawLiveChart();
-  if (state.activeModal === "replay") drawReplayChart(activeReplaySession());
+  if (state.activeModal === "replay") {
+    const active = activeReplaySession();
+    const cursorIndex = replayCursorIndex(active);
+    const visibleSession = active ? clipReplaySession(active, cursorIndex) : null;
+    drawReplayChart(visibleSession, visibleSession ? buildReplayTradePlan(visibleSession) : null);
+  }
   if (state.activeModal === "design") drawDesignChart();
 }
 
