@@ -107,6 +107,9 @@ const CHART_EXTRA_SERIES = [
   { key: "tenkan", label: "전환", color: "#b07a2a", width: 1.5, dash: [] },
   { key: "kijun", label: "기준", color: "#657186", width: 1.8, dash: [] },
 ];
+// Codex experimental, not an expert rule. Remove usages of this tag to isolate
+// the profit-extension ideas if later expert review rejects them.
+const CODEX_EXPERIMENTAL_PROFIT_EXTENSION_TAG = "codex_experimental_profit_extension";
 
 const state = {
   weeklyOptions: null,
@@ -529,6 +532,26 @@ function isLateSessionSignal(signal = {}) {
   return rule.includes("LATE_SESSION") || rule.includes("FINAL_1530");
 }
 
+function lateSessionTradePlan(signal = {}, premium = optionPremiumPlan(signal)) {
+  const rule = String(signalLogRule(signal));
+  const metrics = signal.metrics || {};
+  const isFinal = rule.includes("FINAL_1530");
+  const isAggressive = rule.includes("ACCELERATION_HOLD") || signal.trade_decision === "hold";
+  const isExitPrep = rule.includes("EXIT_PREP");
+  const trailingStop = number(metrics.option_trailing_stop_after_3_3);
+  return {
+    status: isFinal ? "최종청산" : isAggressive ? "공격홀딩" : isExitPrep ? "장후반청산" : "시간관리",
+    entry: premium.entry,
+    stop: trailingStop ?? premium.stop,
+    tp1: premium.tp1,
+    tp2: premium.tp2,
+    stopText: isAggressive && trailingStop != null ? `3.3 후 ${formatNum(trailingStop, 2)} 방어` : "기준/전환 확인",
+    tp2Text: isAggressive ? "15:30까지" : "15:30 준비",
+    contracts: 1,
+    experimentalTag: metrics.codex_experimental_tag || CODEX_EXPERIMENTAL_PROFIT_EXTENSION_TAG,
+  };
+}
+
 function signalLogCandle(signal = {}, fallback = {}) {
   const candle = signal.candle || {};
   return {
@@ -597,16 +620,7 @@ function backfilledTradePlan(snapshot, signal, candle) {
   }
   if (isLateSessionSignal(signal)) {
     const premium = optionPremiumPlan(signal);
-    return {
-      status: String(signalLogRule(signal)).includes("FINAL_1530") ? "최종청산" : "시간관리",
-      entry: premium.entry,
-      stop: premium.stop,
-      tp1: premium.tp1,
-      tp2: premium.tp2,
-      stopText: "기준/전환 확인",
-      tp2Text: "15:30 준비",
-      contracts: 1,
-    };
+    return lateSessionTradePlan(signal, premium);
   }
   if (signal.trade_decision === "take_profit" || String(signalLogRule(signal)).includes("RUNNER_EXIT")) {
     const premium = optionPremiumPlan(signal);
@@ -980,10 +994,12 @@ function buildLiveTradePlan(snapshot) {
 
   if (isLateSessionSignal(signal)) {
     const premium = optionPremiumPlan(signal);
+    const plan = lateSessionTradePlan(signal, premium);
+    const markerKind = signal.trade_decision === "hold" ? "watch" : "take_profit";
     const lateSetup = {
       ...premium,
       mode: "signal",
-      currentStop: premium.stop,
+      currentStop: plan.stop,
       tp1Contracts: 1,
       indexEntry: close,
       indexStop: close,
@@ -992,18 +1008,18 @@ function buildLiveTradePlan(snapshot) {
       risk: 1,
     };
     return {
-      tone: "warning",
-      status: String(signal.rule || "").includes("FINAL_1530") ? "최종청산" : "시간관리",
-      entry: premium.entry,
-      stop: premium.stop,
-      tp1: premium.tp1,
-      tp2: premium.tp2,
+      tone: signal.trade_decision === "hold" ? "buy" : "warning",
+      status: plan.status,
+      entry: plan.entry,
+      stop: plan.stop,
+      tp1: plan.tp1,
+      tp2: plan.tp2,
       stopLabel: "기준",
-      stopText: "기준/전환 확인",
+      stopText: plan.stopText,
       tp2Label: "시간",
-      tp2Text: "15:30 준비",
+      tp2Text: plan.tp2Text,
       contracts: 1,
-      markers: [tradeEvent("take_profit", 1, candles[pointIndex] || latest, pointIndex, lateSetup, close)],
+      markers: [tradeEvent(markerKind, 1, candles[pointIndex] || latest, pointIndex, lateSetup, close)],
     };
   }
 

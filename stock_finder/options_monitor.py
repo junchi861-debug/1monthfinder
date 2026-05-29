@@ -20,6 +20,7 @@ SNAPSHOT_CACHE_SECONDS = 45
 NAVER_RECENT_PAGES = 14
 NAVER_FULL_SESSION_PAGES = 80
 _SNAPSHOT_CACHE: dict[str, Any] = {"created_at": 0.0, "payload": None}
+CODEX_EXPERIMENTAL_PROFIT_EXTENSION_TAG = "codex_experimental_profit_extension"
 
 
 @dataclass(frozen=True)
@@ -1015,13 +1016,18 @@ def _late_session_management_signal(
     holds_tenkan = close >= tenkan
     reclaimed_kijun = low <= kijun + tolerance and close >= kijun
     final_window = latest_clock >= time(15, 30)
+    acceleration = _late_session_acceleration_context(session, close, tenkan)
 
     metrics = {
+        "codex_experimental_tag": CODEX_EXPERIMENTAL_PROFIT_EXTENSION_TAG,
+        "codex_experimental_is_expert_rule": False,
+        "codex_experimental_isolation_hint": "Remove _late_session_management_signal experimental branches and JSON runner.codex_experimental_profit_extension to isolate.",
         "late_session_active": True,
         "late_session_start": "14:30",
         "final_exit_window": "15:30~15:32",
         "loss_prepare_threshold_pct": -10,
         "profit_hold_threshold_krw": 200000,
+        "profit_hold_mode": "manual_pnl_tier_check",
         "kijun_stop": kijun,
         "tenkan_entry": tenkan,
         "gma30_reference": gma_30,
@@ -1033,6 +1039,11 @@ def _late_session_management_signal(
         "option_entry_premium": 2.3,
         "option_tp1_premium": 2.6,
         "option_runner_exit_contracts": 1,
+        "option_aggressive_hold_trigger_premium": 3.3,
+        "option_trailing_stop_after_3_3": 2.9,
+        "option_trailing_stop_after_3_6": 3.2,
+        "manual_option_premium_trailing": True,
+        **acceleration,
     }
 
     if final_window:
@@ -1064,6 +1075,40 @@ def _late_session_management_signal(
             "rule": "LATE_SESSION_KIJUN_EXIT_PREP",
             "time": latest["time"],
             "trade_decision": "take_profit",
+            "metrics": _signal_metrics(close, lower_wick_ratio, age_minutes, trend, call_filter_pass, metrics),
+        }
+
+    if not holds_tenkan:
+        return {
+            "type": "watch",
+            "label": "전환이탈",
+            "title": "14:30 이후 전환선 이탈",
+            "message": (
+                f"14:30 이후 기준선은 지키지만 전환선 {tenkan:.2f} 아래입니다. "
+                "수익 잔량은 더 끌기보다 3.3 고점 이후 2.9 방어 또는 MTS 청산 확인을 우선합니다."
+            ),
+            "alert_level": "normal",
+            "rule": "LATE_SESSION_TENKAN_EXIT_PREP",
+            "time": latest["time"],
+            "trade_decision": "take_profit",
+            "metrics": _signal_metrics(close, lower_wick_ratio, age_minutes, trend, call_filter_pass, metrics),
+        }
+
+    if latest_clock >= time(15, 0) and acceleration["late_acceleration_active"]:
+        # Codex experimental, not an expert rule. Remove this branch with the matching
+        # JSON tag if later review says the aggressive runner idea is not useful.
+        return {
+            "type": "watch",
+            "label": "공격홀딩",
+            "title": "15:00 이후 잔량 공격 홀딩",
+            "message": (
+                "15:00 이후 전환선/기준선 위에서 거래량 또는 봉폭 가속이 감지됩니다. "
+                "확보 수익이 20만원 이상이면 15:30 전까지 잔량을 더 끌되, 옵션이 3.3 이상 찍힌 뒤에는 2.9~3.2 방어 스탑을 MTS에서 확인하세요."
+            ),
+            "alert_level": "normal",
+            "rule": "LATE_SESSION_ACCELERATION_HOLD",
+            "time": latest["time"],
+            "trade_decision": "hold",
             "metrics": _signal_metrics(close, lower_wick_ratio, age_minutes, trend, call_filter_pass, metrics),
         }
 
@@ -1215,6 +1260,40 @@ def _trend_extension_context(candles: list[dict[str, Any]], close: float) -> dic
         "recent_trend_high": round(recent_trend_high, 4) if recent_trend_high is not None else None,
         "extension_target": round(extension_target, 4) if extension_target is not None else None,
         "trend_high_breakout": bool(recent_trend_high is not None and close > recent_trend_high),
+    }
+
+
+def _late_session_acceleration_context(session: list[dict[str, Any]], close: float, tenkan: float) -> dict[str, Any]:
+    recent = session[-6:]
+    previous = session[-18:-6]
+
+    def average_volume(candles: list[dict[str, Any]]) -> float | None:
+        values = [float(candle.get("volume") or 0) for candle in candles if float(candle.get("volume") or 0) > 0]
+        return sum(values) / len(values) if values else None
+
+    def average_range(candles: list[dict[str, Any]]) -> float | None:
+        values = [max(float(candle["high"]) - float(candle["low"]), 0) for candle in candles]
+        return sum(values) / len(values) if values else None
+
+    recent_volume = average_volume(recent)
+    previous_volume = average_volume(previous)
+    recent_range = average_range(recent)
+    previous_range = average_range(previous)
+    volume_ratio = recent_volume / previous_volume if recent_volume is not None and previous_volume else None
+    range_ratio = recent_range / previous_range if recent_range is not None and previous_range else None
+    previous_high = max((float(candle["high"]) for candle in previous), default=None)
+    high_breakout = previous_high is not None and close >= previous_high
+    acceleration_active = close >= tenkan and (
+        high_breakout
+        or (volume_ratio is not None and volume_ratio >= 1.35)
+        or (range_ratio is not None and range_ratio >= 1.25)
+    )
+    return {
+        "late_acceleration_active": acceleration_active,
+        "late_volume_ratio": round(volume_ratio, 3) if volume_ratio is not None else None,
+        "late_range_ratio": round(range_ratio, 3) if range_ratio is not None else None,
+        "late_high_breakout": high_breakout,
+        "late_previous_high": round(previous_high, 4) if previous_high is not None else None,
     }
 
 

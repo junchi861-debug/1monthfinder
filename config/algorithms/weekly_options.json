@@ -204,6 +204,29 @@
           "exit_prepare_condition": "-10% 이상 큰 손실이 아닌 경우에는 장후반 정리 준비를 우선하고, 기준선 재이탈 또는 전환선 회복 실패 시 청산한다.",
           "reason": "마지막 33분에는 미결 청산으로 변동이 커질 수 있으나, 위클리 옵션은 반대로도 빠르게 녹을 수 있어 15:30 전후 최종 청산 준비를 기본값으로 둔다."
         },
+        "codex_experimental_profit_extension": {
+          "status": "experimental_not_expert_rule",
+          "isolation_tag": "codex_experimental_profit_extension",
+          "can_remove_without_expert_rules": true,
+          "description": "전문가 원문이 아니라 Codex 제안 기반의 수익 확장/반납 방지 실험 규칙이다. 맞지 않으면 이 블록과 같은 isolation_tag가 붙은 코드 분기를 제거하면 된다.",
+          "runner_modes": {
+            "normal": "전환선/기준선/30이평 위에서는 잔량 홀딩을 허용하되 14:30 이후에는 정리 준비를 병행한다.",
+            "aggressive": "15:00 이후 전환선/기준선 위에서 거래량 또는 봉폭 가속이 있으면 확보 수익 20만원 이상일 때 15:30 전까지 잔량 공격 홀딩을 허용한다."
+          },
+          "premium_trailing": {
+            "activation_premium": 3.3,
+            "defensive_stop_after_activation": 2.9,
+            "raised_stop_after_3_6": 3.2,
+            "manual_check_required": true,
+            "reason": "옵션 프리미엄 고점이 나온 뒤 전환선/기준선만 보고 있으면 수익 반납이 커질 수 있어, MTS 프리미엄 고점 대비 방어선을 별도로 둔다."
+          },
+          "late_33m_acceleration_filter": {
+            "start_time": "15:00",
+            "volume_ratio_min": 1.35,
+            "range_ratio_min": 1.25,
+            "allow_if_high_breakout": true
+          }
+        },
         "description": "전환선을 다시 깨고 기준선까지 내려오지 않으면 남은 1계약은 계속 홀딩한다. 전환선과 기준선은 코스피200 선물 5분봉 기준이다."
       },
       "description": "12시 10분 전후처럼 기준선 지지 후 전환선 재터치가 나오면 현재가 대비 약 70p 위 위클리 콜 중 프리미엄 2.0~3.0, 기준 2.3 근처 종목을 2계약으로 트라이한다. 1분봉은 예비 감지, 5분봉은 확정 진입으로 구분한다. D-1은 큰 변동성이 없으면 옵션이 급격히 오르지 않으므로 2.6(+0.30)에서 1계약을 청산해 안전마진을 타이트하게 확보한다. 잔량은 최근 트렌드고가 돌파 시 오늘 저가~트렌드고가 폭의 1.6배 파장까지 선물 전환선/기준선 트레일링 스탑으로 운용하되, 30분 안 기준선 3회차 터치/재상승이 나오면 본청권 청산 확인을 우선한다."
@@ -1176,6 +1199,11 @@
       "key": "LATE_SESSION_RUNNER_MANAGEMENT",
       "label": "장후반 잔량 시간관리",
       "description": "14:30 이후에는 신규 욕심보다 잔량 정리 준비를 우선한다. 기준선/전환선 지지가 살아 있고 확보 수익이 20만원 이상이면 15:30 근처까지 플레이하되, 15:30~15:32는 미결 청산 변동 구간으로 최종 청산 준비를 기본값으로 둔다."
+    },
+    {
+      "key": "LATE_SESSION_ACCELERATION_HOLD",
+      "label": "장후반 공격홀딩",
+      "description": "Codex experimental profit extension. 전문가 원문이 아닌 실험 규칙이며, 15:00 이후 전환선/기준선 위에서 거래량 또는 봉폭 가속이 감지될 때 확보 수익 20만원 이상 잔량만 15:30 전까지 더 끌고 간다."
     },
     {
       "key": "SELECT_OPTION",
