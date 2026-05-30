@@ -1,4 +1,5 @@
 const MONITOR_POLL_MS = 60000;
+const ASSET_ARCHIVE_POLL_MS = 5 * 60000;
 const SIGNAL_LOG_KEY = "1monthfinder.options.signalLog";
 const SETTINGS_KEY = "1monthfinder.options.settings";
 const WATCHLIST_KEY = "1monthfinder.watchlists";
@@ -113,6 +114,42 @@ const CHART_EXTRA_SERIES = [
 // the profit-extension ideas if later expert review rejects them.
 const CODEX_EXPERIMENTAL_PROFIT_EXTENSION_TAG = "codex_experimental_profit_extension";
 const APP_TABS = ["collection", "options", "etf", "stocks", "usStocks", "crypto"];
+const CRYPTO_DETAIL_TABS = ["btc", "eth", "xrp", "xlm", "id"];
+const CRYPTO_ASSET_META = {
+  btc: { name: "비트코인", assetType: "major", typeLabel: "메이저", capPct: 70 },
+  eth: { name: "이더리움", assetType: "major", typeLabel: "메이저", capPct: 70 },
+  xrp: { name: "엑스알피", assetType: "alt", typeLabel: "알트", capPct: 30 },
+  xlm: { name: "스텔라루멘", assetType: "alt", typeLabel: "알트", capPct: 30 },
+  id: { name: "스페이스아이디", assetType: "exception", typeLabel: "예외", capPct: 2.5, poolCapPct: 5 },
+  doge: { name: "도지코인", assetType: "exception", typeLabel: "예외", capPct: 2.5, poolCapPct: 5 },
+  trx: { name: "트론", assetType: "exception", typeLabel: "예외", capPct: 2.5, poolCapPct: 5 },
+  sol: { name: "솔라나", assetType: "exception", typeLabel: "예외", capPct: 2.5, poolCapPct: 5 },
+  usdt: { name: "테더", assetType: "cash", typeLabel: "현금성", capPct: null },
+};
+const CRYPTO_COMPARE_COLORS = [
+  ["--chart-line", "#e8eef5"],
+  ["--blue", "#82a7e6"],
+  ["--amber", "#d5a04e"],
+  ["--teal", "#4eb7b1"],
+  ["--green", "#5fc79b"],
+  ["--red", "#df7a72"],
+];
+const CRYPTO_SLOT_PCT = {
+  none: 0,
+  scout: 2,
+  starter: 30,
+  base: 65,
+  full: 100,
+};
+const CRYPTO_PYRAMID_ADD_SLOT_PCT = CRYPTO_SLOT_PCT.full - CRYPTO_SLOT_PCT.base;
+const CRYPTO_PYRAMID_MARKET_SLOT_PCT = CRYPTO_PYRAMID_ADD_SLOT_PCT / 2;
+const CRYPTO_PYRAMID_VERTICAL_RISE_PCT = 10;
+const CRYPTO_PYRAMID_PULLBACK_PCT = 77;
+const CRYPTO_TENKAN_ALERT_BUFFER_PCT = 10;
+const CRYPTO_EXCEPTION_TENKAN_ALERT_BUFFER_PCT = 15;
+const CRYPTO_TENKAN_NEAR_PCT = 3;
+const CRYPTO_THIRTY_MINUTE_RISK_BARS = 240;
+const CRYPTO_INTRADAY_BOX_STOP_BARS = CRYPTO_THIRTY_MINUTE_RISK_BARS;
 const DETAIL_ARCHIVE_DAYS = 90;
 const SUMMARY_ARCHIVE_DAYS = 365;
 const SEARCH_RESULT_LIMIT = 8;
@@ -265,6 +302,8 @@ const state = {
   alertsEnabled: false,
   pendingAlertState: null,
   lastAlertKey: null,
+  lastCryptoAlertKey: null,
+  lastAssetArchiveRefreshAt: 0,
   audioContext: null,
   serviceWorkerRegistration: null,
   signalLog: loadSignalLog(),
@@ -436,6 +475,7 @@ async function init() {
 
   state.weeklyOptions = weeklyOptions || fallbackWeeklyOptions;
   state.assetArchive = assetArchive || fallbackAssetArchive();
+  state.lastAssetArchiveRefreshAt = assetArchive ? Date.now() : 0;
   state.replay = normalizeReplayPayload(replayPayload) || publicReplay || state.weeklyOptions.signal_replay || {};
   if (!state.activeReplayDate) state.activeReplayDate = activeReplaySession()?.date || state.replay.active_session_id || null;
   const backendSignalLog = normalizeBackendSignalLogPayload(signalLogPayload);
@@ -478,14 +518,14 @@ async function setActiveTab(tab, options = {}) {
 
 function setCryptoTab(tab) {
   const previous = state.cryptoTab;
-  state.cryptoTab = ["all", "btc", "eth"].includes(tab) ? tab : "all";
+  state.cryptoTab = ["all", ...CRYPTO_DETAIL_TABS].includes(tab) ? tab : "all";
   if (previous === "all" && state.cryptoTab !== "all") state.cryptoFrame = "240m";
   renderCryptoPanel();
   scheduleChartRedraw();
 }
 
 function setCryptoFrame(frame) {
-  state.cryptoFrame = ["240m", "60m", "1d"].includes(frame) ? frame : "240m";
+  state.cryptoFrame = ["30m", "60m", "240m", "1d"].includes(frame) ? frame : "240m";
   renderCryptoPanel();
   scheduleChartRedraw();
 }
@@ -518,7 +558,10 @@ async function setSelectedDate(date) {
         };
       }
     }
-    if (assetPayload) state.assetArchive = assetPayload;
+    if (assetPayload) {
+      state.assetArchive = assetPayload;
+      state.lastAssetArchiveRefreshAt = Date.now();
+    }
     renderStaticPanels();
     renderMonitor();
   } finally {
@@ -538,7 +581,10 @@ function moveSelectedDate(deltaDays) {
 
 async function refreshAssetArchive(date = state.selectedDate) {
   const payload = await loadOptionalJson(`/api/asset-archive?date=${encodeURIComponent(date || "")}`);
-  if (payload) state.assetArchive = payload;
+  if (payload) {
+    state.assetArchive = payload;
+    state.lastAssetArchiveRefreshAt = Date.now();
+  }
 }
 
 function setDateLoading(loading, target = state.selectedDate) {
@@ -730,6 +776,8 @@ async function loadMonitor(manual = false) {
     maybeBackfillSignalLog(snapshot);
     maybeRecordSignal(snapshot);
     maybeFireAlert(snapshot);
+    await maybeRefreshLiveAssetArchive();
+    maybeFireCryptoAlerts();
   } catch (error) {
     state.monitor = {
       ok: false,
@@ -832,7 +880,7 @@ function renderTopStatus() {
 
   if (state.activeTab === "crypto") {
     const summary = archive.crypto?.summary || {};
-    const label = summary.label || "코인 BTC/ETH";
+    const label = summary.label || "코인 감시";
     setTopStatus(`${prefix} · ${label.startsWith("코인") ? label : `코인 ${label}`}`);
     return;
   }
@@ -1588,9 +1636,12 @@ function renderUsStocksPanel() {
 function renderCryptoPanel() {
   const crypto = state.assetArchive?.crypto || {};
   const assets = crypto.assets || [];
+  const exceptionAssets = crypto.exception_assets || [];
+  const cashAssets = crypto.cash_assets || [];
+  const detailAssets = [...assets, ...exceptionAssets];
   syncCryptoControls();
   if (state.cryptoTab !== "all") {
-    renderCryptoDetailPanel(cryptoSelectedAsset(assets), assets);
+    renderCryptoDetailPanel(cryptoSelectedAsset(detailAssets), detailAssets);
     return;
   }
   const summary = crypto.summary || {};
@@ -1601,19 +1652,30 @@ function renderCryptoPanel() {
   const badge = document.querySelector("#cryptoBadge");
   if (badge) badge.className = `signal-pill ${signal}`;
   setText("#cryptoDateText", `${state.selectedDate} · ${isLiveDate() ? "실시간" : "요약"}`);
-  setText("#cryptoMessage", summary.message || "BTC/ETH 기본 감시를 표시합니다.");
+  setText("#cryptoMessage", summary.message || "메이저 코인 기본 감시를 표시합니다.");
   setText("#cryptoTitle", "코인");
-  document.querySelector("#cryptoMetricGrid").innerHTML = cryptoMetricItems(assets).map(metricCard).join("");
-  document.querySelector("#cryptoSignalList").innerHTML = assets.length
-    ? assets.map((asset) => cryptoSignalCard(asset, assets)).join("")
-    : `<article class="crypto-signal-card watch"><header><h2>신호 대기</h2><span class="signal-pill watch">관찰</span></header><p>BTC/ETH 데이터를 가져온 뒤 진입·손절·익절 기준을 표시합니다.</p></article>`;
-  document.querySelector("#cryptoAssetList").innerHTML = assets.length
-    ? assets.map(cryptoItem).join("")
-    : `<article class="asset-item watch"><div class="asset-main"><strong>자료 없음</strong><small>BTC/ETH 데이터를 가져오지 못했습니다.</small></div></article>`;
+  document.querySelector("#cryptoMetricGrid").innerHTML = cryptoMetricItems(assets, exceptionAssets, cashAssets).map(metricCard).join("");
+  const cards = [
+    cryptoPolicyCard(crypto),
+    cryptoHotMoneyCard([...assets, ...exceptionAssets]),
+    ...assets.map((asset) => cryptoSignalCard(asset, assets)),
+    ...exceptionAssets.map((asset) => cryptoSignalCard(asset, assets, { exceptionMode: true })),
+  ].filter(Boolean);
+  document.querySelector("#cryptoSignalList").innerHTML = cards.length
+    ? cards.join("")
+    : `<article class="crypto-signal-card watch"><header><h2>신호 대기</h2><span class="signal-pill watch">관찰</span></header><p>메이저 코인 데이터를 가져온 뒤 운용 비중과 손절 기준을 표시합니다.</p></article>`;
+  const assetRows = [
+    ...assets.map(cryptoItem),
+    ...exceptionAssets.map((asset) => cryptoItem(asset, { exceptionMode: true })),
+    ...cashAssets.map(cryptoCashItem),
+  ].filter(Boolean);
+  document.querySelector("#cryptoAssetList").innerHTML = assetRows.length
+    ? assetRows.join("")
+    : `<article class="asset-item watch"><div class="asset-main"><strong>자료 없음</strong><small>메이저 코인 데이터를 가져오지 못했습니다.</small></div></article>`;
 }
 
 function renderCryptoDetailPanel(asset, assets = []) {
-  const name = state.cryptoTab === "eth" ? "이더리움" : "비트코인";
+  const name = asset ? cryptoAssetName(asset) : CRYPTO_ASSET_META[state.cryptoTab]?.name || "코인";
   const rows = cryptoRowsForFrame(asset, state.cryptoFrame);
   const signal = cryptoSignalPlan(asset, assets, { rows, frame: state.cryptoFrame });
   const boardSignal = signalClass(signal.className || "neutral");
@@ -1627,7 +1689,7 @@ function renderCryptoDetailPanel(asset, assets = []) {
   setText(
     "#cryptoMessage",
     asset?.ok
-      ? `${cryptoFrameLabel(state.cryptoFrame)} 기준으로 20선·60선·돌파선·손절/익절선을 함께 봅니다. 기본값은 과열 잡음을 줄이기 위해 240분입니다.`
+      ? `일봉 구름대와 후행스팬으로 큰 비중을 잡고, 4시간봉 30일 박스 돌파는 수급 신호로 봅니다.`
       : `${name} 데이터를 가져오지 못했습니다. 연결 상태를 확인한 뒤 다시 새로고침해 주세요.`,
   );
   document.querySelector("#cryptoMetricGrid").innerHTML = cryptoDetailMetricItems(asset, assets, signal, rows).map(metricCard).join("");
@@ -1651,48 +1713,739 @@ function syncCryptoControls() {
 }
 
 function cryptoSelectedAsset(assets = []) {
-  const target = state.cryptoTab === "eth" ? "ETH" : "BTC";
-  return assets.find((asset) => String(asset.label || "").toUpperCase() === target) || null;
+  return assets.find((asset) => cryptoAssetKey(asset) === state.cryptoTab) || null;
 }
 
-function cryptoMetricItems(assets = []) {
-  const btc = assets.find((asset) => String(asset.label || "").toUpperCase() === "BTC") || {};
-  const eth = assets.find((asset) => String(asset.label || "").toUpperCase() === "ETH") || {};
-  const btcScore = number(btc.summary?.score);
-  const ethScore = number(eth.summary?.score);
-  const attackScore = Math.max(btcScore ?? 0, ethScore ?? 0);
-  const leader = ethScore != null && ethScore > (btcScore ?? -1) ? "ETH 우위" : "BTC 기준";
-  const btcAtr = atrPercent(btc.history, state.selectedDate, 14);
-  const ethAtr = atrPercent(eth.history, state.selectedDate, 14);
-  const stopText = btcAtr != null || ethAtr != null
-    ? `${formatNum(Math.max((btcAtr || 0) * 2, (ethAtr || 0) * 2), 1)}%`
-    : "-";
+function cryptoAssetKey(asset = {}) {
+  const profileKey = String(asset?.profile?.key || "").toLowerCase();
+  if (profileKey) return profileKey;
+  const labelKey = String(asset?.label || "").trim().toLowerCase();
+  if (CRYPTO_ASSET_META[labelKey]) return labelKey;
+  const symbolKey = String(asset?.symbol || "").split("-")[0].trim().toLowerCase();
+  return CRYPTO_ASSET_META[symbolKey] ? symbolKey : symbolKey || labelKey || "coin";
+}
+
+function cryptoAssetName(asset = {}) {
+  const key = cryptoAssetKey(asset);
+  return asset?.profile?.name || CRYPTO_ASSET_META[key]?.name || asset?.label || asset?.symbol || "코인";
+}
+
+function cryptoAssetProfile(asset = {}) {
+  const key = cryptoAssetKey(asset);
+  const backend = asset?.profile || {};
+  const fallback = CRYPTO_ASSET_META[key] || { name: cryptoAssetName(asset), assetType: "alt", typeLabel: "알트", capPct: 30 };
+  const backendCapPct = number(backend.portfolio_cap_pct);
+  const capPct = backendCapPct != null
+    ? backendCapPct
+    : fallback.capPct != null ? fallback.capPct : fallback.assetType === "cash" ? null : 30;
+  return {
+    key,
+    name: backend.name || fallback.name || cryptoAssetName(asset),
+    assetType: backend.asset_type || fallback.assetType || "alt",
+    typeLabel: backend.type_label || fallback.typeLabel || "알트",
+    capPct,
+    poolCapPct: number(backend.exception_pool_cap_pct) ?? fallback.poolCapPct ?? null,
+    approvedScope: backend.approved_scope ?? fallback.assetType !== "exception",
+  };
+}
+
+function cryptoVisibleRows(rows = [], selectedDate = state.selectedDate) {
+  return (Array.isArray(rows) ? rows : [])
+    .filter((row) => row?.date && (!selectedDate || row.date <= selectedDate) && number(row.close) != null);
+}
+
+function ichimokuMid(rows = [], index = -1, period = 9) {
+  const end = Math.min(index, rows.length - 1);
+  const start = end - period + 1;
+  if (start < 0) return null;
+  const sample = rows.slice(start, end + 1)
+    .map((row) => ({ high: number(row.high), low: number(row.low) }))
+    .filter((row) => row.high != null && row.low != null);
+  if (sample.length < period) return null;
+  return (Math.max(...sample.map((row) => row.high)) + Math.min(...sample.map((row) => row.low))) / 2;
+}
+
+function ichimokuCloudAt(rows = [], index = -1) {
+  const sourceIndex = index - 26;
+  if (sourceIndex < 0) return { upper: null, lower: null, spanA: null, spanB: null };
+  const tenkan = ichimokuMid(rows, sourceIndex, 9);
+  const kijun = ichimokuMid(rows, sourceIndex, 26);
+  const spanA = tenkan != null && kijun != null ? (tenkan + kijun) / 2 : null;
+  const spanB = ichimokuMid(rows, sourceIndex, 52);
+  const values = [spanA, spanB].filter((value) => value != null);
+  return {
+    spanA,
+    spanB,
+    upper: values.length ? Math.max(...values) : null,
+    lower: values.length ? Math.min(...values) : null,
+  };
+}
+
+function cryptoCloudPosition(close, cloud = {}) {
+  if (close == null || cloud.upper == null || cloud.lower == null) return "unknown";
+  if (close > cloud.upper) return "above";
+  if (close < cloud.lower) return "below";
+  return "inside";
+}
+
+function cryptoChikouState(rows = [], index = -1, close = null) {
+  const lagIndex = index - 26;
+  if (lagIndex < 0 || close == null) return "unknown";
+  const lagCloud = ichimokuCloudAt(rows, lagIndex);
+  if (lagCloud.upper == null || lagCloud.lower == null) return "unknown";
+  if (close > lagCloud.upper) return "bullish";
+  if (close < lagCloud.lower) return "bearish";
+  return "inside";
+}
+
+function rollingExtremeAt(rows = [], index = -1, size = 20, key = "high", mode = "max", excludeCurrent = false) {
+  const end = Math.min((excludeCurrent ? index - 1 : index), rows.length - 1);
+  if (end < 0) return null;
+  const start = Math.max(0, end - size + 1);
+  const values = rows.slice(start, end + 1)
+    .map((row) => number(row[key]))
+    .filter((value) => value != null);
+  if (!values.length) return null;
+  return mode === "min" ? Math.min(...values) : Math.max(...values);
+}
+
+function cryptoDailyAnalysis(rows = [], selectedDate = state.selectedDate) {
+  const visible = cryptoVisibleRows(rows, selectedDate);
+  const index = visible.length - 1;
+  const latest = visible[index] || {};
+  const close = number(latest.close);
+  const cloud = ichimokuCloudAt(visible, index);
+  const position = cryptoCloudPosition(close, cloud);
+  const chikou = cryptoChikouState(visible, index, close);
+  const low60 = rollingExtremeAt(visible, index, 60, "low", "min");
+  const reboundPct = close != null && low60 ? close / low60 - 1 : null;
+  const bottomBounce = reboundPct != null && reboundPct >= 0.07;
+  const nearLower = close != null && cloud.lower != null && close >= cloud.lower && (close - cloud.lower) / close <= 0.035;
+
+  if (position === "above" && chikou === "bullish") {
+    return { label: "상단+후행", subText: "불타기 확인", position, chikou, bottomBounce, nearLower, reboundPct, cloud };
+  }
+  if (position === "above") {
+    return { label: "구름 상단", subText: "기본물량 전환", position, chikou, bottomBounce, nearLower, reboundPct, cloud };
+  }
+  if (position === "inside") {
+    return { label: "구름 내부", subText: "돌파 확인", position, chikou, bottomBounce, nearLower, reboundPct, cloud };
+  }
+  if (position === "below" && chikou === "bearish") {
+    return { label: "하단+후행 이탈", subText: "기초 이하 관리", position, chikou, bottomBounce, nearLower, reboundPct, cloud };
+  }
+  if (position === "below") {
+    return {
+      label: "구름 아래",
+      subText: bottomBounce ? `바닥 +${formatNum(reboundPct * 100, 1)}%` : "보초 우선",
+      position,
+      chikou,
+      bottomBounce,
+      nearLower,
+      reboundPct,
+      cloud,
+    };
+  }
+  return { label: "계산 대기", subText: "일봉 부족", position, chikou, bottomBounce, nearLower, reboundPct, cloud };
+}
+
+function cryptoDailyFibBoxAnalysis(rows = [], selectedDate = state.selectedDate) {
+  const visible = cryptoVisibleRows(rows, selectedDate).slice(-365);
+  const index = visible.length - 1;
+  if (index < 30) {
+    return { valid: false, label: "피보 대기", subText: "일봉 자료 부족", positionPct: null, levels: {} };
+  }
+
+  const highIndex = visible.reduce((best, row, rowIndex) => {
+    const currentHigh = number(row.high);
+    const bestHigh = number(visible[best]?.high);
+    if (currentHigh == null) return best;
+    if (bestHigh == null || currentHigh > bestHigh) return rowIndex;
+    return best;
+  }, 0);
+  const afterHigh = visible.slice(highIndex);
+  const lowOffset = afterHigh.reduce((best, row, rowIndex) => {
+    const currentLow = number(row.low);
+    const bestLow = number(afterHigh[best]?.low);
+    if (currentLow == null) return best;
+    if (bestLow == null || currentLow < bestLow) return rowIndex;
+    return best;
+  }, 0);
+  const lowIndex = highIndex + lowOffset;
+  if (lowIndex <= highIndex) {
+    return { valid: false, label: "피보 대기", subText: "하락 추세 박스 대기", positionPct: null, levels: {} };
+  }
+  const trendHigh = number(visible[highIndex]?.high);
+  const recentLow = number(visible[lowIndex]?.low);
+  const close = number(visible[index]?.close);
+  if (trendHigh == null || recentLow == null || close == null || trendHigh <= recentLow) {
+    return { valid: false, label: "피보 대기", subText: "하락 박스 산출 대기", positionPct: null, levels: {} };
+  }
+
+  const downSpan = trendHigh - recentLow;
+  const fib77Top = trendHigh - downSpan * 0.77;
+  if (fib77Top <= recentLow) {
+    return { valid: false, label: "피보 대기", subText: "77% 박스 대기", positionPct: null, levels: {} };
+  }
+
+  const boxSpan = fib77Top - recentLow;
+  const rawPct = ((close - recentLow) / boxSpan) * 100;
+  const positionPct = Math.max(0, Math.min(150, rawPct));
+  const levels = {
+    low: recentLow,
+    box382: recentLow + boxSpan * 0.382,
+    box50: recentLow + boxSpan * 0.5,
+    box618: recentLow + boxSpan * 0.618,
+    top: fib77Top,
+    trendHigh,
+  };
+  const crossed382 = rawPct >= 38.2;
+  const crossed50 = rawPct >= 50;
+  const crossed618 = rawPct >= 61.8;
+  const zone = crossed618 ? "61.8 돌파" : crossed50 ? "50 회복" : crossed382 ? "38.2 추가검토" : "38.2 대기";
+  return {
+    valid: true,
+    label: `피보 ${formatNum(positionPct, 1)}%`,
+    subText: `${zone} · 상단 ${formatNum(fib77Top, priceDigits(fib77Top))}`,
+    positionPct,
+    rawPct,
+    zone,
+    crossed382,
+    crossed50,
+    crossed618,
+    addWatch: crossed382 && !crossed618,
+    levels,
+    trendHigh,
+    recentLow,
+    fib77Top,
+  };
+}
+
+function cryptoFourHourAnalysis(rows = [], selectedDate = state.selectedDate) {
+  const visible = cryptoVisibleRows(rows, selectedDate);
+  const index = visible.length - 1;
+  const latest = visible[index] || {};
+  const close = number(latest.close);
+  const cloud = ichimokuCloudAt(visible, index);
+  const position = cryptoCloudPosition(close, cloud);
+  const chikou = cryptoChikouState(visible, index, close);
+  const boxHigh = rollingExtremeAt(visible, index, 180, "high", "max", true);
+  const boxBreak = close != null && boxHigh != null && close > boxHigh;
+  const strong = position === "above" && chikou === "bullish" && boxBreak;
+
+  if (strong) {
+    return { label: "수급 돌파", subText: "구름·후행·30일 박스", position, chikou, boxBreak, boxHigh, strong, cloud };
+  }
+  if (position === "above" && chikou === "bullish") {
+    return { label: "구름 위", subText: "박스 돌파 대기", position, chikou, boxBreak, boxHigh, strong, cloud };
+  }
+  if (position === "above") {
+    return { label: "상단 회복", subText: "후행 확인", position, chikou, boxBreak, boxHigh, strong, cloud };
+  }
+  if (position === "inside") {
+    return { label: "구름 내부", subText: "수급 대기", position, chikou, boxBreak, boxHigh, strong, cloud };
+  }
+  if (position === "below") {
+    return { label: "구름 아래", subText: "반등 확인", position, chikou, boxBreak, boxHigh, strong, cloud };
+  }
+  return { label: "계산 대기", subText: "240분봉 부족", position, chikou, boxBreak, boxHigh, strong, cloud };
+}
+
+function cryptoThirtyMinuteEntryAnalysis(rows = [], selectedDate = state.selectedDate) {
+  const visible = cryptoVisibleRows(rows, selectedDate);
+  const index = visible.length - 1;
+  const latest = visible[index] || {};
+  const close = number(latest.close);
+  const cloud = ichimokuCloudAt(visible, index);
+  const position = cryptoCloudPosition(close, cloud);
+  const chikou = cryptoChikouState(visible, index, close);
+  const boxHigh = rollingExtremeAt(visible, index, CRYPTO_INTRADAY_BOX_STOP_BARS, "high", "max", true);
+  const boxBreak = close != null && boxHigh != null && close > boxHigh;
+  const strong = boxBreak && position === "above" && chikou === "bullish";
+  if (strong) {
+    return { label: "30분 박스돌파", subText: "구름·후행·박스고점", position, chikou, boxBreak, boxHigh, strong, time: latest.time || latest.datetime || latest.date || "-" };
+  }
+  return { label: "30분 대기", subText: boxHigh != null ? `박스고점 ${formatNum(boxHigh, priceDigits(boxHigh))}` : "박스 산출 대기", position, chikou, boxBreak, boxHigh, strong, time: latest.time || latest.datetime || latest.date || "-" };
+}
+
+function cryptoThirtyMinuteAnalysis(rows = [], selectedDate = state.selectedDate, options = {}) {
+  const visible = cryptoVisibleRows(rows, selectedDate);
+  const index = visible.length - 1;
+  const latest = visible[index] || {};
+  const close = number(latest.close);
+  const profile = options.profile || {};
+  const closes = visible.map((row) => number(row.close)).filter((value) => value != null);
+  const ma5 = averageLast(closes, 5);
+  const ma30 = averageLast(closes, 30);
+  const cloud = ichimokuCloudAt(visible, index);
+  const position = cryptoCloudPosition(close, cloud);
+  const chikou = cryptoChikouState(visible, index, close);
+  const tenkan = ichimokuMid(visible, index, 9);
+  const kijun = ichimokuMid(visible, index, 26);
+  const bottomStart = Math.max(0, index - CRYPTO_THIRTY_MINUTE_RISK_BARS);
+  let recentBottomIndex = index;
+  for (let cursor = bottomStart; cursor <= index; cursor += 1) {
+    const currentLow = number(visible[cursor]?.low);
+    const bottomLow = number(visible[recentBottomIndex]?.low);
+    if (currentLow != null && (bottomLow == null || currentLow < bottomLow)) {
+      recentBottomIndex = cursor;
+    }
+  }
+  const bottomCloudUpper = ichimokuCloudAt(visible, recentBottomIndex).upper;
+  const belowTenkan = close != null && tenkan != null && close < tenkan;
+  const belowKijun = close != null && kijun != null && close < kijun;
+  const belowBottomCloud = close != null && bottomCloudUpper != null && close < bottomCloudUpper;
+  const boxStop = cryptoIntradayBoxStop(visible, index, CRYPTO_INTRADAY_BOX_STOP_BARS);
+  const exceptionBoxStop = profile.assetType === "exception" && boxStop.broken;
+  const finalStop = belowKijun && belowBottomCloud;
+  const tenkanDistancePct = close != null && tenkan != null ? ((tenkan - close) / close) * 100 : null;
+  const tenkanBufferPct = profile.assetType === "exception" ? CRYPTO_EXCEPTION_TENKAN_ALERT_BUFFER_PCT : CRYPTO_TENKAN_ALERT_BUFFER_PCT;
+  const tenkanIsClose = tenkanDistancePct != null && tenkanDistancePct >= -tenkanBufferPct;
+  const tenkanApproach = close != null && tenkan != null && close <= tenkan * (1 + CRYPTO_TENKAN_NEAR_PCT / 100);
+  const belowMa5 = close != null && ma5 != null && close < ma5;
+  const time = latest.time || latest.datetime || latest.date || "-";
+
+  if (exceptionBoxStop) {
+    return {
+      label: "박스손절",
+      subText: `30분 박스고점 ${formatNum(boxStop.level, priceDigits(boxStop.level))} 이탈, 예외 포지션 최종손절`,
+      status: "box_final_stop",
+      alert: true,
+      alertOnly: false,
+      finalStop: true,
+      ma5,
+      ma30,
+      tenkan,
+      kijun,
+      bottomCloudUpper,
+      boxStopLevel: boxStop.level,
+      boxStopTime: boxStop.time,
+      close,
+      position,
+      chikou,
+      time,
+      targetSlotPct: CRYPTO_SLOT_PCT.none,
+    };
+  }
+
+  if (finalStop) {
+    return {
+      label: "최종손절",
+      subText: "30분 바닥구름상단·기준선 이탈, 기초 30% 축소",
+      status: "final_stop",
+      alert: true,
+      alertOnly: false,
+      finalStop: true,
+      ma5,
+      ma30,
+      tenkan,
+      kijun,
+      bottomCloudUpper,
+      boxStopLevel: boxStop.level,
+      boxStopTime: boxStop.time,
+      close,
+      position,
+      chikou,
+      time,
+      targetSlotPct: CRYPTO_SLOT_PCT.starter,
+    };
+  }
+
+  if (tenkanApproach && tenkanIsClose) {
+    const action = belowTenkan ? "이탈" : "접근";
+    return {
+      label: `전환선 ${action}`,
+      subText: `전환선 ${formatNum(tenkan, priceDigits(tenkan))} · ${formatNum(tenkanDistancePct, 1)}%, 알림만`,
+      status: belowTenkan ? "tenkan_break_alert" : "tenkan_near_alert",
+      alert: true,
+      alertOnly: true,
+      finalStop: false,
+      ma5,
+      ma30,
+      tenkan,
+      kijun,
+      bottomCloudUpper,
+      boxStopLevel: boxStop.level,
+      boxStopTime: boxStop.time,
+      close,
+      position,
+      chikou,
+      time,
+    };
+  }
+
+  if (belowTenkan) {
+    return {
+      label: "전환선 약화",
+      subText: `전환선 ${formatNum(tenkan, priceDigits(tenkan))} 이탈, 최종손절선 확인`,
+      status: "tenkan_break_watch",
+      alert: false,
+      alertOnly: true,
+      finalStop: false,
+      ma5,
+      ma30,
+      tenkan,
+      kijun,
+      bottomCloudUpper,
+      boxStopLevel: boxStop.level,
+      boxStopTime: boxStop.time,
+      close,
+      position,
+      chikou,
+      time,
+    };
+  }
+
+  if (close != null && tenkan != null && close >= tenkan) {
+    if (belowMa5) {
+      return {
+        label: "5이평 점검",
+        subText: `5이평 ${formatNum(ma5, priceDigits(ma5))} 이탈, 단기물량 출회 주의`,
+        status: "ma5_break_alert",
+        alert: true,
+        alertOnly: true,
+        finalStop: false,
+        ma5,
+        ma30,
+        tenkan,
+        kijun,
+        bottomCloudUpper,
+        boxStopLevel: boxStop.level,
+        boxStopTime: boxStop.time,
+        close,
+        position,
+        chikou,
+        time,
+      };
+    }
+    const holdParts = [
+      ma5 != null && close >= ma5 ? "5이평 유지" : null,
+      "전환선 유지",
+      ma30 != null && close >= ma30 ? "30이평 유지" : null,
+      position === "above" ? "구름 위" : null,
+      chikou === "bullish" ? "후행 유지" : null,
+    ].filter(Boolean);
+    return {
+      label: "홀딩 유효",
+      subText: holdParts.join(" · "),
+      status: "hold",
+      alert: false,
+      ma5,
+      ma30,
+      tenkan,
+      kijun,
+      bottomCloudUpper,
+      boxStopLevel: boxStop.level,
+      boxStopTime: boxStop.time,
+      close,
+      position,
+      chikou,
+      time,
+    };
+  }
+
+  return { label: "추적 대기", subText: "30분 전환선 확인 중", status: "watch", alert: false, alertOnly: false, finalStop: false, ma5, ma30, tenkan, kijun, bottomCloudUpper, boxStopLevel: boxStop.level, boxStopTime: boxStop.time, close, position, chikou, time };
+}
+
+function cryptoIntradayBoxStop(rows = [], index = -1, size = CRYPTO_INTRADAY_BOX_STOP_BARS) {
+  if (!Array.isArray(rows) || index <= 0) return { level: null, time: null, broken: false };
+  const start = Math.max(size, index - size * 3);
+  let level = null;
+  let time = null;
+  for (let cursor = start; cursor <= index; cursor += 1) {
+    const reference = rollingExtremeAt(rows, cursor, size, "high", "max", true);
+    const close = number(rows[cursor]?.close);
+    if (reference != null && close != null && close > reference) {
+      level = reference;
+      time = rows[cursor]?.time || rows[cursor]?.datetime || rows[cursor]?.date || null;
+    }
+  }
+  const close = number(rows[index]?.close);
+  return {
+    level,
+    time,
+    broken: close != null && level != null && close < level,
+  };
+}
+
+function cryptoAllocationPlan(profile, daily, fourHour, thirtyEntry = {}) {
+  if (profile.assetType === "cash") {
+    return {
+      slotPct: 0,
+      portfolioPct: null,
+      stageText: "현금성",
+      className: "neutral",
+      label: "현금성",
+      capText: "현금 합산",
+      slotText: "매수대상 아님",
+      portfolioText: "현금+USDT",
+      message: "USDT는 매매 코인이 아니라 현금과 합산하는 현금성 자산으로 분류합니다.",
+    };
+  }
+
+  if (profile.assetType === "exception") {
+    const entrySignal = fourHour.strong || thirtyEntry.strong;
+    const slotPct = entrySignal ? CRYPTO_SLOT_PCT.base : CRYPTO_SLOT_PCT.none;
+    const portfolioPct = slotPct ? (profile.capPct || 0) * slotPct / 100 : 0;
+    return {
+      slotPct,
+      portfolioPct,
+      stageText: slotPct ? (fourHour.strong ? "예외 기본" : "30분 예외") : "대상외",
+      className: slotPct ? "candidate" : "neutral",
+      label: slotPct ? `예외 ${formatNum(slotPct, 0)}%` : "예외 대기",
+      capText: `예외 ${formatNum(profile.capPct, 1)}%`,
+      slotText: slotPct ? `한도의 ${formatNum(slotPct, 0)}%` : "4H/30분 돌파 전",
+      portfolioText: slotPct ? `전체 ${formatNum(portfolioPct, 2)}%` : "전체 0%",
+      message: slotPct
+        ? (fourHour.strong
+          ? "정상 운용 감시군 밖의 코인이지만 4시간봉 후행스팬과 30일 박스 돌파가 나와 예외 한도의 65%만 허용합니다."
+          : "정상 운용 감시군 밖의 코인이지만 30분봉 구름·후행·박스고점 돌파가 나와 예외 한도의 65%만 허용합니다.")
+        : "사용자 지정 감시군 밖의 코인은 4시간봉 또는 30분봉 박스 돌파 전까지 운용 대상에서 제외합니다.",
+    };
+  }
+
+  let slotPct = CRYPTO_SLOT_PCT.scout;
+  let stageText = "보초";
+  let message = "일봉이 구름 아래이거나 계산 자료가 부족해 보초병만 유지합니다.";
+
+  if (daily.position === "above" && daily.chikou === "bullish") {
+    slotPct = CRYPTO_SLOT_PCT.full;
+    stageText = "불타기";
+    message = "일봉 구름 상단과 후행스팬 상단 돌파가 같이 확인되어 불타기 모드입니다.";
+  } else if (daily.position === "above") {
+    slotPct = CRYPTO_SLOT_PCT.base;
+    stageText = "기본";
+    message = "일봉이 구름 상단을 돌파해 기초물량에서 기본물량으로 전환합니다.";
+  } else if (daily.position === "inside" || daily.nearLower || daily.bottomBounce) {
+    slotPct = CRYPTO_SLOT_PCT.starter;
+    stageText = "기초";
+    message = daily.bottomBounce
+      ? "일봉은 아직 구름 아래지만 바닥 대비 7% 이상 반등해 기초물량을 셋업합니다."
+      : "일봉이 구름대 안쪽 또는 하단 근처라 기초물량 중심으로 관리합니다.";
+  }
+
+  if (daily.position === "below" && daily.chikou === "bearish" && slotPct > CRYPTO_SLOT_PCT.starter) {
+    slotPct = CRYPTO_SLOT_PCT.starter;
+    stageText = "축소";
+    message = "일봉 하단 이탈에 후행스팬 약세가 겹쳐 기초물량 이하로 축소 관리합니다.";
+  }
+
+  if (fourHour.strong && slotPct < CRYPTO_SLOT_PCT.base) {
+    slotPct = CRYPTO_SLOT_PCT.base;
+    stageText = "4H 기본";
+    message = "4시간봉이 구름 위에 있고 후행스팬 상단과 30일 박스 상단을 돌파해 일봉 위치와 별개로 기본물량까지 허용합니다.";
+  }
+
+  const portfolioPct = profile.capPct * slotPct / 100;
+  const className = slotPct >= CRYPTO_SLOT_PCT.base
+    ? "candidate"
+    : slotPct >= CRYPTO_SLOT_PCT.starter ? "watch" : "warning";
+  return {
+    slotPct,
+    portfolioPct,
+    stageText,
+    className,
+    label: `${stageText} ${formatNum(slotPct, 0)}%`,
+    capText: `${profile.typeLabel} ${formatNum(profile.capPct, 0)}%`,
+    slotText: `종목 ${formatNum(slotPct, 0)}%`,
+    portfolioText: `전체 ${formatNum(portfolioPct, 1)}%`,
+    message,
+  };
+}
+
+function cryptoPyramidOrderPlan(profile = {}, allocation = {}, context = {}) {
+  const slotPct = number(allocation.slotPct);
+  const capPct = number(profile.capPct);
+  if (profile.assetType === "cash" || capPct == null) {
+    return { active: false, text: "-", subText: "매수대상 아님" };
+  }
+  if (slotPct == null || slotPct < CRYPTO_SLOT_PCT.base) {
+    return { active: false, text: "대기", subText: `기본 65% 이후 예약 ${formatNum(CRYPTO_PYRAMID_ADD_SLOT_PCT, 1)}% · +${formatNum(CRYPTO_PYRAMID_VERTICAL_RISE_PCT, 0)}%/${formatNum(CRYPTO_PYRAMID_PULLBACK_PCT, 0)}%눌림 각 ${formatNum(CRYPTO_PYRAMID_MARKET_SLOT_PCT, 1)}%` };
+  }
+  const remainingSlotPct = Math.max(0, CRYPTO_SLOT_PCT.full - slotPct);
+  if (remainingSlotPct <= 0) {
+    return { active: false, complete: true, text: "완료", subText: "100% 투입 상태" };
+  }
+  if (!context.trendConfirmed) {
+    return {
+      active: false,
+      text: "추세대기",
+      subText: `일봉 구름·후행 확인 후 +${formatNum(CRYPTO_PYRAMID_VERTICAL_RISE_PCT, 0)}%/${formatNum(CRYPTO_PYRAMID_PULLBACK_PCT, 0)}% 눌림`,
+    };
+  }
+
+  const reserveSlotPct = Math.min(CRYPTO_PYRAMID_ADD_SLOT_PCT, remainingSlotPct);
+  const marketSlotPct = Math.min(CRYPTO_PYRAMID_MARKET_SLOT_PCT, reserveSlotPct);
+  const reservePortfolioPct = capPct * reserveSlotPct / 100;
+  const marketPortfolioPct = capPct * marketSlotPct / 100;
+  const close = number(context.close);
+  const averagePrice = number(context.averagePrice) ?? number(context.orderPrice) ?? close;
+  const recentHigh = number(context.recentHigh) ?? close;
+  const firstTriggerPrice = averagePrice != null ? averagePrice * (1 + CRYPTO_PYRAMID_VERTICAL_RISE_PCT / 100) : null;
+  const pullbackPrice = recentHigh != null && averagePrice != null && recentHigh > averagePrice
+    ? recentHigh - (recentHigh - averagePrice) * (CRYPTO_PYRAMID_PULLBACK_PCT / 100)
+    : null;
+  const marketTrigger = close != null && firstTriggerPrice != null && close >= firstTriggerPrice;
+  const pullbackTrigger = close != null && pullbackPrice != null && close <= pullbackPrice;
+  const priceDigitsForOrder = priceDigits(averagePrice ?? close);
+  const firstText = firstTriggerPrice != null ? `+${formatNum(CRYPTO_PYRAMID_VERTICAL_RISE_PCT, 0)}% ${formatNum(firstTriggerPrice, priceDigitsForOrder)}` : "+10% 대기";
+  const pullbackText = pullbackPrice != null ? `${formatNum(CRYPTO_PYRAMID_PULLBACK_PCT, 0)}%눌림 ${formatNum(pullbackPrice, priceDigitsForOrder)}` : "77%눌림 대기";
+  const subText = `${firstText} · ${pullbackText}`;
+  const text = marketTrigger
+    ? `시장가 ${formatNum(marketSlotPct, 1)}%`
+    : pullbackTrigger ? `눌림 ${formatNum(marketSlotPct, 1)}%` : `대기 ${formatNum(marketSlotPct, 1)}%+${formatNum(marketSlotPct, 1)}%`;
+  return {
+    active: true,
+    marketTrigger,
+    pullbackTrigger,
+    orderPrice: pullbackPrice,
+    triggerPrice: firstTriggerPrice,
+    firstTriggerPrice,
+    pullbackPrice,
+    averagePrice,
+    recentHigh,
+    reserveSlotPct,
+    marketSlotPct,
+    reservePortfolioPct,
+    marketPortfolioPct,
+    text,
+    subText,
+    message: marketTrigger
+      ? `초기 65% 이후 +${formatNum(CRYPTO_PYRAMID_VERTICAL_RISE_PCT, 0)}% 상승 트리거입니다. 남은 ${formatNum(CRYPTO_PYRAMID_ADD_SLOT_PCT, 1)}% 중 ${formatNum(marketSlotPct, 1)}%는 시장가 추가 매수 신호입니다.`
+      : pullbackTrigger
+        ? `최고점과 평균단가 사이 ${formatNum(CRYPTO_PYRAMID_PULLBACK_PCT, 0)}% 눌림 자리입니다. 남은 ${formatNum(CRYPTO_PYRAMID_ADD_SLOT_PCT, 1)}% 중 나머지 ${formatNum(marketSlotPct, 1)}% 추가 진입 신호입니다.`
+        : `불타기는 무조건이 아니라 일봉 구름·후행 추세 확인 상태에서 +${formatNum(CRYPTO_PYRAMID_VERTICAL_RISE_PCT, 0)}% 1차 ${formatNum(marketSlotPct, 1)}%, ${formatNum(CRYPTO_PYRAMID_PULLBACK_PCT, 0)}% 눌림 2차 ${formatNum(marketSlotPct, 1)}%로 나눕니다.`,
+  };
+}
+
+function cryptoMetricItems(assets = [], exceptionAssets = [], cashAssets = []) {
+  const plans = assets.map((asset) => cryptoSignalPlan(asset, assets));
+  const exceptionPlans = exceptionAssets.map((asset) => cryptoSignalPlan(asset, assets, { exceptionMode: true }));
+  const baseOrHigher = plans.filter((plan) => plan.slotPct >= CRYPTO_SLOT_PCT.base).length;
+  const exceptionEntries = exceptionPlans.filter((plan) => plan.slotPct >= CRYPTO_SLOT_PCT.base).length;
+  const strongest = plans
+    .filter((plan) => number(plan.portfolioPct) != null)
+    .sort((a, b) => (b.portfolioPct || 0) - (a.portfolioPct || 0))[0];
+  const cashText = cashAssets.length ? cashAssets.map((asset) => asset.label || cryptoAssetName(asset)).join("+") : "USDT";
   return [
-    { label: "시장 방어", value: formatNum(btcScore, 0), text: "BTC 기준" },
-    { label: "공격 신호", value: formatNum(attackScore, 0), text: leader },
-    { label: "최소 손절", value: stopText, text: "2ATR 기준" },
-    { label: "추적 익절", value: "20일선", text: "잔량 기준" },
+    { label: "감시군", value: formatNum(assets.length, 0), text: "BTC·ETH·XRP·XLM" },
+    { label: "메이저 한도", value: "70%", text: "BTC/ETH 종목별" },
+    { label: "알트 한도", value: "30%", text: "XRP/XLM 종목별" },
+    { label: "예외풀", value: "5%", text: `종목 2.5% · 후보 ${exceptionEntries}개` },
+    { label: "현금성", value: cashText, text: "현금과 합산" },
+    { label: "기본 이상", value: `${baseOrHigher}개`, text: strongest ? `${strongest.name} ${strongest.portfolioText}` : "수급 대기" },
   ];
+}
+
+function cryptoPolicyCard(crypto = {}) {
+  const policy = crypto.allocation_policy || {};
+  const approved = (policy.approved_scope_symbols || ["BTC", "ETH", "XRP", "XLM"]).join("·");
+  return `
+    <article class="crypto-signal-card neutral">
+      <header>
+        <h2>운용 범위</h2>
+        <span class="signal-pill neutral">정책</span>
+      </header>
+      <p>정상 운용은 ${escapeHtml(approved)} 안에서만 합니다. 그 밖의 급변 코인은 예외 풀 ${formatNum(policy.exception_pool_cap_pct ?? 5, 1)}% 안에서 종목당 ${formatNum(policy.exception_symbol_cap_pct ?? 2.5, 1)}%까지만 보고, USDT는 현금과 합산합니다. 코인 현금이 부족하면 필요한 금액만큼 USDT를 시장가 청산해 진입 재원으로 봅니다.</p>
+      <div class="crypto-signal-grid">
+        ${[
+          { label: "정상감시", value: approved },
+          { label: "예외풀", value: `${formatNum(policy.exception_pool_cap_pct ?? 5, 1)}%` },
+          { label: "예외종목", value: `${formatNum(policy.exception_symbol_cap_pct ?? 2.5, 1)}%` },
+          { label: "예외진입", value: `${formatNum(policy.exception_entry_slot_pct ?? 65, 0)}%` },
+          { label: "불타기", value: `${formatNum(CRYPTO_PYRAMID_ADD_SLOT_PCT, 1)}%/${formatNum(CRYPTO_PYRAMID_MARKET_SLOT_PCT, 1)}%` },
+          { label: "불타기기준", value: `+${formatNum(CRYPTO_PYRAMID_VERTICAL_RISE_PCT, 0)}%·${formatNum(CRYPTO_PYRAMID_PULLBACK_PCT, 0)}%` },
+          { label: "현금조달", value: "부족분 USDT" },
+          { label: "현금성", value: (policy.cash_like_symbols || ["USDT"]).join("+") },
+        ].map((item) => `
+          <article>
+            <span>${escapeHtml(item.label)}</span>
+            <strong>${escapeHtml(item.value)}</strong>
+          </article>
+        `).join("")}
+      </div>
+    </article>
+  `;
+}
+
+function cryptoHotMoneyCard(assets = []) {
+  const rows = (Array.isArray(assets) ? assets : []).map((asset) => {
+    const selected = asset?.selected || asset?.latest || {};
+    const close = number(selected.close);
+    const volume = number(selected.volume);
+    const changePct = number(selected.change_pct);
+    return {
+      asset,
+      name: cryptoAssetName(asset),
+      close,
+      volume,
+      changePct,
+      tradeValue: close != null && volume != null ? close * volume : null,
+      timeText: cryptoSignalTimeText(selected),
+      profile: cryptoAssetProfile(asset),
+    };
+  }).filter((row) => row.close != null);
+  if (!rows.length) return "";
+
+  const topValue = [...rows].sort((a, b) => (b.tradeValue || 0) - (a.tradeValue || 0))[0];
+  const topMove = [...rows].sort((a, b) => (b.changePct ?? -Infinity) - (a.changePct ?? -Infinity))[0];
+  const exceptionHot = rows
+    .filter((row) => row.profile.assetType === "exception")
+    .sort((a, b) => Math.max(b.tradeValue || 0, 0) - Math.max(a.tradeValue || 0, 0))[0];
+  const timeTexts = rows.map((row) => row.timeText).filter(Boolean).sort();
+  const latestTime = timeTexts[timeTexts.length - 1] || "-";
+  const valueText = topValue?.tradeValue != null ? formatCryptoTradeValue(topValue.tradeValue) : "-";
+  const moveText = topMove?.changePct != null ? `${formatSigned(topMove.changePct, 1)}%` : "-";
+  const exceptionText = exceptionHot ? `${exceptionHot.name} · ${formatCryptoTradeValue(exceptionHot.tradeValue)}` : "예외 후보 대기";
+  const className = topMove?.changePct >= 7 || exceptionHot?.changePct >= 7 ? "candidate" : "watch";
+
+  return `
+    <article class="crypto-signal-card ${escapeAttr(className)}">
+      <header>
+        <h2>시장 핫체크</h2>
+        <span class="signal-pill ${escapeAttr(className)}">거래대금·수익률</span>
+      </header>
+      <p>거래대금과 당일 수익률이 커지는 종목을 예외 후보로 계속 추적합니다. 현재는 정상 감시군과 예외 후보 안에서 정렬합니다.</p>
+      <div class="crypto-signal-grid">
+        ${[
+          { label: "대금 1위", value: topValue?.name || "-", text: valueText },
+          { label: "수익률 1위", value: topMove?.name || "-", text: moveText },
+          { label: "예외후보", value: exceptionHot?.name || "-", text: exceptionText },
+          { label: "추적시각", value: latestTime, text: "시간·분 기준" },
+        ].map((item) => `
+          <article>
+            <span>${escapeHtml(item.label)}</span>
+            <strong>${escapeHtml(item.value)}</strong>
+            <small>${escapeHtml(item.text)}</small>
+          </article>
+        `).join("")}
+      </div>
+    </article>
+  `;
 }
 
 function cryptoDetailMetricItems(asset, allAssets = [], signal = null, rows = []) {
   const selected = cryptoLatestRow(rows) || asset?.selected || asset?.latest || {};
   const close = number(selected.close);
-  const stopGap = signal?.entry != null && signal?.stop != null && signal.entry > 0
-    ? `${formatNum((signal.entry - signal.stop) / signal.entry * 100, 1)}%`
-    : "-";
-  const atrPct = atrPercent(rows.length ? rows : asset?.history, state.selectedDate, 14);
   const btc = allAssets.find((item) => String(item.label || "").toUpperCase() === "BTC");
-  const btcText = String(asset?.label || "").toUpperCase() === "BTC"
+  const btcPlan = btc ? cryptoSignalPlan(btc, allAssets) : null;
+  const btcText = cryptoAssetKey(asset) === "btc"
     ? "시장 기준"
-    : cryptoSignalClass(btc?.summary?.signal, (number(btc?.summary?.score) ?? 0) < 52) === "warning"
+    : btcPlan?.slotPct < CRYPTO_SLOT_PCT.starter
       ? "BTC 약세 반영"
       : "BTC 필터 통과";
   return [
     { label: "현재가", value: formatNum(close, priceDigits(close)), text: selected.time ? `${shortDate(selected.date)} ${selected.time}` : selected.date || "-" },
-    { label: "신호", value: signal?.label || "-", text: btcText },
-    { label: "진입 기준", value: signal?.entryText || "-", text: cryptoFrameLabel(state.cryptoFrame) },
-    { label: "손절 폭", value: stopGap, text: atrPct != null ? `ATR ${formatNum(atrPct, 1)}%` : "ATR 대기" },
+    { label: "신호시각", value: signal?.signalTimeText || "-", text: "시간·분 기준" },
+    { label: "구분", value: signal?.typeLabel || "-", text: signal?.capText || btcText },
+    { label: "목표비중", value: signal?.portfolioText || "-", text: signal?.slotText || "-" },
+    { label: "불타기주문", value: signal?.pyramidOrderText || "-", text: signal?.pyramidOrderSubText || "-" },
+    { label: "일봉 위치", value: signal?.dailyText || "-", text: signal?.dailySubText || "-" },
+    { label: "피보박스", value: signal?.fibBoxText || "-", text: signal?.fibBoxSubText || "-" },
+    { label: "4H 수급", value: signal?.fourHourText || "-", text: signal?.fourHourSubText || "-" },
+    { label: "30분 추적", value: signal?.thirtyText || "-", text: signal?.thirtySubText || "-" },
+    { label: "30분 진입", value: signal?.thirtyEntryText || "-", text: signal?.thirtyEntrySubText || "-" },
+    { label: "최종손절선", value: signal?.thirtyBoxStopLevel != null ? formatNum(signal.thirtyBoxStopLevel, priceDigits(signal.thirtyBoxStopLevel)) : signal?.thirtyKijun != null ? formatNum(signal.thirtyKijun, priceDigits(signal.thirtyKijun)) : "-", text: signal?.thirtyBoxStopLevel != null ? "30분 돌파 박스고점" : signal?.thirtyBottomCloudUpper != null ? `바닥구름상단 ${formatNum(signal.thirtyBottomCloudUpper, priceDigits(signal.thirtyBottomCloudUpper))}` : "30분 기준선 대기" },
   ];
 }
 
@@ -1707,11 +2460,16 @@ function cryptoSignalCard(asset, allAssets = [], options = {}) {
       <p>${escapeHtml(signal.message)}</p>
       <div class="crypto-signal-grid">
         ${[
-          { label: "진입 기준", value: signal.entryText },
-          { label: "최소 손절", value: signal.stopText },
-          { label: "1차 익절", value: signal.take1Text },
-          { label: "2차 익절", value: signal.take2Text },
-          { label: "추적 익절", value: signal.trailText },
+          { label: "허용한도", value: signal.capText },
+          { label: "목표비중", value: signal.portfolioText },
+          { label: "신호시각", value: signal.signalTimeText },
+          { label: "단계", value: signal.stageText },
+          { label: "불타기주문", value: signal.pyramidOrderText },
+          { label: "일봉", value: signal.dailyText },
+          { label: "피보박스", value: signal.fibBoxText },
+          { label: "4시간", value: signal.fourHourText },
+          { label: "30분", value: signal.thirtyText },
+          { label: "손절", value: signal.stopText },
         ].map((item) => `
           <article>
             <span>${escapeHtml(item.label)}</span>
@@ -1724,37 +2482,135 @@ function cryptoSignalCard(asset, allAssets = [], options = {}) {
 }
 
 function cryptoSignalPlan(asset, allAssets = [], options = {}) {
-  const rows = Array.isArray(options.rows) ? options.rows : Array.isArray(asset?.history) ? asset.history : [];
-  const selected = options.selected || cryptoLatestRow(rows) || asset?.selected || asset?.latest || {};
+  const displayFrame = options.frame || "1d";
+  const displayRows = Array.isArray(options.rows) ? options.rows : Array.isArray(asset?.history) ? asset.history : [];
+  const selected = options.selected || cryptoLatestRow(displayRows) || asset?.selected || asset?.latest || {};
+  const signalRow = cryptoLatestRow(cryptoRowsForFrame(asset, "30m")) || selected;
   const close = number(selected.close);
-  const summary = options.frame && options.frame !== "1d"
-    ? cryptoComputedSummary(rows, selected, asset?.summary || {})
-    : asset?.summary || {};
-  const score = number(summary.score);
-  const atrPct = atrPercent(rows, state.selectedDate, 14);
-  const high20 = rollingExtreme(rows, state.selectedDate, 20, "high", "max");
-  const high55 = rollingExtreme(rows, state.selectedDate, 55, "high", "max");
-  const ma20 = rollingAverage(rows, state.selectedDate, 20) ?? number(summary.ma20);
-  const ma60 = rollingAverage(rows, state.selectedDate, 60) ?? number(summary.ma60);
-  const btc = allAssets.find((item) => String(item.label || "").toUpperCase() === "BTC");
-  const btcRows = options.frame && options.frame !== "1d" ? cryptoRowsForFrame(btc, options.frame) : [];
-  const btcSummary = btcRows.length ? cryptoComputedSummary(btcRows, cryptoLatestRow(btcRows), btc?.summary || {}) : btc?.summary || {};
-  const btcWeak = String(asset?.label || "").toUpperCase() !== "BTC" && (btcSummary.signal === "warning" || (number(btcSummary.score) ?? 0) < 52);
-  const className = cryptoSignalClass(summary.signal, btcWeak);
-  const label = cryptoSignalLabel(summary.signal, btcWeak);
-  const entry = cryptoEntryPrice(close, ma20, ma60, high20, high55, className);
-  const stop = cryptoStopPrice(close, entry, atrPct, className);
+  const profile = cryptoAssetProfile(asset);
+  const daily = cryptoDailyAnalysis(asset?.history || [], state.selectedDate);
+  const fibBox = cryptoDailyFibBoxAnalysis(asset?.history || [], state.selectedDate);
+  const thirtyRows = cryptoRowsForFrame(asset, "30m");
+  const fourHour = cryptoFourHourAnalysis(cryptoRowsForFrame(asset, "240m"), state.selectedDate);
+  const thirtyEntry = cryptoThirtyMinuteEntryAnalysis(thirtyRows, state.selectedDate);
+  const thirtyMinute = cryptoThirtyMinuteAnalysis(thirtyRows, state.selectedDate, { profile });
+  const allocation = cryptoAllocationPlan(profile, daily, fourHour, thirtyEntry);
+  const entered = allocation.slotPct >= CRYPTO_SLOT_PCT.base;
+  const trackingExit = entered && thirtyMinute.finalStop;
+  const trackingNotice = entered && thirtyMinute.alert && thirtyMinute.alertOnly;
+  const addPyramidCandidate = Boolean(fibBox.addWatch && entered && thirtyMinute.status === "hold");
+  const trendConfirmed = daily.position === "above" && daily.chikou === "bullish";
+  const className = trackingExit ? "sell" : trackingNotice ? "warning" : allocation.className;
+  const label = trackingExit ? (thirtyMinute.status === "box_final_stop" ? "박스손절" : "최종손절") : trackingNotice ? thirtyMinute.label : allocation.label;
+  const stopActionText = thirtyMinute.status === "box_final_stop"
+    ? "예외 포지션 최종손절 기준입니다."
+    : "일단 기초물량 30%까지 축소하고, 최종 축소폭은 사용자와 확인합니다.";
+  let message = trackingExit
+    ? `${cryptoAssetName(asset)} 30분봉 최종손절 기준: ${thirtyMinute.subText}. ${stopActionText}`
+    : trackingNotice
+      ? `${cryptoAssetName(asset)} 30분봉 ${thirtyMinute.label}: ${thirtyMinute.subText}. 전환선이 너무 가까운 구간이라 즉시 비중축소 사유는 아니고 리스크관리 알림입니다.`
+    : allocation.message;
+  if (!trackingExit && fibBox.valid) {
+    if (addPyramidCandidate) {
+      message = `${message} 일봉 피보박스 ${formatNum(fibBox.positionPct, 1)}%: 38.2~61.8 구간이라 30분 추세 유지 시 추가 불타기 검토입니다.`;
+    } else if (fibBox.crossed618) {
+      message = `${message} 일봉 피보박스는 61.8%를 넘겨 과열/돌파 지속 여부를 확인합니다.`;
+    } else if (fibBox.crossed50) {
+      message = `${message} 일봉 피보박스는 중심값 50%를 회복했습니다.`;
+    } else if (fibBox.crossed382) {
+      message = `${message} 일봉 피보박스 38.2% 회복 구간입니다. 30분 추세가 붙는지 확인합니다.`;
+    }
+  }
+  const visibleRows = cryptoVisibleRows(displayRows, state.selectedDate);
+  const visibleIndex = visibleRows.length - 1;
+  const closes = visibleRows.map((row) => number(row.close)).filter((value) => value != null);
+  const high20 = rollingExtremeAt(visibleRows, visibleIndex, 20, "high", "max", true);
+  const high55 = rollingExtremeAt(visibleRows, visibleIndex, 55, "high", "max", true);
+  const ma20 = averageLast(closes, 20);
+  const ma60 = averageLast(closes, 60);
+  const atrPct = atrPercent(displayRows, state.selectedDate, 14);
+  const entry = cryptoEntryPrice(close, ma20, ma60, high20, high55, allocation.className);
+  const stop = cryptoStopPrice(close, entry, atrPct, allocation.className);
   const risk = entry != null && stop != null ? Math.max(entry - stop, entry * 0.02) : null;
   const take1 = entry != null && risk != null ? entry + risk : null;
   const take2 = entry != null && risk != null ? entry + risk * 2 : null;
-  const lineLabel = options.frame && options.frame !== "1d" ? "20선" : "20일선";
-  const trail = ma20 != null ? `${lineLabel} ${formatNum(ma20, priceDigits(close))}` : lineLabel;
-  const reason = cryptoSignalReason(summary, btcWeak, close, ma20, ma60, high20, score, options.frame);
+  const orderRows = cryptoVisibleRows(thirtyRows, state.selectedDate);
+  const orderIndex = orderRows.length - 1;
+  const orderSelected = orderRows[orderIndex] || signalRow || selected;
+  const orderClose = number(orderSelected?.close) ?? close;
+  const orderCloses = orderRows.map((row) => number(row.close)).filter((value) => value != null);
+  const orderMa30 = averageLast(orderCloses, 30);
+  const orderCloud = orderIndex >= 0 ? ichimokuCloudAt(orderRows, orderIndex) : {};
+  const orderHigh20 = rollingExtremeAt(orderRows, orderIndex, 20, "high", "max", true);
+  const orderHigh55 = rollingExtremeAt(orderRows, orderIndex, 55, "high", "max", true);
+  const recentHighForPyramid = rollingExtremeAt(orderRows, orderIndex, CRYPTO_THIRTY_MINUTE_RISK_BARS, "high", "max", false);
+  const orderPriceCandidates = [orderHigh20, orderHigh55, orderCloud.upper, orderMa30]
+    .map((value) => number(value))
+    .filter((value) => value != null && value > 0);
+  const pyramidOrder = cryptoPyramidOrderPlan(profile, allocation, {
+    close: orderClose,
+    orderPrice: orderPriceCandidates.length ? Math.max(...orderPriceCandidates) : entry,
+    averagePrice: entry,
+    recentHigh: recentHighForPyramid,
+    trendConfirmed,
+  });
+  if (!trackingExit && pyramidOrder.active) {
+    message = `${message} ${pyramidOrder.message}`;
+  }
+  const lineLabel = displayFrame !== "1d" ? "20선" : "20일선";
+  const displayCloud = visibleIndex >= 0 ? ichimokuCloudAt(visibleRows, visibleIndex) : {};
+  const trail = displayCloud?.lower != null
+    ? `${cryptoFrameLabel(displayFrame)} 구름하단 ${formatNum(displayCloud.lower, priceDigits(close))}`
+    : ma20 != null ? `${lineLabel} ${formatNum(ma20, priceDigits(close))}` : lineLabel;
   return {
-    name: asset?.label || asset?.symbol || "코인",
+    key: profile.key,
+    name: cryptoAssetName(asset),
+    assetType: profile.assetType,
     className,
     label,
-    message: reason,
+    message,
+    typeLabel: profile.typeLabel,
+    capPct: profile.capPct,
+    poolCapPct: profile.poolCapPct,
+    capText: allocation.capText,
+    slotPct: allocation.slotPct,
+    portfolioPct: allocation.portfolioPct,
+    portfolioText: allocation.portfolioText,
+    slotText: allocation.slotText,
+    stageText: allocation.stageText,
+    pyramidOrder,
+    pyramidOrderText: pyramidOrder.text || "-",
+    pyramidOrderSubText: pyramidOrder.subText || "-",
+    pyramidMarketTrigger: Boolean(pyramidOrder.marketTrigger || pyramidOrder.pullbackTrigger),
+    dailyText: daily.label,
+    dailySubText: daily.subText,
+    fibBoxText: fibBox.valid ? fibBox.label : "-",
+    fibBoxSubText: fibBox.valid ? fibBox.subText : "일봉 피보박스 대기",
+    fibBoxPct: fibBox.positionPct,
+    fibBox,
+    addPyramidCandidate,
+    fourHourText: fourHour.label,
+    fourHourSubText: fourHour.subText,
+    fourHourStrong: Boolean(fourHour.strong),
+    exceptionEntryStrong: profile.assetType === "exception" && Boolean(fourHour.strong || thirtyEntry.strong),
+    thirtyEntryText: thirtyEntry.label,
+    thirtyEntrySubText: thirtyEntry.subText,
+    thirtyText: entered ? thirtyMinute.label : "진입 전",
+    thirtySubText: entered ? thirtyMinute.subText : "30분봉 추적은 진입 후 적용",
+    thirtyStatus: entered ? thirtyMinute.status : "pending",
+    trackingAlert: trackingExit,
+    trackingNotice,
+    thirtyAlert: entered && thirtyMinute.alert,
+    thirtyAlertOnly: Boolean(thirtyMinute.alertOnly),
+    trackingRule: thirtyMinute.status,
+    trackingTime: thirtyMinute.time,
+    thirtyTenkan: thirtyMinute.tenkan,
+    thirtyMa5: thirtyMinute.ma5,
+    thirtyKijun: thirtyMinute.kijun,
+    thirtyBottomCloudUpper: thirtyMinute.bottomCloudUpper,
+    thirtyBoxStopLevel: profile.assetType === "exception" ? thirtyMinute.boxStopLevel : null,
+    thirtyBoxStopTime: profile.assetType === "exception" ? thirtyMinute.boxStopTime : null,
+    signalTimeText: cryptoSignalTimeText(signalRow),
     close,
     entry,
     stop,
@@ -1772,32 +2628,6 @@ function cryptoSignalPlan(asset, allAssets = [], options = {}) {
   };
 }
 
-function cryptoSignalClass(signal, btcWeak) {
-  if (btcWeak) return "warning";
-  if (signal === "candidate") return "candidate";
-  if (signal === "watch") return "watch";
-  return "warning";
-}
-
-function cryptoSignalLabel(signal, btcWeak) {
-  if (btcWeak) return "BTC 약세";
-  if (signal === "candidate") return "진입 후보";
-  if (signal === "watch") return "보초 관찰";
-  return "회피/대기";
-}
-
-function cryptoSignalReason(summary, btcWeak, close, ma20, ma60, high20, score, frame = "1d") {
-  const frameLabel = frame && frame !== "1d" ? cryptoFrameLabel(frame) : "일봉";
-  const lineName = frame && frame !== "1d" ? "20선" : "20일선";
-  const highName = frame && frame !== "1d" ? "20봉 고점" : "20일 고점";
-  if (btcWeak) return "BTC 시장 방어 점수가 낮아 ETH 공격 신호를 낮춰 봅니다.";
-  if (summary.signal === "candidate") return `${frameLabel} 20선과 60선이 우호적입니다. 돌파 유지와 손절 폭을 함께 확인합니다.`;
-  if (summary.signal === "watch") return `방향은 중립권입니다. ${lineName} 회복 또는 ${highName} 돌파를 기다립니다.`;
-  const lineText = ma20 != null ? `${lineName} ${formatNum(ma20, priceDigits(close))}` : lineName;
-  const breakoutText = high20 != null ? `${highName} ${formatNum(high20, priceDigits(close))}` : highName;
-  return `${lineText} 회복 전까지 관찰 우선입니다. 공격 신호는 ${breakoutText} 돌파 이후로 봅니다.`;
-}
-
 function cryptoEntryPrice(close, ma20, ma60, high20, high55, className) {
   if (close == null) return null;
   if (className === "candidate") return Math.max(close, high20 || close);
@@ -1812,29 +2642,12 @@ function cryptoStopPrice(close, entry, atrPct, className) {
   return Math.max(0, reference * (1 - atrStopPct / 100));
 }
 
-function rollingExtreme(history = [], selectedDate, size, key, mode) {
-  const values = (Array.isArray(history) ? history : [])
-    .filter((row) => row?.date && (!selectedDate || row.date <= selectedDate))
-    .slice(-size)
-    .map((row) => number(row[key]))
-    .filter((value) => value != null);
-  if (!values.length) return null;
-  return mode === "min" ? Math.min(...values) : Math.max(...values);
-}
-
-function rollingAverage(history = [], selectedDate, size) {
-  const values = (Array.isArray(history) ? history : [])
-    .filter((row) => row?.date && (!selectedDate || row.date <= selectedDate))
-    .slice(-size)
-    .map((row) => number(row.close))
-    .filter((value) => value != null);
-  return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null;
-}
-
 function priceDigits(value) {
   const parsed = Math.abs(number(value) || 0);
   if (parsed >= 1000) return 0;
   if (parsed >= 100) return 1;
+  if (parsed >= 1) return 2;
+  if (parsed > 0) return 4;
   return 2;
 }
 
@@ -1844,6 +2657,8 @@ function cryptoRowsForFrame(asset, frame = state.cryptoFrame) {
   const sourceRows = Array.isArray(asset.intraday?.history) && asset.intraday.history.length
     ? asset.intraday.history
     : Array.isArray(asset.history) ? asset.history : [];
+  if (frame === "30m") return sourceRows;
+  if (frame === "60m" && asset.intraday?.history?.length) return aggregateCryptoRows(sourceRows, 1);
   if (frame === "240m" && asset.intraday?.history?.length) return aggregateCryptoRows(sourceRows, 4);
   return sourceRows;
 }
@@ -1888,6 +2703,21 @@ function cryptoLatestRow(rows = []) {
   return filtered.length ? filtered[filtered.length - 1] : null;
 }
 
+function cryptoSignalTimeText(row = {}) {
+  if (!row) return "-";
+  const dateText = row.date ? shortDate(row.date) : "";
+  const minuteText = minuteTimeText(row.time || row.datetime);
+  if (dateText && minuteText) return `${dateText} ${minuteText}`;
+  if (minuteText) return minuteText;
+  return row.date || "-";
+}
+
+function minuteTimeText(value) {
+  const text = String(value || "");
+  const match = text.match(/(?:T|\s|^)(\d{2}):(\d{2})/);
+  return match ? `${match[1]}:${match[2]}` : "";
+}
+
 function cryptoComputedSummary(rows = [], selected = null, fallback = {}) {
   const visible = (Array.isArray(rows) ? rows : [])
     .filter((row) => row?.date && (!state.selectedDate || row.date <= state.selectedDate) && number(row.close) != null);
@@ -1915,6 +2745,7 @@ function cryptoComputedSummary(rows = [], selected = null, fallback = {}) {
 
 function cryptoFrameLabel(frame = state.cryptoFrame) {
   return {
+    "30m": "30분봉",
     "240m": "240분봉",
     "60m": "60분봉",
     "1d": "일봉",
@@ -1969,35 +2800,39 @@ function drawUsStocksChart() {
 
 function drawCryptoChart() {
   const canvas = document.querySelector("#cryptoChart");
-  const assets = state.assetArchive?.crypto?.assets || [];
+  const crypto = state.assetArchive?.crypto || {};
+  const assets = crypto.assets || [];
+  const detailAssets = [...assets, ...(crypto.exception_assets || [])];
   if (state.cryptoTab !== "all") {
-    drawCryptoDetailChart(canvas, cryptoSelectedAsset(assets), assets);
+    drawCryptoDetailChart(canvas, cryptoSelectedAsset(detailAssets), detailAssets);
     return;
   }
   const points = cryptoComparisonPoints(assets, state.selectedDate, 180);
   if (!points.length) {
-    drawEmptyChart(canvas, "코인 차트 자료 없음", 260, "비트코인과 이더리움 일봉 데이터가 아직 없습니다.");
+    drawEmptyChart(canvas, "코인 차트 자료 없음", 260, "메이저 코인 일봉 데이터가 아직 없습니다.");
     document.querySelector("#cryptoLegend").innerHTML = "";
-    if (canvas) canvas.setAttribute("aria-label", "비트코인 이더리움 비교 차트");
+    if (canvas) canvas.setAttribute("aria-label", "메이저 코인 비교 차트");
     return;
   }
-  if (canvas) canvas.setAttribute("aria-label", "비트코인 이더리움 비교 차트");
-  document.querySelector("#cryptoLegend").innerHTML = [
-    { label: "비트코인 기준 100", color: themeColor("--chart-line", "#e8eef5") },
-    { label: "이더리움 기준 100", color: themeColor("--blue", "#82a7e6") },
-  ].map(legendItem).join("");
+  if (canvas) canvas.setAttribute("aria-label", "메이저 코인 비교 차트");
+  const series = cryptoComparisonSeries(assets);
+  document.querySelector("#cryptoLegend").innerHTML = series
+    .map((item) => ({ label: `${item.label} 기준 100`, color: item.color }))
+    .map(legendItem)
+    .join("");
+  const primary = series[0] || { key: "btc" };
   drawLineChart(canvas, {
     height: 260,
     padding: { top: 42, right: 50, bottom: 38, left: 28 },
     points,
-    valueKey: "btc",
+    valueKey: primary.key,
     timeKey: "date",
-    extraSeries: [{ key: "eth", label: "이더리움", color: themeColor("--blue", "#82a7e6"), width: 2.1 }],
+    extraSeries: series.slice(1).map((item) => ({ key: item.key, label: item.label, color: item.color, width: 2.1 })),
   });
 }
 
 function drawCryptoDetailChart(canvas, asset, assets = []) {
-  const name = state.cryptoTab === "eth" ? "이더리움" : "비트코인";
+  const name = asset ? cryptoAssetName(asset) : CRYPTO_ASSET_META[state.cryptoTab]?.name || "코인";
   const rows = cryptoRowsForFrame(asset, state.cryptoFrame);
   const points = cryptoDetailPoints(rows, state.cryptoFrame, state.cryptoFrame === "1d" ? 180 : 160);
   if (!points.length) {
@@ -2007,19 +2842,57 @@ function drawCryptoDetailChart(canvas, asset, assets = []) {
   }
   if (canvas) canvas.setAttribute("aria-label", `${name} ${cryptoFrameLabel(state.cryptoFrame)} 신호 차트`);
   const signal = cryptoSignalPlan(asset, assets, { rows, frame: state.cryptoFrame });
+  const fibLevels = state.cryptoFrame === "1d" && signal.fibBox?.valid
+    ? [
+      { label: "F38", value: signal.fibBox.levels?.box382, color: "#b07a2a" },
+      { label: "F50", value: signal.fibBox.levels?.box50, color: "#9aa8b8" },
+      { label: "F61", value: signal.fibBox.levels?.box618, color: "#82a7e6" },
+      { label: "F77", value: signal.fibBox.levels?.top, color: "#d5a04e" },
+    ]
+    : [];
+  const pyramidLevels = signal.pyramidOrder?.active
+    ? [
+      { label: "+10%", value: signal.pyramidOrder.firstTriggerPrice, color: "#df7a72" },
+      { label: "77눌림", value: signal.pyramidOrder.pullbackPrice, color: "#d5a04e" },
+    ]
+    : [];
+  const stopLevels = state.cryptoFrame === "30m"
+    ? [
+      { label: "5이평", value: signal.thirtyMa5, color: themeColor("--green", "#5fc79b") },
+      { label: "전환선", value: signal.thirtyTenkan, color: "#b07a2a" },
+      { label: "기준선", value: signal.thirtyKijun, color: "#9aa8b8" },
+      { label: "바닥구름", value: signal.thirtyBottomCloudUpper, color: "#82a7e6" },
+      { label: "박스손절", value: signal.thirtyBoxStopLevel, color: "#df7a72" },
+    ]
+    : [];
   const levels = [
     { label: "진입", value: signal.entry, color: themeColor("--green", "#5fc79b") },
     { label: "손절", value: signal.stop, color: themeColor("--red", "#df7a72") },
     { label: "1차", value: signal.take1, color: themeColor("--blue", "#82a7e6") },
     { label: "2차", value: signal.take2, color: themeColor("--teal", "#4eb7b1") },
+    ...fibLevels,
+    ...pyramidLevels,
+    ...stopLevels,
   ].filter((level) => number(level.value) != null);
   const markerKind = signal.className === "candidate" ? "entry" : signal.className === "warning" ? "risk" : "watch";
+  const averageKey = state.cryptoFrame === "30m" ? "ma30" : "ma20";
+  const averageLabel = state.cryptoFrame === "30m" ? "30이평" : "20선";
   document.querySelector("#cryptoLegend").innerHTML = [
     { label: `${name} 종가`, color: themeColor("--chart-line", "#e8eef5") },
-    { label: "20선", color: themeColor("--green", "#5fc79b") },
-    { label: "60선", color: themeColor("--blue", "#82a7e6") },
-    { label: "20봉 고점", color: themeColor("--amber", "#d5a04e") },
-    { label: "55봉 고점", color: themeColor("--teal", "#4eb7b1") },
+    { label: "구름상단", color: themeColor("--amber", "#d5a04e") },
+    { label: "구름하단", color: themeColor("--blue", "#82a7e6") },
+    { label: "30일 박스", color: themeColor("--teal", "#4eb7b1") },
+    { label: averageLabel, color: themeColor("--green", "#5fc79b") },
+    ...(state.cryptoFrame === "30m"
+      ? [
+        { label: "5이평", color: themeColor("--green", "#5fc79b") },
+        { label: "전환선", color: "#b07a2a" },
+        { label: "기준선", color: "#9aa8b8" },
+      ]
+      : []),
+    ...(fibLevels.length ? [{ label: "피보박스", color: "#d5a04e" }] : []),
+    ...(pyramidLevels.length ? [{ label: "불타기주문", color: "#df7a72" }] : []),
+    ...(stopLevels.length ? [{ label: "최종손절선/박스", color: "#9aa8b8" }] : []),
   ].map(legendItem).join("");
   drawLineChart(canvas, {
     height: 260,
@@ -2029,10 +2902,15 @@ function drawCryptoDetailChart(canvas, asset, assets = []) {
     timeKey: "date",
     levels,
     extraSeries: [
-      { key: "ma20", label: "20선", color: themeColor("--green", "#5fc79b"), width: 1.7 },
-      { key: "ma60", label: "60선", color: themeColor("--blue", "#82a7e6"), width: 1.7, dash: [5, 4] },
-      { key: "high20", label: "20봉 고점", color: themeColor("--amber", "#d5a04e"), width: 1.2, dash: [4, 4] },
-      { key: "high55", label: "55봉 고점", color: themeColor("--teal", "#4eb7b1"), width: 1.2, dash: [2, 4] },
+      { key: "cloudUpper", label: "구름상단", color: themeColor("--amber", "#d5a04e"), width: 1.35, dash: [5, 4] },
+      { key: "cloudLower", label: "구름하단", color: themeColor("--blue", "#82a7e6"), width: 1.35, dash: [5, 4] },
+      { key: "boxHigh", label: "30일 박스", color: themeColor("--teal", "#4eb7b1"), width: 1.2, dash: [2, 4] },
+      ...(state.cryptoFrame === "30m" ? [
+        { key: "ma5", label: "5이평", color: themeColor("--green", "#5fc79b"), width: 1.25, dash: [3, 3] },
+        { key: "tenkan", label: "전환선", color: "#b07a2a", width: 1.35 },
+        { key: "kijun", label: "기준선", color: "#9aa8b8", width: 1.35 },
+      ] : []),
+      { key: averageKey, label: averageLabel, color: themeColor("--green", "#5fc79b"), width: 1.4 },
     ],
     tradeMarkers: [
       {
@@ -2101,41 +2979,77 @@ function assetTrendPoints(instrument, selectedDate, limit = 180) {
 }
 
 function cryptoDetailPoints(rows, frame = state.cryptoFrame, limit = 160) {
-  const filtered = (Array.isArray(rows) ? rows : [])
-    .filter((row) => row?.date && (!state.selectedDate || row.date <= state.selectedDate) && number(row.close) != null)
-    .slice(-limit);
+  const source = cryptoVisibleRows(rows, state.selectedDate);
+  const start = Math.max(0, source.length - limit);
+  const filtered = source.slice(start);
   const closes = [];
   const highs = [];
-  return filtered.map((row) => {
+  const boxWindow = cryptoBoxWindowForFrame(frame);
+  return filtered.map((row, offset) => {
+    const sourceIndex = start + offset;
     const close = number(row.close);
     const high = number(row.high);
     closes.push(close);
     highs.push(high);
+    const cloud = ichimokuCloudAt(source, sourceIndex);
     return {
       date: frame === "1d" ? shortDate(row.date) : `${shortDate(row.date)} ${row.time || ""}`.trim(),
       close,
+      ma5: averageLast(closes, 5),
       ma20: averageLast(closes, 20),
+      ma30: averageLast(closes, 30),
       ma60: averageLast(closes, 60),
+      tenkan: ichimokuMid(source, sourceIndex, 9),
+      kijun: ichimokuMid(source, sourceIndex, 26),
       high20: maxLast(highs, 20),
       high55: maxLast(highs, 55),
+      cloudUpper: cloud.upper,
+      cloudLower: cloud.lower,
+      boxHigh: rollingExtremeAt(source, sourceIndex, boxWindow, "high", "max", true),
     };
   });
 }
 
+function cryptoBoxWindowForFrame(frame = state.cryptoFrame) {
+  return {
+    "30m": 1440,
+    "60m": 720,
+    "240m": 180,
+    "1d": 30,
+  }[frame] || 180;
+}
+
 function cryptoComparisonPoints(assets, selectedDate, limit = 180) {
-  const byLabel = Object.fromEntries((assets || []).map((asset) => [String(asset.label || "").toUpperCase(), asset]));
-  const btcRows = assetRowsByDate(byLabel.BTC, selectedDate);
-  const ethRows = assetRowsByDate(byLabel.ETH, selectedDate);
-  const commonDates = [...btcRows.keys()].filter((date) => ethRows.has(date)).sort().slice(-limit);
+  const series = cryptoComparisonSeries(assets);
+  const rowMaps = series.map((item) => ({ ...item, rows: assetRowsByDate(item.asset, selectedDate) }));
+  const commonDates = rowMaps
+    .reduce((dates, item) => dates.filter((date) => item.rows.has(date)), rowMaps[0] ? [...rowMaps[0].rows.keys()] : [])
+    .sort()
+    .slice(-limit);
   if (!commonDates.length) return [];
-  const firstBtc = number(btcRows.get(commonDates[0])?.close);
-  const firstEth = number(ethRows.get(commonDates[0])?.close);
-  if (!firstBtc || !firstEth) return [];
-  return commonDates.map((date) => ({
-    date: shortDate(date),
-    btc: (number(btcRows.get(date)?.close) / firstBtc) * 100,
-    eth: (number(ethRows.get(date)?.close) / firstEth) * 100,
-  }));
+  const bases = Object.fromEntries(rowMaps.map((item) => [item.key, number(item.rows.get(commonDates[0])?.close)]));
+  if (!rowMaps.every((item) => bases[item.key])) return [];
+  return commonDates.map((date) => {
+    const point = { date: shortDate(date) };
+    rowMaps.forEach((item) => {
+      point[item.key] = (number(item.rows.get(date)?.close) / bases[item.key]) * 100;
+    });
+    return point;
+  });
+}
+
+function cryptoComparisonSeries(assets = []) {
+  return (Array.isArray(assets) ? assets : [])
+    .filter((asset) => Array.isArray(asset?.history) && asset.history.length)
+    .map((asset, index) => {
+      const colorSpec = CRYPTO_COMPARE_COLORS[index % CRYPTO_COMPARE_COLORS.length];
+      return {
+        asset,
+        key: cryptoAssetKey(asset),
+        label: asset.label || cryptoAssetName(asset),
+        color: themeColor(colorSpec[0], colorSpec[1]),
+      };
+    });
 }
 
 function assetRowsByDate(instrument, selectedDate) {
@@ -2430,7 +3344,7 @@ function searchSignalHint(item) {
     소프트웨어: "QQQ와 성장주 수급 확인",
     "AI 소프트웨어": "AI 테마와 매출 성장 확인",
     결제: "소비/금리 흐름 확인",
-    "코인 관련": "BTC/ETH 흐름과 같이 확인",
+    "코인 관련": "메이저 코인 흐름과 같이 확인",
     "증권 플랫폼": "거래대금과 위험선호 확인",
     핀테크: "금리와 성장주 수급 확인",
     "시장 ETF": "시장 방향 기준",
@@ -2721,19 +3635,37 @@ function usStockItem(asset) {
   `;
 }
 
-function cryptoItem(asset) {
+function cryptoItem(asset, options = {}) {
   const summary = asset.summary || {};
   const selected = asset.selected || asset.latest || {};
-  const type = signalClass(summary.signal || "watch");
+  const allAssets = state.assetArchive?.crypto?.assets || [];
+  const plan = cryptoSignalPlan(asset, allAssets, options);
+  const type = signalClass(plan.className || summary.signal || "watch");
   return `
     <article class="asset-item ${escapeAttr(type)}">
       <div class="asset-main">
-        <strong>${escapeHtml(asset.label || asset.symbol || "코인")}</strong>
-        <small>${escapeHtml(summary.message || "BTC/ETH 기본 감시")} · ${escapeHtml(selected.date || "-")}</small>
+        <strong>${escapeHtml(cryptoAssetName(asset))}</strong>
+        <small>${escapeHtml(plan.message || summary.message || "코인 기본 감시")} · ${escapeHtml(plan.signalTimeText || cryptoSignalTimeText(selected))}</small>
       </div>
       <div class="asset-side">
-        <strong>${formatNum(selected.close, asset.symbol?.includes("BTC") || asset.symbol?.includes("ETH") ? 2 : 0)}</strong>
-        <small>${formatPercent(summary.ret_21d)} · ${escapeHtml(summary.label || "관찰")}</small>
+        <strong>${formatNum(selected.close, priceDigits(selected.close))}</strong>
+        <small>${escapeHtml(plan.portfolioText || formatPercent(summary.ret_21d))} · ${escapeHtml(plan.label || summary.label || "관찰")}</small>
+      </div>
+    </article>
+  `;
+}
+
+function cryptoCashItem(asset) {
+  const selected = asset.selected || asset.latest || {};
+  return `
+    <article class="asset-item neutral">
+      <div class="asset-main">
+        <strong>${escapeHtml(cryptoAssetName(asset))}</strong>
+        <small>USDT는 현금과 합산하는 현금성 자산입니다. 코인 현금이 부족하면 필요한 금액만큼 시장가 청산해 진입 재원으로 봅니다.</small>
+      </div>
+      <div class="asset-side">
+        <strong>${formatNum(selected.close, priceDigits(selected.close))}</strong>
+        <small>현금성 · ${escapeHtml(cryptoSignalTimeText(selected))}</small>
       </div>
     </article>
   `;
@@ -2800,7 +3732,19 @@ function fallbackAssetArchive() {
     etf: { summary: { signal: "watch", label: "대기", message: "ETF 데이터를 기다리고 있습니다." } },
     stocks: { index_filter: { signal: "neutral", label: "지수 대기", message: "시장 데이터를 기다리고 있습니다." } },
     us_stocks: { assets: [], top: [], summary: { signal: "neutral", label: "미장 대기", message: "미장 데이터를 기다리고 있습니다." } },
-    crypto: { assets: [], summary: { signal: "neutral", label: "코인 대기", message: "BTC/ETH 데이터를 기다리고 있습니다." } },
+    crypto: {
+      assets: [],
+      exception_assets: [],
+      cash_assets: [],
+      summary: { signal: "neutral", label: "코인 대기", message: "메이저 코인 데이터를 기다리고 있습니다." },
+      allocation_policy: {
+        approved_scope_symbols: ["BTC", "ETH", "XRP", "XLM"],
+        exception_pool_cap_pct: 5,
+        exception_symbol_cap_pct: 2.5,
+        exception_entry_slot_pct: 65,
+        cash_like_symbols: ["USDT"],
+      },
+    },
   };
 }
 
@@ -3898,14 +4842,71 @@ function maybeFireAlert(snapshot) {
   fireAlert(signal);
 }
 
+async function maybeRefreshLiveAssetArchive() {
+  if (!isLiveDate()) return;
+  if (!state.alertsEnabled && state.activeTab !== "crypto") return;
+  const now = Date.now();
+  if (now - (state.lastAssetArchiveRefreshAt || 0) < ASSET_ARCHIVE_POLL_MS) return;
+  await refreshAssetArchive(state.selectedDate);
+  renderAssetTabs();
+}
+
+function maybeFireCryptoAlerts() {
+  if (!state.alertsEnabled) return;
+  if (!isLiveDate()) return;
+  const crypto = state.assetArchive?.crypto || {};
+  const normalAssets = crypto.assets || [];
+  const exceptionAssets = crypto.exception_assets || [];
+  const plans = [
+    ...normalAssets.map((asset) => cryptoSignalPlan(asset, normalAssets)),
+    ...exceptionAssets.map((asset) => cryptoSignalPlan(asset, normalAssets, { exceptionMode: true })),
+  ];
+  const alertPlan = plans.find((plan) => {
+    if (plan.trackingAlert) return true;
+    if (plan.trackingNotice) return true;
+    if (plan.pyramidMarketTrigger) return true;
+    return plan.assetType === "exception" && plan.exceptionEntryStrong && plan.slotPct >= CRYPTO_SLOT_PCT.base;
+  });
+  if (!alertPlan) return;
+  const alertKind = alertPlan.trackingAlert
+    ? alertPlan.trackingRule
+    : alertPlan.trackingNotice ? alertPlan.trackingRule : alertPlan.pyramidMarketTrigger ? "pyramid_market" : "exception_entry";
+  const key = `crypto:${alertPlan.key}:${alertKind}:${alertPlan.trackingTime || alertPlan.close || ""}`;
+  if (state.lastCryptoAlertKey === key) return;
+  state.lastCryptoAlertKey = key;
+  fireAlert({
+    type: alertPlan.trackingAlert ? "sell" : alertPlan.trackingNotice ? "warning" : "candidate",
+    scope: "crypto",
+    title: alertPlan.trackingAlert
+      ? `${alertPlan.name} ${alertPlan.trackingRule === "box_final_stop" ? "박스손절" : "최종손절"}`
+      : alertPlan.trackingNotice
+        ? `${alertPlan.name} 전환선 알림`
+      : alertPlan.pyramidMarketTrigger
+        ? `${alertPlan.name} ${alertPlan.pyramidOrder?.pullbackTrigger ? "불타기 77% 눌림" : "불타기 시장가"}`
+        : `${alertPlan.name} 예외 진입 후보`,
+    label: alertPlan.label,
+    message: alertPlan.trackingAlert
+      ? `${alertPlan.name}: ${alertPlan.thirtySubText}. 최종 손절 기준을 확인하세요.`
+      : alertPlan.trackingNotice
+        ? `${alertPlan.name}: ${alertPlan.thirtySubText}. 알림만 발송하며 즉시 비중축소 사유는 아닙니다.`
+      : alertPlan.pyramidMarketTrigger
+        ? `${alertPlan.name}: ${alertPlan.pyramidOrderSubText}. 추가 물량 중 ${formatNum(alertPlan.pyramidOrder?.marketSlotPct, 1)}% 대응 신호입니다.`
+        : `${alertPlan.name}: 정상 감시군 밖 예외 신호입니다. 예외 한도 ${alertPlan.capText}, 투입 후보 ${alertPlan.portfolioText}.`,
+    rule: alertPlan.trackingAlert
+      ? `CRYPTO_30M_EXIT_${alertPlan.key}`
+      : alertPlan.trackingNotice ? `CRYPTO_TENKAN_NOTICE_${alertPlan.key}` : alertPlan.pyramidMarketTrigger ? `CRYPTO_PYRAMID_MARKET_${alertPlan.key}` : `CRYPTO_EXCEPTION_ENTRY_${alertPlan.key}`,
+  });
+}
+
 async function fireAlert(signal, force = false) {
   if (!force && !state.alertsEnabled) return;
   playTone(signal.type);
   vibrate(signal.type);
 
   if (!("Notification" in window) || Notification.permission !== "granted") return;
-  const title = `옵션 감시: ${signal.title || signal.label || "신호"}`;
-  const body = signal.message || "KOSPI200 5분봉 신호를 확인하세요.";
+  const prefix = signal.scope === "crypto" ? "코인 감시" : "옵션 감시";
+  const title = `${prefix}: ${signal.title || signal.label || "신호"}`;
+  const body = signal.message || (signal.scope === "crypto" ? "코인 신호를 확인하세요." : "KOSPI200 5분봉 신호를 확인하세요.");
   try {
     if (state.serviceWorkerRegistration) {
       await state.serviceWorkerRegistration.showNotification(title, {
@@ -4758,6 +5759,16 @@ function formatWon(value) {
   const parsed = number(value);
   if (parsed == null) return "-";
   return `${parsed.toLocaleString("ko-KR")}원`;
+}
+
+function formatCryptoTradeValue(value) {
+  const parsed = number(value);
+  if (parsed == null) return "-";
+  const abs = Math.abs(parsed);
+  if (abs >= 1_000_000_000) return `${formatNum(parsed / 1_000_000_000, 1)}B`;
+  if (abs >= 1_000_000) return `${formatNum(parsed / 1_000_000, 1)}M`;
+  if (abs >= 1_000) return `${formatNum(parsed / 1_000, 1)}K`;
+  return formatNum(parsed, 0);
 }
 
 function escapeHtml(value) {

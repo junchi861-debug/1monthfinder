@@ -305,7 +305,7 @@ p {
 
 .sub-tab-row {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(4.7rem, 1fr));
   gap: 0.36rem;
 }
 
@@ -331,6 +331,10 @@ p {
   border-color: rgba(130, 167, 230, 0.62);
   background: rgba(130, 167, 230, 0.16);
   color: #bfd4f5;
+}
+
+.crypto-frame-row {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
 #signalTitle {
@@ -894,7 +898,7 @@ canvas {
 
 .crypto-signal-grid {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(4.8rem, 1fr));
   gap: 0.34rem;
 }
 

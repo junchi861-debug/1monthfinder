@@ -18,7 +18,7 @@
     <link rel="icon" href="icons/icon.svg" type="image/svg+xml" />
     <link rel="icon" href="icons/icon-192.png" sizes="192x192" type="image/png" />
     <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
-    <link rel="stylesheet" href="styles.css?v=20260530-us-signals-1" />
+    <link rel="stylesheet" href="styles.css?v=20260530-crypto-audit-3" />
   </head>
   <body>
     <main class="app-shell" aria-live="polite">
@@ -228,23 +228,27 @@
             <span id="cryptoDateText">-</span>
           </div>
           <h1 id="cryptoTitle">코인</h1>
-          <p id="cryptoMessage">BTC/ETH 기본 감시 데이터를 불러오는 중입니다.</p>
+          <p id="cryptoMessage">메이저 코인 감시 데이터를 불러오는 중입니다.</p>
           <div class="sub-tab-row" id="cryptoSubTabs" aria-label="코인 상세 탭">
             <button type="button" data-crypto-tab="all">전체</button>
             <button type="button" data-crypto-tab="btc">비트코인</button>
             <button type="button" data-crypto-tab="eth">이더리움</button>
+            <button type="button" data-crypto-tab="xrp">엑스알피</button>
+            <button type="button" data-crypto-tab="xlm">스텔라루멘</button>
+            <button type="button" data-crypto-tab="id">스페이스ID</button>
           </div>
           <div class="sub-tab-row crypto-frame-row" id="cryptoTimeframeTabs" aria-label="코인 차트 주기" hidden>
-            <button type="button" data-crypto-frame="240m">240분</button>
+            <button type="button" data-crypto-frame="30m">30분</button>
             <button type="button" data-crypto-frame="60m">60분</button>
+            <button type="button" data-crypto-frame="240m">240분</button>
             <button type="button" data-crypto-frame="1d">일봉</button>
           </div>
           <div class="price-grid" id="cryptoMetricGrid"></div>
           <div class="chart-frame asset-chart-frame">
-            <canvas id="cryptoChart" height="260" aria-label="비트코인 이더리움 비교 차트"></canvas>
+            <canvas id="cryptoChart" height="260" aria-label="메이저 코인 비교 차트"></canvas>
             <div class="chart-empty" id="cryptoChartEmpty" hidden>
               <strong>코인 차트 대기</strong>
-              <span>비트코인과 이더리움 일봉 데이터를 확인하는 중입니다.</span>
+              <span>메이저 코인 일봉 데이터를 확인하는 중입니다.</span>
             </div>
           </div>
           <div class="chart-legend" id="cryptoLegend"></div>
@@ -393,6 +397,6 @@
       </section>
     </div>
 
-    <script src="script.js?v=20260530-us-signals-1"></script>
+    <script src="script.js?v=20260530-crypto-audit-3"></script>
   </body>
 </html>

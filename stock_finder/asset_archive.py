@@ -18,13 +18,62 @@ INTRADAY_CACHE_SECONDS = 5 * 60
 US_STOCK_CACHE_SECONDS = 15 * 60
 MIN_INDEX_HISTORY_DAYS = 20
 CRYPTO_INTRADAY_DAYS = RETENTION_DAYS + 30
-CRYPTO_INTRADAY_RANGE = "6mo"
-CRYPTO_INTRADAY_INTERVAL = "1h"
+CRYPTO_INTRADAY_RANGE = "60d"
+CRYPTO_INTRADAY_INTERVAL = "30m"
+CRYPTO_SYMBOL_KEYS = ("btc", "eth", "xrp", "xlm")
+CRYPTO_EXCEPTION_SYMBOL_KEYS = ("id", "doge", "trx", "sol")
+CRYPTO_CASH_SYMBOL_KEYS = ("usdt",)
+CRYPTO_PROFILES = {
+    "btc": {"name": "비트코인", "asset_type": "major", "type_label": "메이저", "portfolio_cap_pct": 70, "approved_scope": True},
+    "eth": {"name": "이더리움", "asset_type": "major", "type_label": "메이저", "portfolio_cap_pct": 70, "approved_scope": True},
+    "xrp": {"name": "엑스알피", "asset_type": "alt", "type_label": "알트", "portfolio_cap_pct": 30, "approved_scope": True},
+    "xlm": {"name": "스텔라루멘", "asset_type": "alt", "type_label": "알트", "portfolio_cap_pct": 30, "approved_scope": True},
+    "id": {
+        "name": "스페이스아이디",
+        "asset_type": "exception",
+        "type_label": "예외",
+        "portfolio_cap_pct": 2.5,
+        "exception_pool_cap_pct": 5,
+        "approved_scope": False,
+    },
+    "doge": {
+        "name": "도지코인",
+        "asset_type": "exception",
+        "type_label": "예외",
+        "portfolio_cap_pct": 2.5,
+        "exception_pool_cap_pct": 5,
+        "approved_scope": False,
+    },
+    "trx": {
+        "name": "트론",
+        "asset_type": "exception",
+        "type_label": "예외",
+        "portfolio_cap_pct": 2.5,
+        "exception_pool_cap_pct": 5,
+        "approved_scope": False,
+    },
+    "sol": {
+        "name": "솔라나",
+        "asset_type": "exception",
+        "type_label": "예외",
+        "portfolio_cap_pct": 2.5,
+        "exception_pool_cap_pct": 5,
+        "approved_scope": False,
+    },
+    "usdt": {"name": "테더", "asset_type": "cash", "type_label": "현금성", "portfolio_cap_pct": None, "approved_scope": False},
+}
 HISTORY_SYMBOLS = {
     "kospi200": ("KOSPI200", "KOSPI200.KS"),
     "etf": ("KODEX200", "069500.KS"),
     "btc": ("BTC", "BTC-USD"),
     "eth": ("ETH", "ETH-USD"),
+    "xrp": ("XRP", "XRP-USD"),
+    "xlm": ("XLM", "XLM-USD"),
+    "id": ("ID", "ID-USD"),
+    "doge": ("DOGE", "DOGE-USD"),
+    "trx": ("TRX", "TRX-USD"),
+    "sol": ("SOL", "SOL-USD"),
+    "usdt": ("USDT", "USDT-USD"),
 }
 US_STOCK_SYMBOLS = [
     ("SPY", "SPDR S&P 500 ETF", "시장 ETF"),
@@ -66,10 +115,9 @@ def build_asset_archive_payload(date: str | None = None) -> dict[str, Any]:
     options = build_options_replay_payload(date=selected_date, refresh=False)
     kospi200 = _instrument_payload("kospi200", selected_date, histories)
     etf = _instrument_payload("etf", selected_date, histories)
-    btc = _instrument_payload("btc", selected_date, histories)
-    eth = _instrument_payload("eth", selected_date, histories)
-    btc["intraday"] = _instrument_intraday_payload("btc", selected_date, crypto_intraday)
-    eth["intraday"] = _instrument_intraday_payload("eth", selected_date, crypto_intraday)
+    crypto_assets = [_crypto_asset_payload(key, selected_date, histories, crypto_intraday) for key in CRYPTO_SYMBOL_KEYS]
+    crypto_exception_assets = [_crypto_asset_payload(key, selected_date, histories, crypto_intraday) for key in CRYPTO_EXCEPTION_SYMBOL_KEYS]
+    crypto_cash_assets = [_crypto_asset_payload(key, selected_date, histories, {}) for key in CRYPTO_CASH_SYMBOL_KEYS]
     market_report = _read_market_report()
     index_proxy = _index_proxy(kospi200, etf)
 
@@ -102,8 +150,24 @@ def build_asset_archive_payload(date: str | None = None) -> dict[str, Any]:
         "stocks": _stocks_payload(market_report, index_proxy),
         "us_stocks": _us_stocks_payload(selected_date, us_stock_histories),
         "crypto": {
-            "assets": [btc, eth],
-            "summary": _crypto_summary([btc, eth]),
+            "assets": crypto_assets,
+            "exception_assets": crypto_exception_assets,
+            "cash_assets": crypto_cash_assets,
+            "summary": _crypto_summary(crypto_assets),
+            "allocation_policy": {
+                "approved_scope_symbols": [HISTORY_SYMBOLS[key][0] for key in CRYPTO_SYMBOL_KEYS],
+                "major_cap_pct": 70,
+                "alt_cap_pct": 30,
+                "exception_pool_cap_pct": 5,
+                "exception_symbol_cap_pct": 2.5,
+                "exception_entry_slot_pct": 65,
+                "cash_like_symbols": ["USDT"],
+                "scout_pct": 2,
+                "starter_pct": 30,
+                "base_pct": 65,
+                "full_pct": 100,
+            },
+            "archive_note": "코인은 BTC/ETH/XRP/XLM만 정상 운용 감시군으로 보고, 그 밖의 급변 코인은 예외 풀 5% 안에서 종목당 2.5% 한도로만 표시합니다. USDT는 현금성 자산으로 분류합니다.",
         },
         "market": {
             "kospi200": kospi200,
@@ -137,7 +201,7 @@ def _cached_crypto_intraday() -> dict[str, dict[str, Any]]:
 
     cutoff = (datetime.now(KST).date() - timedelta(days=CRYPTO_INTRADAY_DAYS)).isoformat()
     histories: dict[str, dict[str, Any]] = {}
-    for key in ("btc", "eth"):
+    for key in (*CRYPTO_SYMBOL_KEYS, *CRYPTO_EXCEPTION_SYMBOL_KEYS):
         label, symbol = HISTORY_SYMBOLS[key]
         try:
             candles = fetch_symbol_candles(symbol, range_value=CRYPTO_INTRADAY_RANGE, interval=CRYPTO_INTRADAY_INTERVAL)
@@ -146,7 +210,7 @@ def _cached_crypto_intraday() -> dict[str, dict[str, Any]]:
                 "ok": True,
                 "label": label,
                 "symbol": symbol,
-                "interval": "60분",
+                "interval": "30분",
                 "source_interval": CRYPTO_INTRADAY_INTERVAL,
                 "preferred_interval": "240분",
                 "candles": candles,
@@ -156,7 +220,7 @@ def _cached_crypto_intraday() -> dict[str, dict[str, Any]]:
                 "ok": False,
                 "label": label,
                 "symbol": symbol,
-                "interval": "60분",
+                "interval": "30분",
                 "source_interval": CRYPTO_INTRADAY_INTERVAL,
                 "preferred_interval": "240분",
                 "error": str(exc),
@@ -226,6 +290,27 @@ def _instrument_payload(key: str, selected_date: str | None, histories: dict[str
     }
 
 
+def _crypto_asset_payload(
+    key: str,
+    selected_date: str | None,
+    histories: dict[str, dict[str, Any]],
+    intraday_histories: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    asset = _instrument_payload(key, selected_date, histories)
+    asset["profile"] = {
+        **(CRYPTO_PROFILES.get(key) or {"asset_type": "alt", "type_label": "알트", "portfolio_cap_pct": 30}),
+        "key": key,
+        "slot_pct_labels": {
+            "scout": "보초병 2%",
+            "starter": "기초물량 30%",
+            "base": "기본물량 65%",
+            "full": "불타기 100%",
+        },
+    }
+    asset["intraday"] = _instrument_intraday_payload(key, selected_date, intraday_histories)
+    return asset
+
+
 def _instrument_intraday_payload(key: str, selected_date: str | None, histories: dict[str, dict[str, Any]]) -> dict[str, Any]:
     source = histories.get(key) or {}
     candles = source.get("candles") or []
@@ -236,9 +321,9 @@ def _instrument_intraday_payload(key: str, selected_date: str | None, histories:
         "ok": bool(source.get("ok")) and bool(rows),
         "label": source.get("label") or key,
         "symbol": source.get("symbol") or "",
-        "interval": source.get("interval") or "60분",
-        "source_interval": source.get("source_interval") or CRYPTO_INTRADAY_INTERVAL,
-        "preferred_interval": source.get("preferred_interval") or "240분",
+            "interval": source.get("interval") or "30분",
+            "source_interval": source.get("source_interval") or CRYPTO_INTRADAY_INTERVAL,
+            "preferred_interval": source.get("preferred_interval") or "240분",
         "error": source.get("error"),
         "selected": selected,
         "latest": rows[-1] if rows else None,
@@ -580,14 +665,14 @@ def _index_filter(kospi200: dict[str, Any]) -> dict[str, Any]:
 def _crypto_summary(assets: list[dict[str, Any]]) -> dict[str, Any]:
     usable = [asset for asset in assets if asset.get("ok")]
     if not usable:
-        return {"label": "자료 없음", "message": "BTC/ETH 데이터를 아직 가져오지 못했습니다.", "signal": "neutral"}
+        return {"label": "자료 없음", "message": "메이저 코인 데이터를 아직 가져오지 못했습니다.", "signal": "neutral"}
     strong = [asset for asset in usable if (asset.get("summary") or {}).get("signal") == "candidate"]
     weak = [asset for asset in usable if (asset.get("summary") or {}).get("signal") == "warning"]
     if strong and not weak:
-        return {"label": "코인 강세", "message": "BTC/ETH 중 상승 우위 신호가 살아 있습니다.", "signal": "candidate"}
+        return {"label": "코인 강세", "message": "메이저 감시군 안에서 상승 우위 신호가 살아 있습니다.", "signal": "candidate"}
     if weak and len(weak) == len(usable):
-        return {"label": "코인 보수", "message": "BTC/ETH 모두 추세가 약해 관찰 우선입니다.", "signal": "warning"}
-    return {"label": "코인 관찰", "message": "BTC/ETH 흐름이 엇갈리거나 중립권입니다.", "signal": "watch"}
+        return {"label": "코인 보수", "message": "메이저 감시군 전반의 추세가 약해 관찰 우선입니다.", "signal": "warning"}
+    return {"label": "코인 관찰", "message": "메이저 감시군 흐름이 엇갈리거나 중립권입니다.", "signal": "watch"}
 
 
 def _row_for_date(rows: list[dict[str, Any]], selected_date: str | None) -> dict[str, Any] | None:
