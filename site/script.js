@@ -1969,9 +1969,9 @@ function cryptoThirtyMinuteEntryAnalysis(rows = [], selectedDate = state.selecte
   const boxBreak = close != null && boxHigh != null && close > boxHigh;
   const strong = boxBreak && position === "above" && chikou === "bullish";
   if (strong) {
-    return { label: "30분 박스돌파", subText: `구름·후행·${CRYPTO_INTRADAY_BOX_STOP_BARS}봉 박스고점`, position, chikou, boxBreak, boxHigh, strong, time: latest.time || latest.datetime || latest.date || "-" };
+    return { label: "30분 박스돌파", subText: `구름·후행·${CRYPTO_INTRADAY_BOX_STOP_BARS}봉 박스고점, 빠른진입`, position, chikou, boxBreak, boxHigh, strong, time: latest.time || latest.datetime || latest.date || "-" };
   }
-  return { label: "30분 대기", subText: boxHigh != null ? `${CRYPTO_INTRADAY_BOX_STOP_BARS}봉 박스고점 ${formatNum(boxHigh, priceDigits(boxHigh))}` : "박스 산출 대기", position, chikou, boxBreak, boxHigh, strong, time: latest.time || latest.datetime || latest.date || "-" };
+  return { label: "30분 대기", subText: boxHigh != null ? `${CRYPTO_INTRADAY_BOX_STOP_BARS}봉 박스고점 ${formatNum(boxHigh, priceDigits(boxHigh))}, 빠른진입 기준` : "박스 산출 대기", position, chikou, boxBreak, boxHigh, strong, time: latest.time || latest.datetime || latest.date || "-" };
 }
 
 function cryptoThirtyMinuteAnalysis(rows = [], selectedDate = state.selectedDate, options = {}) {
@@ -2037,12 +2037,12 @@ function cryptoThirtyMinuteAnalysis(rows = [], selectedDate = state.selectedDate
 
   if (forcedReduce.triggered) {
     return {
-      label: "강제축소",
-      subText: `최근 ${CRYPTO_THIRTY_MINUTE_RISK_BARS}봉 고점 ${formatNum(forcedReduce.recentHigh, priceDigits(forcedReduce.recentHigh))} 대비 -${formatNum(forcedReduce.drawdownPct, 1)}%, ${formatNum(forcedReduce.thresholdPct, 0)}% 고점컷`,
-      status: "forced_reduce",
+      label: "고점컷 점검",
+      subText: `최근 ${CRYPTO_THIRTY_MINUTE_RISK_BARS}봉 고점 ${formatNum(forcedReduce.recentHigh, priceDigits(forcedReduce.recentHigh))} 대비 -${formatNum(forcedReduce.drawdownPct, 1)}%, ${formatNum(forcedReduce.thresholdPct, 0)}% 축소 검토`,
+      status: "forced_reduce_watch",
       alert: true,
-      alertOnly: false,
-      finalStop: true,
+      alertOnly: true,
+      finalStop: false,
       ma5,
       ma30,
       tenkan,
@@ -2057,7 +2057,7 @@ function cryptoThirtyMinuteAnalysis(rows = [], selectedDate = state.selectedDate
       position,
       chikou,
       time,
-      targetSlotPct: profile.assetType === "exception" ? CRYPTO_SLOT_PCT.base : CRYPTO_SLOT_PCT.starter,
+      targetSlotPct: null,
     };
   }
 
@@ -2563,17 +2563,18 @@ function cryptoSignalPlan(asset, allAssets = [], options = {}) {
   const className = trackingExit ? "sell" : trackingNotice ? "warning" : allocation.className;
   const trackingExitLabel = thirtyMinute.status === "box_final_stop"
     ? "박스손절"
-    : thirtyMinute.status === "forced_reduce" ? "강제축소" : "최종손절";
+    : "최종손절";
   const label = trackingExit ? trackingExitLabel : trackingNotice ? thirtyMinute.label : allocation.label;
   const stopActionText = thirtyMinute.status === "box_final_stop"
     ? "예외 포지션 최종손절 기준입니다."
-    : thirtyMinute.status === "forced_reduce"
-      ? "늦은 진입 보호용 고점 대비 강제 비중축소 기준입니다. 바로 전량 손절이 아니라 사용자 확인 후 축소 모드로 봅니다."
-      : "일단 기초물량 30%까지 축소하고, 최종 축소폭은 사용자와 확인합니다.";
+    : "일단 기초물량 30%까지 축소하고, 최종 축소폭은 사용자와 확인합니다.";
+  const trackingNoticeText = thirtyMinute.status === "forced_reduce_watch"
+    ? `${cryptoAssetName(asset)} 30분봉 ${thirtyMinute.label}: ${thirtyMinute.subText}. 늦은 진입 보호용 알림입니다. 즉시 최종손절 확정이 아니라 비중축소 여부와 다음 대응을 판단할 구간입니다.`
+    : `${cryptoAssetName(asset)} 30분봉 ${thirtyMinute.label}: ${thirtyMinute.subText}. 전환선이 너무 가까운 구간이라 즉시 비중축소 사유는 아니고 리스크관리 알림입니다.`;
   let message = trackingExit
     ? `${cryptoAssetName(asset)} 30분봉 ${trackingExitLabel} 기준: ${thirtyMinute.subText}. ${stopActionText}`
     : trackingNotice
-      ? `${cryptoAssetName(asset)} 30분봉 ${thirtyMinute.label}: ${thirtyMinute.subText}. 전환선이 너무 가까운 구간이라 즉시 비중축소 사유는 아니고 리스크관리 알림입니다.`
+      ? trackingNoticeText
     : allocation.message;
   if (!trackingExit && fibBox.valid) {
     if (addPyramidCandidate) {
@@ -4949,23 +4950,25 @@ function maybeFireCryptoAlerts() {
     type: alertPlan.trackingAlert ? "sell" : alertPlan.trackingNotice ? "warning" : "candidate",
     scope: "crypto",
     title: alertPlan.trackingAlert
-      ? `${alertPlan.name} ${alertPlan.trackingRule === "box_final_stop" ? "박스손절" : alertPlan.trackingRule === "forced_reduce" ? "강제축소" : "최종손절"}`
+      ? `${alertPlan.name} ${alertPlan.trackingRule === "box_final_stop" ? "박스손절" : "최종손절"}`
       : alertPlan.trackingNotice
-        ? `${alertPlan.name} 전환선 알림`
+        ? `${alertPlan.name} ${alertPlan.trackingRule === "forced_reduce_watch" ? "고점컷 알림" : "전환선 알림"}`
       : alertPlan.pyramidMarketTrigger
         ? `${alertPlan.name} ${alertPlan.pyramidOrder?.pullbackTrigger ? "불타기 77% 눌림" : "불타기 시장가"}`
         : `${alertPlan.name} 예외 진입 후보`,
     label: alertPlan.label,
     message: alertPlan.trackingAlert
-      ? `${alertPlan.name}: ${alertPlan.thirtySubText}. ${alertPlan.trackingRule === "forced_reduce" ? "고점 대비 강제 비중축소 모드입니다." : "최종 손절 기준을 확인하세요."}`
+      ? `${alertPlan.name}: ${alertPlan.thirtySubText}. 최종 손절 기준을 확인하세요.`
       : alertPlan.trackingNotice
-        ? `${alertPlan.name}: ${alertPlan.thirtySubText}. 알림만 발송하며 즉시 비중축소 사유는 아닙니다.`
+        ? `${alertPlan.name}: ${alertPlan.thirtySubText}. ${alertPlan.trackingRule === "forced_reduce_watch" ? "비중축소 여부를 판단할 구간이며 계속 추적합니다." : "알림만 발송하며 즉시 비중축소 사유는 아닙니다."}`
       : alertPlan.pyramidMarketTrigger
         ? `${alertPlan.name}: ${alertPlan.pyramidOrderSubText}. 추가 물량 중 ${formatNum(alertPlan.pyramidOrder?.marketSlotPct, 1)}% 대응 신호입니다.`
         : `${alertPlan.name}: 정상 감시군 밖 예외 신호입니다. 예외 한도 ${alertPlan.capText}, 투입 후보 ${alertPlan.portfolioText}.`,
     rule: alertPlan.trackingAlert
       ? `CRYPTO_30M_EXIT_${alertPlan.key}`
-      : alertPlan.trackingNotice ? `CRYPTO_TENKAN_NOTICE_${alertPlan.key}` : alertPlan.pyramidMarketTrigger ? `CRYPTO_PYRAMID_MARKET_${alertPlan.key}` : `CRYPTO_EXCEPTION_ENTRY_${alertPlan.key}`,
+      : alertPlan.trackingNotice
+        ? `${alertPlan.trackingRule === "forced_reduce_watch" ? "CRYPTO_DRAWDOWN_NOTICE" : "CRYPTO_TENKAN_NOTICE"}_${alertPlan.key}`
+        : alertPlan.pyramidMarketTrigger ? `CRYPTO_PYRAMID_MARKET_${alertPlan.key}` : `CRYPTO_EXCEPTION_ENTRY_${alertPlan.key}`,
   });
 }
 
