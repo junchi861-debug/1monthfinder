@@ -21,7 +21,7 @@ CRYPTO_INTRADAY_DAYS = RETENTION_DAYS + 30
 CRYPTO_INTRADAY_RANGE = "60d"
 CRYPTO_INTRADAY_INTERVAL = "30m"
 CRYPTO_SYMBOL_KEYS = ("btc", "eth", "xrp", "xlm")
-CRYPTO_EXCEPTION_SYMBOL_KEYS = ("id", "doge", "trx", "sol")
+CRYPTO_EXCEPTION_SYMBOL_KEYS = ("id", "pokt", "inj", "doge", "trx", "sol")
 CRYPTO_CASH_SYMBOL_KEYS = ("usdt",)
 CRYPTO_PROFILES = {
     "btc": {"name": "비트코인", "asset_type": "major", "type_label": "메이저", "portfolio_cap_pct": 70, "approved_scope": True},
@@ -30,6 +30,22 @@ CRYPTO_PROFILES = {
     "xlm": {"name": "스텔라루멘", "asset_type": "alt", "type_label": "알트", "portfolio_cap_pct": 30, "approved_scope": True},
     "id": {
         "name": "스페이스아이디",
+        "asset_type": "exception",
+        "type_label": "예외",
+        "portfolio_cap_pct": 2.5,
+        "exception_pool_cap_pct": 5,
+        "approved_scope": False,
+    },
+    "pokt": {
+        "name": "포켓네트워크",
+        "asset_type": "exception",
+        "type_label": "예외",
+        "portfolio_cap_pct": 2.5,
+        "exception_pool_cap_pct": 5,
+        "approved_scope": False,
+    },
+    "inj": {
+        "name": "인젝티브",
         "asset_type": "exception",
         "type_label": "예외",
         "portfolio_cap_pct": 2.5,
@@ -70,6 +86,8 @@ HISTORY_SYMBOLS = {
     "xrp": ("XRP", "XRP-USD"),
     "xlm": ("XLM", "XLM-USD"),
     "id": ("ID", "ID-USD"),
+    "pokt": ("POKT", "POKT-USD"),
+    "inj": ("INJ", "INJ-USD"),
     "doge": ("DOGE", "DOGE-USD"),
     "trx": ("TRX", "TRX-USD"),
     "sol": ("SOL", "SOL-USD"),
