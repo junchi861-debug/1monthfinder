@@ -161,6 +161,8 @@ def build_asset_archive_payload(date: str | None = None) -> dict[str, Any]:
                 "exception_pool_cap_pct": 5,
                 "exception_symbol_cap_pct": 2.5,
                 "exception_entry_slot_pct": 65,
+                "intraday_box_bars": 80,
+                "forced_reduce_drawdown_pct": {"major": 15, "alt": 20, "exception": 25},
                 "cash_like_symbols": ["USDT"],
                 "scout_pct": 2,
                 "starter_pct": 30,

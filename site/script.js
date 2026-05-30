@@ -144,12 +144,18 @@ const CRYPTO_SLOT_PCT = {
 const CRYPTO_PYRAMID_ADD_SLOT_PCT = CRYPTO_SLOT_PCT.full - CRYPTO_SLOT_PCT.base;
 const CRYPTO_PYRAMID_MARKET_SLOT_PCT = CRYPTO_PYRAMID_ADD_SLOT_PCT / 2;
 const CRYPTO_PYRAMID_VERTICAL_RISE_PCT = 10;
+const CRYPTO_PYRAMID_SECOND_RISE_PCT = 20;
 const CRYPTO_PYRAMID_PULLBACK_PCT = 77;
 const CRYPTO_TENKAN_ALERT_BUFFER_PCT = 10;
 const CRYPTO_EXCEPTION_TENKAN_ALERT_BUFFER_PCT = 15;
 const CRYPTO_TENKAN_NEAR_PCT = 3;
-const CRYPTO_THIRTY_MINUTE_RISK_BARS = 240;
+const CRYPTO_THIRTY_MINUTE_RISK_BARS = 80;
 const CRYPTO_INTRADAY_BOX_STOP_BARS = CRYPTO_THIRTY_MINUTE_RISK_BARS;
+const CRYPTO_FORCED_REDUCE_DRAWDOWN_PCT = {
+  major: 15,
+  alt: 20,
+  exception: 25,
+};
 const DETAIL_ARCHIVE_DAYS = 90;
 const SUMMARY_ARCHIVE_DAYS = 365;
 const SEARCH_RESULT_LIMIT = 8;
@@ -1963,9 +1969,9 @@ function cryptoThirtyMinuteEntryAnalysis(rows = [], selectedDate = state.selecte
   const boxBreak = close != null && boxHigh != null && close > boxHigh;
   const strong = boxBreak && position === "above" && chikou === "bullish";
   if (strong) {
-    return { label: "30분 박스돌파", subText: "구름·후행·박스고점", position, chikou, boxBreak, boxHigh, strong, time: latest.time || latest.datetime || latest.date || "-" };
+    return { label: "30분 박스돌파", subText: `구름·후행·${CRYPTO_INTRADAY_BOX_STOP_BARS}봉 박스고점`, position, chikou, boxBreak, boxHigh, strong, time: latest.time || latest.datetime || latest.date || "-" };
   }
-  return { label: "30분 대기", subText: boxHigh != null ? `박스고점 ${formatNum(boxHigh, priceDigits(boxHigh))}` : "박스 산출 대기", position, chikou, boxBreak, boxHigh, strong, time: latest.time || latest.datetime || latest.date || "-" };
+  return { label: "30분 대기", subText: boxHigh != null ? `${CRYPTO_INTRADAY_BOX_STOP_BARS}봉 박스고점 ${formatNum(boxHigh, priceDigits(boxHigh))}` : "박스 산출 대기", position, chikou, boxBreak, boxHigh, strong, time: latest.time || latest.datetime || latest.date || "-" };
 }
 
 function cryptoThirtyMinuteAnalysis(rows = [], selectedDate = state.selectedDate, options = {}) {
@@ -1996,6 +2002,7 @@ function cryptoThirtyMinuteAnalysis(rows = [], selectedDate = state.selectedDate
   const belowKijun = close != null && kijun != null && close < kijun;
   const belowBottomCloud = close != null && bottomCloudUpper != null && close < bottomCloudUpper;
   const boxStop = cryptoIntradayBoxStop(visible, index, CRYPTO_INTRADAY_BOX_STOP_BARS);
+  const forcedReduce = cryptoForcedReduceAnalysis(visible, index, profile, close);
   const exceptionBoxStop = profile.assetType === "exception" && boxStop.broken;
   const finalStop = belowKijun && belowBottomCloud;
   const tenkanDistancePct = close != null && tenkan != null ? ((tenkan - close) / close) * 100 : null;
@@ -2025,6 +2032,32 @@ function cryptoThirtyMinuteAnalysis(rows = [], selectedDate = state.selectedDate
       chikou,
       time,
       targetSlotPct: CRYPTO_SLOT_PCT.none,
+    };
+  }
+
+  if (forcedReduce.triggered) {
+    return {
+      label: "강제축소",
+      subText: `최근 ${CRYPTO_THIRTY_MINUTE_RISK_BARS}봉 고점 ${formatNum(forcedReduce.recentHigh, priceDigits(forcedReduce.recentHigh))} 대비 -${formatNum(forcedReduce.drawdownPct, 1)}%, ${formatNum(forcedReduce.thresholdPct, 0)}% 고점컷`,
+      status: "forced_reduce",
+      alert: true,
+      alertOnly: false,
+      finalStop: true,
+      ma5,
+      ma30,
+      tenkan,
+      kijun,
+      bottomCloudUpper,
+      boxStopLevel: boxStop.level,
+      boxStopTime: boxStop.time,
+      forcedDrawdownPct: forcedReduce.drawdownPct,
+      forcedThresholdPct: forcedReduce.thresholdPct,
+      forcedRecentHigh: forcedReduce.recentHigh,
+      close,
+      position,
+      chikou,
+      time,
+      targetSlotPct: profile.assetType === "exception" ? CRYPTO_SLOT_PCT.base : CRYPTO_SLOT_PCT.starter,
     };
   }
 
@@ -2149,7 +2182,7 @@ function cryptoThirtyMinuteAnalysis(rows = [], selectedDate = state.selectedDate
 
 function cryptoIntradayBoxStop(rows = [], index = -1, size = CRYPTO_INTRADAY_BOX_STOP_BARS) {
   if (!Array.isArray(rows) || index <= 0) return { level: null, time: null, broken: false };
-  const start = Math.max(size, index - size * 3);
+  const start = Math.max(1, index - size + 1);
   let level = null;
   let time = null;
   for (let cursor = start; cursor <= index; cursor += 1) {
@@ -2165,6 +2198,20 @@ function cryptoIntradayBoxStop(rows = [], index = -1, size = CRYPTO_INTRADAY_BOX
     level,
     time,
     broken: close != null && level != null && close < level,
+  };
+}
+
+function cryptoForcedReduceAnalysis(rows = [], index = -1, profile = {}, close = null) {
+  const recentHigh = rollingExtremeAt(rows, index, CRYPTO_THIRTY_MINUTE_RISK_BARS, "high", "max", false);
+  const thresholdPct = CRYPTO_FORCED_REDUCE_DRAWDOWN_PCT[profile.assetType] ?? CRYPTO_FORCED_REDUCE_DRAWDOWN_PCT.alt;
+  const drawdownPct = close != null && recentHigh != null && recentHigh > 0
+    ? ((recentHigh - close) / recentHigh) * 100
+    : null;
+  return {
+    recentHigh,
+    thresholdPct,
+    drawdownPct,
+    triggered: drawdownPct != null && drawdownPct >= thresholdPct,
   };
 }
 
@@ -2198,8 +2245,8 @@ function cryptoAllocationPlan(profile, daily, fourHour, thirtyEntry = {}) {
       portfolioText: slotPct ? `전체 ${formatNum(portfolioPct, 2)}%` : "전체 0%",
       message: slotPct
         ? (fourHour.strong
-          ? "정상 운용 감시군 밖의 코인이지만 4시간봉 후행스팬과 30일 박스 돌파가 나와 예외 한도의 65%만 허용합니다."
-          : "정상 운용 감시군 밖의 코인이지만 30분봉 구름·후행·박스고점 돌파가 나와 예외 한도의 65%만 허용합니다.")
+          ? `정상 운용 감시군 밖의 코인이지만 4시간봉 후행스팬과 ${CRYPTO_INTRADAY_BOX_STOP_BARS}봉 박스 돌파가 나와 예외 한도의 65%만 허용합니다. 수익으로 비중이 커지는 부분은 허용하되 추가 운용은 사용자가 조정합니다.`
+          : `정상 운용 감시군 밖의 코인이지만 30분봉 구름·후행·${CRYPTO_INTRADAY_BOX_STOP_BARS}봉 박스고점 돌파가 나와 예외 한도의 65%만 허용합니다. 수익으로 비중이 커지는 부분은 허용하되 추가 운용은 사용자가 조정합니다.`)
         : "사용자 지정 감시군 밖의 코인은 4시간봉 또는 30분봉 박스 돌파 전까지 운용 대상에서 제외합니다.",
     };
   }
@@ -2260,7 +2307,7 @@ function cryptoPyramidOrderPlan(profile = {}, allocation = {}, context = {}) {
     return { active: false, text: "-", subText: "매수대상 아님" };
   }
   if (slotPct == null || slotPct < CRYPTO_SLOT_PCT.base) {
-    return { active: false, text: "대기", subText: `기본 65% 이후 예약 ${formatNum(CRYPTO_PYRAMID_ADD_SLOT_PCT, 1)}% · +${formatNum(CRYPTO_PYRAMID_VERTICAL_RISE_PCT, 0)}%/${formatNum(CRYPTO_PYRAMID_PULLBACK_PCT, 0)}%눌림 각 ${formatNum(CRYPTO_PYRAMID_MARKET_SLOT_PCT, 1)}%` };
+    return { active: false, text: "대기", subText: `기본 65% 이후 예약 ${formatNum(CRYPTO_PYRAMID_ADD_SLOT_PCT, 1)}% · +${formatNum(CRYPTO_PYRAMID_VERTICAL_RISE_PCT, 0)}%/+${formatNum(CRYPTO_PYRAMID_SECOND_RISE_PCT, 0)}%/${formatNum(CRYPTO_PYRAMID_PULLBACK_PCT, 0)}%눌림` };
   }
   const remainingSlotPct = Math.max(0, CRYPTO_SLOT_PCT.full - slotPct);
   if (remainingSlotPct <= 0) {
@@ -2270,7 +2317,7 @@ function cryptoPyramidOrderPlan(profile = {}, allocation = {}, context = {}) {
     return {
       active: false,
       text: "추세대기",
-      subText: `일봉 구름·후행 확인 후 +${formatNum(CRYPTO_PYRAMID_VERTICAL_RISE_PCT, 0)}%/${formatNum(CRYPTO_PYRAMID_PULLBACK_PCT, 0)}% 눌림`,
+      subText: `일봉 구름·후행 확인 후 +${formatNum(CRYPTO_PYRAMID_VERTICAL_RISE_PCT, 0)}%/+${formatNum(CRYPTO_PYRAMID_SECOND_RISE_PCT, 0)}%/${formatNum(CRYPTO_PYRAMID_PULLBACK_PCT, 0)}% 눌림`,
     };
   }
 
@@ -2282,25 +2329,32 @@ function cryptoPyramidOrderPlan(profile = {}, allocation = {}, context = {}) {
   const averagePrice = number(context.averagePrice) ?? number(context.orderPrice) ?? close;
   const recentHigh = number(context.recentHigh) ?? close;
   const firstTriggerPrice = averagePrice != null ? averagePrice * (1 + CRYPTO_PYRAMID_VERTICAL_RISE_PCT / 100) : null;
+  const secondTriggerPrice = averagePrice != null ? averagePrice * (1 + CRYPTO_PYRAMID_SECOND_RISE_PCT / 100) : null;
   const pullbackPrice = recentHigh != null && averagePrice != null && recentHigh > averagePrice
     ? recentHigh - (recentHigh - averagePrice) * (CRYPTO_PYRAMID_PULLBACK_PCT / 100)
     : null;
   const marketTrigger = close != null && firstTriggerPrice != null && close >= firstTriggerPrice;
+  const continuationTrigger = close != null && secondTriggerPrice != null && close >= secondTriggerPrice;
   const pullbackTrigger = close != null && pullbackPrice != null && close <= pullbackPrice;
   const priceDigitsForOrder = priceDigits(averagePrice ?? close);
   const firstText = firstTriggerPrice != null ? `+${formatNum(CRYPTO_PYRAMID_VERTICAL_RISE_PCT, 0)}% ${formatNum(firstTriggerPrice, priceDigitsForOrder)}` : "+10% 대기";
+  const secondText = secondTriggerPrice != null ? `+${formatNum(CRYPTO_PYRAMID_SECOND_RISE_PCT, 0)}% ${formatNum(secondTriggerPrice, priceDigitsForOrder)}` : "+20% 대기";
   const pullbackText = pullbackPrice != null ? `${formatNum(CRYPTO_PYRAMID_PULLBACK_PCT, 0)}%눌림 ${formatNum(pullbackPrice, priceDigitsForOrder)}` : "77%눌림 대기";
-  const subText = `${firstText} · ${pullbackText}`;
-  const text = marketTrigger
+  const subText = `${firstText} · ${secondText} · ${pullbackText}`;
+  const text = continuationTrigger
+    ? `추세추가 ${formatNum(marketSlotPct, 1)}%`
+    : marketTrigger
     ? `시장가 ${formatNum(marketSlotPct, 1)}%`
     : pullbackTrigger ? `눌림 ${formatNum(marketSlotPct, 1)}%` : `대기 ${formatNum(marketSlotPct, 1)}%+${formatNum(marketSlotPct, 1)}%`;
   return {
     active: true,
-    marketTrigger,
+    marketTrigger: marketTrigger || continuationTrigger,
+    continuationTrigger,
     pullbackTrigger,
     orderPrice: pullbackPrice,
     triggerPrice: firstTriggerPrice,
     firstTriggerPrice,
+    secondTriggerPrice,
     pullbackPrice,
     averagePrice,
     recentHigh,
@@ -2310,11 +2364,13 @@ function cryptoPyramidOrderPlan(profile = {}, allocation = {}, context = {}) {
     marketPortfolioPct,
     text,
     subText,
-    message: marketTrigger
+    message: continuationTrigger
+      ? `진입 대비 +${formatNum(CRYPTO_PYRAMID_SECOND_RISE_PCT, 0)}% 이상 추세가 이어져 남은 불타기 ${formatNum(marketSlotPct, 1)}%까지 최종 맥스 비중 후보입니다. 예외 코인은 수익 증가분은 허용하되 추가 운용은 사용자 확인이 필요합니다.`
+      : marketTrigger
       ? `초기 65% 이후 +${formatNum(CRYPTO_PYRAMID_VERTICAL_RISE_PCT, 0)}% 상승 트리거입니다. 남은 ${formatNum(CRYPTO_PYRAMID_ADD_SLOT_PCT, 1)}% 중 ${formatNum(marketSlotPct, 1)}%는 시장가 추가 매수 신호입니다.`
       : pullbackTrigger
         ? `최고점과 평균단가 사이 ${formatNum(CRYPTO_PYRAMID_PULLBACK_PCT, 0)}% 눌림 자리입니다. 남은 ${formatNum(CRYPTO_PYRAMID_ADD_SLOT_PCT, 1)}% 중 나머지 ${formatNum(marketSlotPct, 1)}% 추가 진입 신호입니다.`
-        : `불타기는 무조건이 아니라 일봉 구름·후행 추세 확인 상태에서 +${formatNum(CRYPTO_PYRAMID_VERTICAL_RISE_PCT, 0)}% 1차 ${formatNum(marketSlotPct, 1)}%, ${formatNum(CRYPTO_PYRAMID_PULLBACK_PCT, 0)}% 눌림 2차 ${formatNum(marketSlotPct, 1)}%로 나눕니다.`,
+        : `불타기는 무조건이 아니라 일봉 구름·후행 추세 확인 상태에서 +${formatNum(CRYPTO_PYRAMID_VERTICAL_RISE_PCT, 0)}% 1차, +${formatNum(CRYPTO_PYRAMID_SECOND_RISE_PCT, 0)}% 추세지속 또는 ${formatNum(CRYPTO_PYRAMID_PULLBACK_PCT, 0)}% 눌림 2차로 나눕니다.`,
   };
 }
 
@@ -2331,7 +2387,7 @@ function cryptoMetricItems(assets = [], exceptionAssets = [], cashAssets = []) {
     { label: "감시군", value: formatNum(assets.length, 0), text: "BTC·ETH·XRP·XLM" },
     { label: "메이저 한도", value: "70%", text: "BTC/ETH 종목별" },
     { label: "알트 한도", value: "30%", text: "XRP/XLM 종목별" },
-    { label: "예외풀", value: "5%", text: `종목 2.5% · 후보 ${exceptionEntries}개` },
+    { label: "예외풀", value: "5%", text: `당일 2.5% · 수익증가 허용` },
     { label: "현금성", value: cashText, text: "현금과 합산" },
     { label: "기본 이상", value: `${baseOrHigher}개`, text: strongest ? `${strongest.name} ${strongest.portfolioText}` : "수급 대기" },
   ];
@@ -2346,15 +2402,17 @@ function cryptoPolicyCard(crypto = {}) {
         <h2>운용 범위</h2>
         <span class="signal-pill neutral">정책</span>
       </header>
-      <p>정상 운용은 ${escapeHtml(approved)} 안에서만 합니다. 그 밖의 급변 코인은 예외 풀 ${formatNum(policy.exception_pool_cap_pct ?? 5, 1)}% 안에서 종목당 ${formatNum(policy.exception_symbol_cap_pct ?? 2.5, 1)}%까지만 보고, USDT는 현금과 합산합니다. 코인 현금이 부족하면 필요한 금액만큼 USDT를 시장가 청산해 진입 재원으로 봅니다.</p>
+      <p>정상 운용은 ${escapeHtml(approved)} 안에서만 합니다. 그 밖의 급변 코인은 예외 풀 ${formatNum(policy.exception_pool_cap_pct ?? 5, 1)}% 안에서 당일 종목당 ${formatNum(policy.exception_symbol_cap_pct ?? 2.5, 1)}%까지만 보고, 수익 증가로 자연 비중이 늘어나는 부분은 허용합니다. USDT는 현금과 합산하며 부족하면 필요한 금액만큼 시장가 청산해 진입 재원으로 봅니다.</p>
       <div class="crypto-signal-grid">
         ${[
           { label: "정상감시", value: approved },
           { label: "예외풀", value: `${formatNum(policy.exception_pool_cap_pct ?? 5, 1)}%` },
           { label: "예외종목", value: `${formatNum(policy.exception_symbol_cap_pct ?? 2.5, 1)}%` },
           { label: "예외진입", value: `${formatNum(policy.exception_entry_slot_pct ?? 65, 0)}%` },
+          { label: "박스기준", value: `${CRYPTO_INTRADAY_BOX_STOP_BARS}봉` },
+          { label: "고점컷", value: "15·20·25%" },
           { label: "불타기", value: `${formatNum(CRYPTO_PYRAMID_ADD_SLOT_PCT, 1)}%/${formatNum(CRYPTO_PYRAMID_MARKET_SLOT_PCT, 1)}%` },
-          { label: "불타기기준", value: `+${formatNum(CRYPTO_PYRAMID_VERTICAL_RISE_PCT, 0)}%·${formatNum(CRYPTO_PYRAMID_PULLBACK_PCT, 0)}%` },
+          { label: "불타기기준", value: `+${formatNum(CRYPTO_PYRAMID_VERTICAL_RISE_PCT, 0)}%·+${formatNum(CRYPTO_PYRAMID_SECOND_RISE_PCT, 0)}%·${formatNum(CRYPTO_PYRAMID_PULLBACK_PCT, 0)}%` },
           { label: "현금조달", value: "부족분 USDT" },
           { label: "현금성", value: (policy.cash_like_symbols || ["USDT"]).join("+") },
         ].map((item) => `
@@ -2445,6 +2503,7 @@ function cryptoDetailMetricItems(asset, allAssets = [], signal = null, rows = []
     { label: "4H 수급", value: signal?.fourHourText || "-", text: signal?.fourHourSubText || "-" },
     { label: "30분 추적", value: signal?.thirtyText || "-", text: signal?.thirtySubText || "-" },
     { label: "30분 진입", value: signal?.thirtyEntryText || "-", text: signal?.thirtyEntrySubText || "-" },
+    { label: "고점컷", value: signal?.forcedReduceText || "-", text: signal?.forcedReduceSubText || "메이저15·알트20·예외25%" },
     { label: "최종손절선", value: signal?.thirtyBoxStopLevel != null ? formatNum(signal.thirtyBoxStopLevel, priceDigits(signal.thirtyBoxStopLevel)) : signal?.thirtyKijun != null ? formatNum(signal.thirtyKijun, priceDigits(signal.thirtyKijun)) : "-", text: signal?.thirtyBoxStopLevel != null ? "30분 돌파 박스고점" : signal?.thirtyBottomCloudUpper != null ? `바닥구름상단 ${formatNum(signal.thirtyBottomCloudUpper, priceDigits(signal.thirtyBottomCloudUpper))}` : "30분 기준선 대기" },
   ];
 }
@@ -2469,6 +2528,7 @@ function cryptoSignalCard(asset, allAssets = [], options = {}) {
           { label: "피보박스", value: signal.fibBoxText },
           { label: "4시간", value: signal.fourHourText },
           { label: "30분", value: signal.thirtyText },
+          { label: "고점컷", value: signal.forcedReduceText },
           { label: "손절", value: signal.stopText },
         ].map((item) => `
           <article>
@@ -2501,12 +2561,17 @@ function cryptoSignalPlan(asset, allAssets = [], options = {}) {
   const addPyramidCandidate = Boolean(fibBox.addWatch && entered && thirtyMinute.status === "hold");
   const trendConfirmed = daily.position === "above" && daily.chikou === "bullish";
   const className = trackingExit ? "sell" : trackingNotice ? "warning" : allocation.className;
-  const label = trackingExit ? (thirtyMinute.status === "box_final_stop" ? "박스손절" : "최종손절") : trackingNotice ? thirtyMinute.label : allocation.label;
+  const trackingExitLabel = thirtyMinute.status === "box_final_stop"
+    ? "박스손절"
+    : thirtyMinute.status === "forced_reduce" ? "강제축소" : "최종손절";
+  const label = trackingExit ? trackingExitLabel : trackingNotice ? thirtyMinute.label : allocation.label;
   const stopActionText = thirtyMinute.status === "box_final_stop"
     ? "예외 포지션 최종손절 기준입니다."
-    : "일단 기초물량 30%까지 축소하고, 최종 축소폭은 사용자와 확인합니다.";
+    : thirtyMinute.status === "forced_reduce"
+      ? "늦은 진입 보호용 고점 대비 강제 비중축소 기준입니다. 바로 전량 손절이 아니라 사용자 확인 후 축소 모드로 봅니다."
+      : "일단 기초물량 30%까지 축소하고, 최종 축소폭은 사용자와 확인합니다.";
   let message = trackingExit
-    ? `${cryptoAssetName(asset)} 30분봉 최종손절 기준: ${thirtyMinute.subText}. ${stopActionText}`
+    ? `${cryptoAssetName(asset)} 30분봉 ${trackingExitLabel} 기준: ${thirtyMinute.subText}. ${stopActionText}`
     : trackingNotice
       ? `${cryptoAssetName(asset)} 30분봉 ${thirtyMinute.label}: ${thirtyMinute.subText}. 전환선이 너무 가까운 구간이라 즉시 비중축소 사유는 아니고 리스크관리 알림입니다.`
     : allocation.message;
@@ -2610,6 +2675,11 @@ function cryptoSignalPlan(asset, allAssets = [], options = {}) {
     thirtyBottomCloudUpper: thirtyMinute.bottomCloudUpper,
     thirtyBoxStopLevel: profile.assetType === "exception" ? thirtyMinute.boxStopLevel : null,
     thirtyBoxStopTime: profile.assetType === "exception" ? thirtyMinute.boxStopTime : null,
+    forcedDrawdownPct: thirtyMinute.forcedDrawdownPct,
+    forcedThresholdPct: thirtyMinute.forcedThresholdPct,
+    forcedRecentHigh: thirtyMinute.forcedRecentHigh,
+    forcedReduceText: thirtyMinute.forcedDrawdownPct != null ? `-${formatNum(thirtyMinute.forcedDrawdownPct, 1)}%` : "-",
+    forcedReduceSubText: thirtyMinute.forcedThresholdPct != null ? `${profile.typeLabel} 고점컷 ${formatNum(thirtyMinute.forcedThresholdPct, 0)}%` : `메이저15·알트20·예외25%`,
     signalTimeText: cryptoSignalTimeText(signalRow),
     close,
     entry,
@@ -2853,6 +2923,7 @@ function drawCryptoDetailChart(canvas, asset, assets = []) {
   const pyramidLevels = signal.pyramidOrder?.active
     ? [
       { label: "+10%", value: signal.pyramidOrder.firstTriggerPrice, color: "#df7a72" },
+      { label: "+20%", value: signal.pyramidOrder.secondTriggerPrice, color: "#a95f59" },
       { label: "77눌림", value: signal.pyramidOrder.pullbackPrice, color: "#d5a04e" },
     ]
     : [];
@@ -4878,7 +4949,7 @@ function maybeFireCryptoAlerts() {
     type: alertPlan.trackingAlert ? "sell" : alertPlan.trackingNotice ? "warning" : "candidate",
     scope: "crypto",
     title: alertPlan.trackingAlert
-      ? `${alertPlan.name} ${alertPlan.trackingRule === "box_final_stop" ? "박스손절" : "최종손절"}`
+      ? `${alertPlan.name} ${alertPlan.trackingRule === "box_final_stop" ? "박스손절" : alertPlan.trackingRule === "forced_reduce" ? "강제축소" : "최종손절"}`
       : alertPlan.trackingNotice
         ? `${alertPlan.name} 전환선 알림`
       : alertPlan.pyramidMarketTrigger
@@ -4886,7 +4957,7 @@ function maybeFireCryptoAlerts() {
         : `${alertPlan.name} 예외 진입 후보`,
     label: alertPlan.label,
     message: alertPlan.trackingAlert
-      ? `${alertPlan.name}: ${alertPlan.thirtySubText}. 최종 손절 기준을 확인하세요.`
+      ? `${alertPlan.name}: ${alertPlan.thirtySubText}. ${alertPlan.trackingRule === "forced_reduce" ? "고점 대비 강제 비중축소 모드입니다." : "최종 손절 기준을 확인하세요."}`
       : alertPlan.trackingNotice
         ? `${alertPlan.name}: ${alertPlan.thirtySubText}. 알림만 발송하며 즉시 비중축소 사유는 아닙니다.`
       : alertPlan.pyramidMarketTrigger
