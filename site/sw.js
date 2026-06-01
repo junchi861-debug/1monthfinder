@@ -1,10 +1,10 @@
-const PWA_VERSION = "20260601-stock-manage-2";
+const PWA_VERSION = "20260601-stock-manage-4";
 const APP_CACHE = `1monthfinder-app-${PWA_VERSION}`;
 const APP_SHELL = [
   "./",
   "./index.html",
-  "./styles.css?v=20260601-stock-manage-2",
-  "./script.js?v=20260601-stock-manage-2",
+  "./styles.css?v=20260601-stock-manage-4",
+  "./script.js?v=20260601-stock-manage-4",
   "./manifest.webmanifest",
   "./icons/icon.svg",
   "./icons/icon-192.png",

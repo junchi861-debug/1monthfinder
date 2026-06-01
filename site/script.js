@@ -1668,11 +1668,7 @@ function renderStocksPanel() {
     { label: "1달 후보", value: formatNum(swing.candidate_count, 0), text: algorithmKoreanLabel(swing.algorithm_label || swing.label || "스윙") },
     { label: "지수 필터", value: indexFilter.label || "-", text: `점수 ${formatNum(indexFilter.score, 1)}` },
   ].map(metricCard).join("");
-  const rows = [...(shortTerm.top || []).map((row) => ({ ...row, bucket: "1일" })), ...(swing.top || []).slice(0, 5).map((row) => ({ ...row, bucket: "1달" }))];
   renderStockManagePanel("domestic");
-  document.querySelector("#stocksCandidateList").innerHTML = rows.length
-    ? rows.slice(0, 12).map(stockItem).join("")
-    : `<article class="asset-item watch"><div class="asset-main"><strong>후보 없음</strong><small>${escapeHtml(stocks.archive_note || "시장 데이터 생성 후 표시됩니다.")}</small></div></article>`;
 }
 
 function renderUsStocksPanel() {
