@@ -1361,6 +1361,10 @@ canvas {
   background: var(--surface-raised);
 }
 
+.signal-inbox-item.done {
+  opacity: 0.72;
+}
+
 .signal-inbox-main {
   display: grid;
   min-width: 0;
@@ -1395,6 +1399,16 @@ canvas {
   font-size: 0.52rem;
   font-style: normal;
   font-weight: 950;
+}
+
+.signal-inbox-main em.complete {
+  background: rgba(95, 199, 155, 0.13);
+  color: var(--green);
+}
+
+.signal-inbox-main em.bucket {
+  background: rgba(130, 167, 230, 0.12);
+  color: var(--blue);
 }
 
 .signal-inbox-side {
@@ -1584,6 +1598,28 @@ canvas {
   gap: 0.42rem;
 }
 
+.collection-toolbar {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.36rem;
+}
+
+.collection-toolbar button {
+  min-height: 2rem;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--surface-soft);
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 950;
+}
+
+.collection-toolbar button.active {
+  border-color: rgba(95, 199, 155, 0.56);
+  background: rgba(95, 199, 155, 0.14);
+  color: var(--ink);
+}
+
 .watch-card-grid {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
@@ -1660,6 +1696,38 @@ canvas {
 
 .collection-card .collection-card-head {
   justify-content: flex-start;
+}
+
+.task-badge {
+  display: inline-grid;
+  place-items: center;
+  min-height: 1.3rem;
+  padding: 0 0.38rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: rgba(130, 167, 230, 0.1);
+  color: var(--ink-soft);
+  font-size: 0.62rem;
+  font-weight: 950;
+  white-space: nowrap;
+}
+
+.task-badge.risk {
+  border-color: rgba(223, 122, 114, 0.48);
+  background: rgba(223, 122, 114, 0.15);
+  color: var(--red);
+}
+
+.task-badge.action {
+  border-color: rgba(95, 199, 155, 0.48);
+  background: rgba(95, 199, 155, 0.15);
+  color: var(--green);
+}
+
+.task-badge.weak {
+  border-color: rgba(213, 160, 78, 0.5);
+  background: rgba(213, 160, 78, 0.15);
+  color: var(--amber);
 }
 
 .collection-card .collection-card-title {

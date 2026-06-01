@@ -5,6 +5,7 @@ const SIGNAL_INBOX_READ_KEY = "1monthfinder.signalInbox.readKeys";
 const SETTINGS_KEY = "1monthfinder.options.settings";
 const WATCHLIST_KEY = "1monthfinder.watchlists";
 const COLLECTION_ORDER_KEY = "1monthfinder.collection.order";
+const COLLECTION_SORT_KEY = "1monthfinder.collection.sortMode";
 const SIGNAL_ALERT_THROTTLE_MS = 10 * 60000;
 const ANDROID_BACKEND_LOCAL_URL = "http://127.0.0.1:8000";
 const ANDROID_STOP_BACKEND_COMMAND = [
@@ -374,6 +375,7 @@ const state = {
   settings: loadSettings(),
   watchlists: loadWatchlists(),
   collectionOrder: loadCollectionOrder(),
+  collectionSortMode: loadCollectionSortMode(),
   searchCursor: { domestic: -1, us: -1 },
   wakeLock: null,
   chartResizeObserver: null,
@@ -383,7 +385,7 @@ const state = {
 };
 
 const modalMeta = {
-  signals: { eyebrow: "신호 알림", title: "알림함" },
+  signals: { eyebrow: "오늘 신호", title: "작업함" },
   replay: { eyebrow: "차트 검증", title: "복기" },
   settings: { eyebrow: "환경", title: "설정" },
 };
@@ -525,6 +527,21 @@ function loadCollectionOrder() {
 function saveCollectionOrder() {
   state.collectionOrder = (state.collectionOrder || []).filter(Boolean).map(String).slice(0, 300);
   localStorage.setItem(COLLECTION_ORDER_KEY, JSON.stringify(state.collectionOrder));
+}
+
+function loadCollectionSortMode() {
+  try {
+    const value = localStorage.getItem(COLLECTION_SORT_KEY);
+    return value === "auto" ? "auto" : "manual";
+  } catch (error) {
+    return "manual";
+  }
+}
+
+function saveCollectionSortMode() {
+  const mode = state.collectionSortMode === "auto" ? "auto" : "manual";
+  state.collectionSortMode = mode;
+  localStorage.setItem(COLLECTION_SORT_KEY, mode);
 }
 
 function normalizeApiBaseUrl(value) {
@@ -854,6 +871,11 @@ function bindControls() {
       setSignalInboxFilter(signalFilterButton.dataset.signalFilter);
       return;
     }
+    const collectionSortButton = event.target.closest("[data-collection-sort]");
+    if (collectionSortButton) {
+      setCollectionSortMode(collectionSortButton.dataset.collectionSort);
+      return;
+    }
     const collectionMoveButton = event.target.closest("[data-collection-move]");
     if (collectionMoveButton) {
       moveCollectionItem(collectionMoveButton.dataset.collectionKey, Number(collectionMoveButton.dataset.collectionMove) || 0);
@@ -1046,6 +1068,7 @@ function renderMonitor() {
   renderPriceGrid(latest, secondaryLatest, levels);
   renderLiveLegend(levels);
   const livePlan = buildLiveTradePlan(snapshot);
+  renderOptionSignalCard(snapshot, livePlan);
   renderLiveTradePlan(livePlan);
   drawLiveChart(livePlan);
   renderSettings();
@@ -1126,6 +1149,74 @@ function renderPriceGrid(latest, secondaryLatest, levels) {
     { label: "지수R", value: formatNum(levels.reset_mid_618_100, 2), text: "리셋 중심" },
   ];
   document.querySelector("#priceGrid").innerHTML = items.map(metricCard).join("");
+}
+
+function renderOptionSignalCard(snapshot = state.monitor || {}, livePlan = null) {
+  const root = document.querySelector("#optionSignalList");
+  if (!root) return;
+  const signal = snapshot.signal || snapshot.main?.signal || {};
+  const latest = snapshot.main?.latest || {};
+  const levels = snapshot.main?.levels || {};
+  const secondaryLatest = snapshot.secondary?.latest || {};
+  const className = signalClass(signal.type || livePlan?.tone || "neutral");
+  const score = commonSignalScore({
+    signal: className,
+    score: signal.score,
+    momentum: signal.metrics?.momentum,
+    riskAlert: className === "warning",
+  });
+  const decision = signalDecisionSummary({
+    scope: "options",
+    signal: className,
+    signalScore: score,
+    badge: signal.label || "대기",
+    detail: signal.message || livePlan?.status || "KOSPI200 5분봉 데이터를 기다립니다.",
+    actionText: optionActionText(signal, livePlan, score),
+  });
+  const items = [
+    { label: "점수", value: `${score}점`, text: decision.status },
+    { label: "KOSPI200", value: formatNum(latest.close, 2), text: latest.time || "-" },
+    { label: "KODEX200", value: formatNum(secondaryLatest.close, 0), text: "보조" },
+    { label: "61.8%", value: formatNum(levels.fib_618, 2), text: "기준" },
+    { label: "계획진입", value: formatNum(livePlan?.entry, 2), text: livePlan?.status || "-" },
+    { label: "손절", value: livePlan?.stopText || formatNum(livePlan?.stop, 2), text: livePlan?.stopLabel || "계획" },
+  ];
+  root.innerHTML = optionDecisionCard({
+    className,
+    title: signal.title || signal.label || "옵션 신호",
+    badge: signal.label || "대기",
+    score,
+    summary: signal.message || "KOSPI200 5분봉 신호를 카드 기준으로 확인합니다.",
+    decision,
+    items,
+  });
+}
+
+function optionActionText(signal = {}, livePlan = null, score = 0) {
+  const type = signalClass(signal.type || livePlan?.tone || "watch");
+  if (livePlan?.status && type === "candidate") return `${livePlan.status} · 분할 진입 조건 확인`;
+  if (livePlan?.status && type === "sell") return `${livePlan.status} · 청산 기준 우선`;
+  if (type === "warning") return "데이터/기준선 지연 또는 위험 먼저 확인";
+  if (score >= 72) return "5분봉 지지 확인 후 실행 판단";
+  return signalActionText(type, score, "options");
+}
+
+function optionDecisionCard({ className = "watch", title = "신호", badge = "관찰", score = 0, summary = "", decision = {}, items = [] } = {}) {
+  const normalized = signalClass(className);
+  return `
+    <article class="crypto-signal-card option-signal-card ${escapeAttr(normalized)}">
+      <header>
+        <h2>${escapeHtml(title)}</h2>
+        <span class="signal-pill ${escapeAttr(normalized)}">${escapeHtml(badge)}</span>
+        ${scoreBadgeHtml(score, normalized)}
+      </header>
+      <p class="crypto-card-summary">${escapeHtml(summary || "신호 조건을 확인합니다.")}</p>
+      ${decisionStackHtml(decision)}
+      <div class="crypto-signal-grid">
+        ${cryptoSignalGridItems(items)}
+      </div>
+    </article>
+  `;
 }
 
 function metricCard(item) {
@@ -1402,29 +1493,76 @@ function signalLogTimestamp(item = {}) {
 }
 
 function renderSignalLog() {
-  setText("#logCount", `${state.signalLog.length}개`);
+  const visibleLog = signalLogForDisplayDate();
+  setText("#logCount", `${visibleLog.length}개`);
   const root = document.querySelector("#signalLog");
   if (!root) return;
-  if (!state.signalLog.length) {
-    root.innerHTML = `<article class="empty-log">강한 신호가 발생하면 여기에 최근 기록이 쌓입니다.</article>`;
+  if (!visibleLog.length) {
+    root.innerHTML = `<article class="empty-log">당일 옵션 신호가 발생하면 여기에 최근 기록이 쌓입니다.</article>`;
     return;
   }
-  root.innerHTML = state.signalLog
-    .map((item) => {
-      const tp1GainText = item.trade?.tp1Gain != null ? `(+${formatNum(item.trade.tp1Gain, 2)})` : "";
-      const runnerText = item.trade?.runnerTargetText || item.trade?.tp2Text || "";
-      const tradeText = item.trade
-        ? `진입 ${formatNum(item.trade.entry, 2)} · ${item.trade.stopText || `손절 ${formatNum(item.trade.stop, 2)}`} · 1차 익절 ${formatNum(item.trade.tp1, 2)}${tp1GainText}${runnerText ? ` · ${runnerText}` : ""}`
-        : item.message;
-      return `
-        <article class="log-item ${escapeAttr(signalClass(item.type))}">
-          <span>${escapeHtml(item.time || "-")} · ${formatNum(item.close, 2)}</span>
-          <strong>${escapeHtml(item.trade?.status || item.title)}</strong>
-          <small>${escapeHtml(tradeText)}</small>
-        </article>
-      `;
-    })
+  root.innerHTML = visibleLog
+    .map(optionLogCard)
     .join("");
+}
+
+function optionLogCard(item = {}) {
+  const signal = signalClass(item.type || "watch");
+  const score = commonSignalScore({ signal });
+  const tp1GainText = item.trade?.tp1Gain != null ? `(+${formatNum(item.trade.tp1Gain, 2)})` : "";
+  const runnerText = item.trade?.runnerTargetText || item.trade?.tp2Text || "";
+  const tradeText = item.trade
+    ? `진입 ${formatNum(item.trade.entry, 2)} · ${item.trade.stopText || `손절 ${formatNum(item.trade.stop, 2)}`} · 1차 익절 ${formatNum(item.trade.tp1, 2)}${tp1GainText}${runnerText ? ` · ${runnerText}` : ""}`
+    : item.message;
+  const decision = signalDecisionSummary({
+    scope: "options",
+    signal,
+    signalScore: score,
+    badge: item.title || "신호",
+    detail: tradeText || item.message || item.title,
+    actionText: optionLogActionText(item, signal),
+  });
+  const items = [
+    { label: "시각", value: item.time || "-", text: signalLogDate(item) || "당일" },
+    { label: "지수", value: formatNum(item.close, 2), text: "KOSPI200" },
+    { label: "진입", value: formatNum(item.trade?.entry, 2), text: item.trade?.status || "-" },
+    { label: "손절", value: item.trade?.stopText || formatNum(item.trade?.stop, 2), text: "계획" },
+  ];
+  return `
+    <article class="crypto-signal-card option-log-card ${escapeAttr(signal)}">
+      <header>
+        <h2>${escapeHtml(item.trade?.status || item.title || "옵션 신호")}</h2>
+        <span class="signal-pill ${escapeAttr(signal)}">${escapeHtml(item.title || "신호")}</span>
+        ${scoreBadgeHtml(score, signal)}
+      </header>
+      <p class="crypto-card-summary">${escapeHtml(tradeText || "당일 옵션 신호입니다.")}</p>
+      ${decisionStackHtml(decision)}
+      <div class="crypto-signal-grid">
+        ${cryptoSignalGridItems(items)}
+      </div>
+    </article>
+  `;
+}
+
+function optionLogActionText(item = {}, signal = "watch") {
+  if (item.trade?.status) return `${item.trade.status} 기준 재확인`;
+  return signalActionText(signal, commonSignalScore({ signal }), "options");
+}
+
+function signalLogForDisplayDate() {
+  const targetDate = isLiveDate() ? kstDateString() : clampDate(state.selectedDate);
+  return state.signalLog.filter((item) => signalLogDate(item) === targetDate);
+}
+
+function signalLogDate(item = {}) {
+  const explicitDate = String(item.date || "").match(/^(\d{4}-\d{2}-\d{2})/)?.[1];
+  if (explicitDate) return explicitDate;
+  const sourceText = String(item.sourceAt || item.datetime || "");
+  const sourceDate = sourceText.match(/^(\d{4}-\d{2}-\d{2})/)?.[1];
+  if (sourceDate) return sourceDate;
+  const parsed = Date.parse(sourceText || item.createdAt || "");
+  if (!Number.isFinite(parsed)) return "";
+  return new Date(parsed + 9 * 60 * 60 * 1000).toISOString().slice(0, 10);
 }
 
 function renderStaticPanels() {
@@ -1646,6 +1784,7 @@ function renderCollectionPanel() {
   const archive = state.assetArchive || fallbackAssetArchive();
   const items = collectionWatchItems(archive);
   const urgentCount = items.filter(signalNeedsAttention).length;
+  const actionCount = items.filter((item) => ["action", "risk", "weak"].includes(collectionTaskBucket(item).key)).length;
   const board = document.querySelector("#collectionBoard");
   const boardSignal = urgentCount ? "watch" : "neutral";
   if (board) board.className = signalBoardClass(boardSignal);
@@ -1654,8 +1793,9 @@ function renderCollectionPanel() {
   if (badge) badge.className = `signal-pill ${urgentCount ? "watch" : "neutral"}`;
   setText("#collectionDateText", `${state.selectedDate} · ${isLiveDate() ? "실시간" : "복기"}`);
   setText("#collectionMessage", items.length
-    ? `직접 감시 중인 카드만 표시합니다. 확인 필요 ${urgentCount}개 · 점수와 다음 행동을 우선 표시합니다.`
+    ? `직접 감시 중인 카드만 표시합니다. 오늘 할 일 ${actionCount}개 · ${state.collectionSortMode === "auto" ? "자동 정렬" : "수동 순서"}`
     : "국장·미장·코인 화면에서 감시 항목을 추가하면 이곳에 카드로 표시됩니다.");
+  renderCollectionSortControls();
   const root = document.querySelector("#collectionWatchGrid");
   if (!root) return;
   root.innerHTML = items.length
@@ -1676,6 +1816,20 @@ function signalNeedsAttention(item = {}) {
   const signal = signalClass(item.signal || item.className || item.type || "watch");
   if (["candidate", "buy", "warning", "sell", "avoid"].includes(signal)) return true;
   return commonSignalScore(item) >= 72;
+}
+
+function renderCollectionSortControls() {
+  document.querySelectorAll("[data-collection-sort]").forEach((button) => {
+    const active = button.dataset.collectionSort === state.collectionSortMode;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-pressed", active ? "true" : "false");
+  });
+}
+
+function setCollectionSortMode(mode = "manual") {
+  state.collectionSortMode = mode === "auto" ? "auto" : "manual";
+  saveCollectionSortMode();
+  renderCollectionPanel();
 }
 
 function collectionWatchItems(archive = state.assetArchive || fallbackAssetArchive()) {
@@ -1726,6 +1880,7 @@ function collectionCryptoWatchItem(asset, assets = [], options = {}) {
 }
 
 function orderedCollectionItems(items = []) {
+  if (state.collectionSortMode === "auto") return autoSortedCollectionItems(items);
   const order = state.collectionOrder || [];
   const orderIndex = new Map(order.map((key, index) => [key, index]));
   return items
@@ -1736,6 +1891,29 @@ function orderedCollectionItems(items = []) {
       return aOrder - bOrder || a.index - b.index;
     })
     .map(({ item }) => item);
+}
+
+function autoSortedCollectionItems(items = []) {
+  return items
+    .map((item, index) => ({ item, index, bucket: collectionTaskBucket(item) }))
+    .sort((a, b) => {
+      if (a.bucket.order !== b.bucket.order) return a.bucket.order - b.bucket.order;
+      const scoreDiff = commonSignalScore(b.item) - commonSignalScore(a.item);
+      if (scoreDiff) return scoreDiff;
+      const scopeDiff = signalInboxScopeOrder(a.item.jumpTab) - signalInboxScopeOrder(b.item.jumpTab);
+      if (scopeDiff) return scopeDiff;
+      return a.index - b.index;
+    })
+    .map(({ item }) => item);
+}
+
+function collectionTaskBucket(item = {}) {
+  const signal = signalClass(item.signal || "watch");
+  const score = commonSignalScore(item);
+  if (["warning", "sell", "avoid"].includes(signal)) return { key: "risk", label: "위험", order: 1 };
+  if (["candidate", "buy"].includes(signal) || score >= 72) return { key: "action", label: "진입", order: 2 };
+  if (score <= 45) return { key: "weak", label: "약화", order: 3 };
+  return { key: "watch", label: "관찰", order: 4 };
 }
 
 function moveCollectionItem(key, delta) {
@@ -1848,8 +2026,10 @@ function collectionCard(item, options = {}) {
       </div>
     `
     : "";
+  const controls = state.collectionSortMode === "auto" ? "" : moveControls;
   const focusAttr = item.focusKey ? ` data-focus-key="${escapeAttr(item.focusKey)}"` : "";
   const metrics = collectionCardMetrics(item);
+  const bucket = collectionTaskBucket(item);
   const emptyActions = item.emptyActions
     ? `
       <div class="collection-empty-actions">
@@ -1863,6 +2043,7 @@ function collectionCard(item, options = {}) {
     <article class="watch-card collection-card ${escapeAttr(signal)}" role="button" tabindex="0" data-jump-tab="${escapeAttr(item.jumpTab || "")}" data-jump-crypto="${escapeAttr(item.jumpCrypto || "")}" data-jump-focus="${escapeAttr(item.focusKey || "")}"${focusAttr}>
       <div class="collection-card-head">
         <span class="watch-kind">${escapeHtml(item.kind || "감시")}</span>
+        ${item.emptyActions ? "" : `<span class="task-badge ${escapeAttr(bucket.key)}">${escapeHtml(bucket.label)}</span>`}
         <span class="signal-pill ${escapeAttr(signal)}">${escapeHtml(item.badge || "관찰")}</span>
         ${scoreBadgeHtml(decision.score, signal)}
       </div>
@@ -1876,7 +2057,7 @@ function collectionCard(item, options = {}) {
         ${metrics.map((metric) => `<span><b>${escapeHtml(metric.label)}</b>${escapeHtml(metric.value || "-")}</span>`).join("")}
       </div>
       ${emptyActions}
-      ${moveControls}
+      ${controls}
     </article>
   `;
 }
@@ -2026,17 +2207,17 @@ function compactSignalText(value, maxLength = 76) {
 
 function renderSignalInbox() {
   const items = signalInboxItems();
-  const unreadCount = items.filter(signalInboxIsUnread).length;
+  const pendingCount = items.filter(signalInboxNeedsAction).length;
   const filteredItems = signalInboxFilteredItems(items);
   const countNode = document.querySelector("#signalInboxCount");
   const button = document.querySelector("#signalInboxButton");
   if (countNode) {
-    countNode.textContent = unreadCount > 99 ? "99+" : String(unreadCount);
-    countNode.hidden = unreadCount <= 0;
+    countNode.textContent = pendingCount > 99 ? "99+" : String(pendingCount);
+    countNode.hidden = pendingCount <= 0;
   }
   if (button) {
-    button.classList.toggle("has-alerts", unreadCount > 0);
-    button.setAttribute("aria-label", unreadCount ? `미확인 신호 ${unreadCount}개` : "미확인 신호 없음");
+    button.classList.toggle("has-alerts", pendingCount > 0);
+    button.setAttribute("aria-label", pendingCount ? `처리 필요 신호 ${pendingCount}개` : "처리 필요 신호 없음");
   }
   document.querySelectorAll("[data-signal-filter]").forEach((filterButton) => {
     const active = filterButton.dataset.signalFilter === state.signalInboxFilter;
@@ -2046,9 +2227,10 @@ function renderSignalInbox() {
   const avgScore = items.length
     ? Math.round(items.reduce((sum, item) => sum + commonSignalScore(item), 0) / items.length)
     : 0;
+  const doneCount = Math.max(0, items.length - pendingCount);
   setText("#signalInboxSummary", items.length
-    ? `${state.selectedDate} 기준 전체 ${items.length}개 · 평균 ${avgScore}점 · 미확인 ${unreadCount}개 · ${signalInboxFilterLabel(state.signalInboxFilter)} ${filteredItems.length}개`
-    : `${state.selectedDate} 기준 확인할 신호가 없습니다.`);
+    ? `${state.selectedDate} 오늘 신호 ${items.length}개 · 처리 필요 ${pendingCount}개 · 확인 완료 ${doneCount}개 · 평균 ${avgScore}점 · ${signalInboxFilterLabel(state.signalInboxFilter)} ${filteredItems.length}개`
+    : `${state.selectedDate} 기준 처리할 오늘 신호가 없습니다.`);
   const root = document.querySelector("#signalInboxList");
   if (!root) return;
   root.innerHTML = filteredItems.length
@@ -2150,24 +2332,26 @@ function signalInboxFilteredItems(items = []) {
 }
 
 function signalInboxFilterMatches(item = {}, filter = "all") {
-  const signal = signalClass(item.signal || "watch");
-  if (filter === "action") return ["candidate", "buy"].includes(signal) || commonSignalScore(item) >= 72;
-  if (filter === "risk") return ["warning", "sell", "avoid"].includes(signal);
-  if (filter === "watch") return signal === "watch";
+  const bucket = signalInboxWorkBucket(item).key;
+  if (filter === "action") return bucket === "action";
+  if (filter === "risk") return bucket === "risk";
+  if (filter === "weak") return bucket === "weak";
+  if (filter === "watch") return bucket === "watch";
   return true;
 }
 
 function signalInboxFilterLabel(filter = "all") {
   return {
-    all: "전체",
+    all: "오늘",
     action: "진입",
     risk: "위험",
+    weak: "약화",
     watch: "관찰",
   }[filter] || "전체";
 }
 
 function setSignalInboxFilter(filter = "all") {
-  state.signalInboxFilter = ["all", "action", "risk", "watch"].includes(filter) ? filter : "all";
+  state.signalInboxFilter = ["all", "action", "risk", "weak", "watch"].includes(filter) ? filter : "all";
   renderSignalInbox();
 }
 
@@ -2188,6 +2372,19 @@ function markSignalInboxRead(key) {
 
 function signalInboxIsUnread(item = {}) {
   return Boolean(item.key && !state.signalInboxReadKeys.has(item.key));
+}
+
+function signalInboxNeedsAction(item = {}) {
+  return signalInboxIsUnread(item);
+}
+
+function signalInboxWorkBucket(item = {}) {
+  const signal = signalClass(item.signal || "watch");
+  const score = commonSignalScore(item);
+  if (["warning", "sell", "avoid"].includes(signal)) return { key: "risk", label: "위험", order: 1 };
+  if (["candidate", "buy"].includes(signal) || score >= 72) return { key: "action", label: "진입", order: 2 };
+  if (score <= 45) return { key: "weak", label: "약화", order: 3 };
+  return { key: "watch", label: "관찰", order: 4 };
 }
 
 function signalInboxItemKey(sourceKey, signal, badge) {
@@ -2275,10 +2472,14 @@ function signalInboxPriority(signal) {
 }
 
 function signalInboxSort(a, b) {
-  const priorityDiff = signalInboxPriority(b.signal) - signalInboxPriority(a.signal);
-  if (priorityDiff) return priorityDiff;
+  const statusDiff = Number(signalInboxNeedsAction(b)) - Number(signalInboxNeedsAction(a));
+  if (statusDiff) return statusDiff;
+  const bucketDiff = signalInboxWorkBucket(a).order - signalInboxWorkBucket(b).order;
+  if (bucketDiff) return bucketDiff;
   const scoreDiff = commonSignalScore(b) - commonSignalScore(a);
   if (scoreDiff) return scoreDiff;
+  const priorityDiff = signalInboxPriority(b.signal) - signalInboxPriority(a.signal);
+  if (priorityDiff) return priorityDiff;
   const scopeDiff = signalInboxScopeOrder(a.jumpTab) - signalInboxScopeOrder(b.jumpTab);
   if (scopeDiff) return scopeDiff;
   return String(a.title || "").localeCompare(String(b.title || ""), "ko");
@@ -2293,11 +2494,12 @@ function signalInboxItemHtml(item) {
   const decision = signalDecisionSummary(item);
   const cryptoAttr = item.jumpCrypto ? ` data-jump-crypto="${escapeAttr(item.jumpCrypto)}"` : "";
   const focusAttr = item.focusKey ? ` data-jump-focus="${escapeAttr(item.focusKey)}"` : "";
-  const unread = signalInboxIsUnread(item);
+  const pending = signalInboxNeedsAction(item);
+  const bucket = signalInboxWorkBucket(item);
   return `
-    <article class="signal-inbox-item ${escapeAttr(signal)}${unread ? " unread" : ""}" role="button" tabindex="0" data-signal-key="${escapeAttr(item.key || "")}" data-jump-tab="${escapeAttr(item.jumpTab)}"${cryptoAttr}${focusAttr}>
+    <article class="signal-inbox-item ${escapeAttr(signal)} ${pending ? "unread needs-action" : "done"}" role="button" tabindex="0" data-signal-key="${escapeAttr(item.key || "")}" data-jump-tab="${escapeAttr(item.jumpTab)}"${cryptoAttr}${focusAttr}>
       <div class="signal-inbox-main">
-        <span>${escapeHtml(item.kind || "신호")}${unread ? `<em>NEW</em>` : ""}</span>
+        <span>${escapeHtml(item.kind || "신호")}<em class="${pending ? "pending" : "complete"}">${pending ? "처리" : "완료"}</em><em class="bucket">${escapeHtml(bucket.label)}</em></span>
         <strong>${escapeHtml(item.title || "-")}</strong>
         <small>${escapeHtml(decision.status)} · ${escapeHtml(item.detail || "해당 화면에서 세부 조건을 확인하세요.")}</small>
         <small class="next-action">${escapeHtml(decision.action)}</small>
@@ -2393,11 +2595,45 @@ function renderEtfPanel() {
     { label: "30분 50%", value: formatNum(context.thirty_minute?.fib_50, 0), text: etfStanceLabel(context.thirty_minute?.stance) },
     { label: "61.8%", value: formatNum(context.thirty_minute?.fib_618, 0), text: "재투입 후보" },
   ].map(metricCard).join("");
-  document.querySelector("#etfGuideList").innerHTML = [
-    guideItem("현재", signalStatusText(signal, etfScore)),
-    guideItem("근거", summary.message || archive.etf?.index_filter?.message || "KOSPI200 흐름과 함께 확인합니다."),
-    guideItem("다음", signalActionText(signal, etfScore, "etf")),
-  ].join("");
+  renderEtfSignalCard({
+    signal,
+    score: etfScore,
+    summary,
+    selected,
+    context,
+    indexFilter: archive.etf?.index_filter || {},
+  });
+}
+
+function renderEtfSignalCard({ signal = "watch", score = 0, summary = {}, selected = {}, context = {}, indexFilter = {} } = {}) {
+  const root = document.querySelector("#etfSignalList");
+  if (!root) return;
+  const decision = signalDecisionSummary({
+    scope: "etf",
+    signal,
+    signalScore: score,
+    badge: summary.label || "ETF 관찰",
+    detail: summary.message || indexFilter.message || "KOSPI200 흐름과 ETF 30분 기준을 함께 확인합니다.",
+    actionText: signalActionText(signal, score, "etf"),
+  });
+  const thirty = context.thirty_minute || {};
+  const items = [
+    { label: "점수", value: `${score}점`, text: decision.status },
+    { label: "KODEX200", value: formatNum(selected.close, 0), text: selected.date || selected.time || "-" },
+    { label: "30분 50%", value: formatNum(thirty.fib_50, 0), text: etfStanceLabel(thirty.stance) },
+    { label: "61.8%", value: formatNum(thirty.fib_618, 0), text: "재투입 후보" },
+    { label: "지수필터", value: indexFilter.label || summary.label || "-", text: `점수 ${formatNum(indexFilter.score, 1)}` },
+    { label: "다음", value: decision.action, text: "실행 기준" },
+  ];
+  root.innerHTML = optionDecisionCard({
+    className: signal,
+    title: "ETF 판단",
+    badge: summary.label || "관찰",
+    score,
+    summary: summary.message || "KODEX200 ETF 분할매수 컨텍스트를 카드 기준으로 확인합니다.",
+    decision,
+    items,
+  });
 }
 
 function renderStocksPanel() {
@@ -2450,15 +2686,6 @@ function renderUsStocksPanel() {
     { label: "추적군", value: formatNum(usStocks.ready_count, 0), text: `${formatNum(usStocks.tracked_count, 0)}개 중` },
   ].map(metricCard).join("");
   renderStockManagePanel("us");
-  const top = uniqueStockItems([...(usStocks.top || []), ...(usStocks.assets || [])])
-    .sort((a, b) => stockQualityScore(b, b, b.summary?.signal) - stockQualityScore(a, a, a.summary?.signal));
-  document.querySelector("#usFilterGuideList").innerHTML = top.length
-    ? top.slice(0, 8).map(usStockItem).join("")
-    : [
-      guideItem("상대강도", "SPY/QQQ보다 강한 종목만 공격 후보로 올립니다."),
-      guideItem("추세", "20일선 회복, 50일선 방향, 200일선 위치를 함께 봅니다."),
-      guideItem("위험", "VIX 급등, 갭 하락, 거래량 없는 상승은 신호 강도를 낮춥니다."),
-    ].join("");
 }
 
 function renderStockManagePanel(scope) {
@@ -2469,13 +2696,8 @@ function renderStockManagePanel(scope) {
   const activeItems = watchItemsForScope(scope);
   const candidates = stockManageCandidateItems(scope);
   const stats = stockManageStats(activeItems, candidates);
-  setText(config.summary, `감시 ${activeItems.length}개 · 후보 ${candidates.length}개 · 평균 ${stats.avgScore}점 · 확인 ${stats.strong + stats.risk}개`);
-  const activeRoot = document.querySelector(config.activeList);
-  if (activeRoot) {
-    activeRoot.innerHTML = activeItems.length
-      ? activeItems.map(stockActiveWatchItem).join("")
-      : `<article class="asset-manage-empty">감시 중인 ${config.label} 관심종목이 없습니다. 검색하거나 아래 후보에서 추가하세요.</article>`;
-  }
+  setText(config.summary, `감시 ${activeItems.length}개 · 후보 ${candidates.length}개 · 평균 ${stats.avgScore}점`);
+  renderStockSignalList(config, activeItems);
   const candidateRoot = document.querySelector(config.candidateList);
   if (candidateRoot) {
     candidateRoot.innerHTML = candidates.length
@@ -2484,39 +2706,67 @@ function renderStockManagePanel(scope) {
   }
 }
 
+function renderStockSignalList(config, activeItems = []) {
+  const root = document.querySelector(config.signalList);
+  if (!root) return;
+  root.innerHTML = activeItems.length
+    ? activeItems.map(stockSignalCard).join("")
+    : `
+      <article class="crypto-signal-card stock-signal-card watch">
+        <header>
+          <h2>감시 종목 없음</h2>
+          <span class="signal-pill watch">대기</span>
+        </header>
+        <p class="crypto-card-summary">${escapeHtml(`${config.label} 추가 패널에서 감시할 종목을 추가하면 이곳에서 삭제와 신호 확인을 같이 할 수 있습니다.`)}</p>
+      </article>
+    `;
+}
+
 function stockManageConfig(scope) {
   return scope === "us"
     ? {
       label: "미장",
       panel: "#usManagePanel",
       summary: "#usManageSummary",
-      activeList: "#usWatchList",
+      signalList: "#usSignalList",
       candidateList: "#usManageCandidateList",
     }
     : {
       label: "국장",
       panel: "#domesticManagePanel",
       summary: "#domesticManageSummary",
-      activeList: "#domesticWatchList",
+      signalList: "#domesticSignalList",
       candidateList: "#domesticManageCandidateList",
     };
 }
 
-function stockActiveWatchItem(item) {
+function stockSignalCard(item) {
   const signal = signalClass(item.signal || "watch");
   const decision = signalDecisionSummary(item);
+  const metrics = collectionCardMetrics(item);
+  const detail = String(item.detail || "").trim();
+  const detailBlock = detail.length > 78
+    ? `
+      <details class="crypto-card-details">
+        <summary>상세 조건 보기</summary>
+        <p>${escapeHtml(detail)}</p>
+      </details>
+    `
+    : "";
   return `
-    <article class="asset-watch-chip ${escapeAttr(signal)}" data-focus-key="${escapeAttr(collectionItemKey(item.scope, item.symbol))}">
-      <div class="asset-watch-main">
-        <span class="asset-watch-meta">
-          <strong>${escapeHtml(item.title || item.symbol || "-")}</strong>
-          ${scoreBadgeHtml(decision.score, signal)}
-        </span>
-        <small>${escapeHtml(decision.status)} · ${escapeHtml(item.badge || item.kind || "관찰")}</small>
-        <small>${escapeHtml(item.detail || "")}</small>
-        <small class="next-action">${escapeHtml(decision.action)}</small>
+    <article class="crypto-signal-card stock-signal-card ${escapeAttr(signal)}" data-focus-key="${escapeAttr(collectionItemKey(item.scope, item.symbol))}">
+      <header>
+        <h2>${escapeHtml(item.title || item.symbol || "-")}</h2>
+        <span class="signal-pill ${escapeAttr(signal)}">${escapeHtml(item.badge || "관찰")}</span>
+        ${scoreBadgeHtml(decision.score, signal)}
+        <button class="mini-remove" type="button" data-watch-scope="${escapeAttr(item.scope)}" data-watch-remove="${escapeAttr(item.symbol)}">삭제</button>
+      </header>
+      <p class="crypto-card-summary">${escapeHtml(detail || "지수 필터와 상대강도 기준으로 감시합니다.")}</p>
+      ${decisionStackHtml(decision)}
+      <div class="crypto-signal-grid">
+        ${cryptoSignalGridItems(metrics)}
       </div>
-      <button class="mini-remove" type="button" data-watch-scope="${escapeAttr(item.scope)}" data-watch-remove="${escapeAttr(item.symbol)}">삭제</button>
+      ${detailBlock}
     </article>
   `;
 }
@@ -2866,8 +3116,6 @@ function renderCryptoPanel() {
     ...assets.map((asset) => cryptoSignalCard(asset, assets, { removable: true })),
     ...exceptionAssets.map((asset) => cryptoSignalCard(asset, assets, { exceptionMode: true, removable: true })),
     cryptoExceptionApprovalCard(exceptionAssets, assets),
-    cryptoHotMoneyCard([...assets, ...exceptionAssets]),
-    cryptoPolicyCard(crypto),
   ].filter(Boolean);
   document.querySelector("#cryptoSignalList").innerHTML = cards.length
     ? cards.join("")
@@ -4270,110 +4518,6 @@ function cryptoExceptionApprovalCard(exceptionAssets = [], normalAssets = []) {
           { label: "기본한도", value: `${formatNum(CRYPTO_EXCEPTION_APPROVAL_DEFAULT_POOL_PCT, 0)}%`, text: "승인 전 기준" },
           { label: "승인범위", value: exposure.rangeText, text: "단계별 허용" },
           { label: "절대상한", value: `${formatNum(exposure.maxPct, 0)}%`, text: "초과 금지" },
-        ])}
-        </div>
-      </details>
-    </article>
-  `;
-}
-
-function cryptoPolicyCard(crypto = {}) {
-  const policy = crypto.allocation_policy || {};
-  const approved = (policy.approved_scope_symbols || ["BTC", "ETH", "XRP", "XLM"]).join("·");
-  return `
-    <article class="crypto-signal-card neutral">
-      <header>
-        <h2>운용 범위</h2>
-        <span class="signal-pill neutral">정책</span>
-      </header>
-      <p class="crypto-card-summary">정상 운용 ${escapeHtml(approved)} · 예외풀 ${formatNum(policy.exception_pool_cap_pct ?? 5, 1)}% · 현금성 ${(policy.cash_like_symbols || ["USDT"]).join("+")}</p>
-      <details class="crypto-card-details">
-        <summary>운용 정책 보기</summary>
-        <p>정상 운용은 ${escapeHtml(approved)} 안에서만 합니다. 그 밖의 급변 코인은 예외 풀 ${formatNum(policy.exception_pool_cap_pct ?? 5, 1)}% 안에서 당일 종목당 ${formatNum(policy.exception_symbol_cap_pct ?? 2.5, 1)}%까지만 보고, 초과 편입은 사용자 승인 후 ${CRYPTO_EXCEPTION_APPROVAL_RANGE.join("·")}% 범위에서만 확장합니다. 응답이 없으면 +1%만 임시 허용하고 절대 상한은 ${formatNum(CRYPTO_EXCEPTION_ABSOLUTE_MAX_POOL_PCT, 0)}%입니다. USDT는 현금과 합산하며 부족하면 필요한 금액만큼 시장가 청산해 진입 재원으로 봅니다.</p>
-        <div class="crypto-signal-grid">
-          ${cryptoSignalGridItems([
-          { label: "정상감시", value: approved },
-          { label: "예외풀", value: `${formatNum(policy.exception_pool_cap_pct ?? 5, 1)}%` },
-          { label: "예외종목", value: `${formatNum(policy.exception_symbol_cap_pct ?? 2.5, 1)}%` },
-          { label: "예외진입", value: `${formatNum(policy.exception_entry_slot_pct ?? 65, 0)}%` },
-          { label: "주봉탐색", value: `${formatNum(CRYPTO_EXCEPTION_WEEKLY_PROBE_PORTFOLIO_PCT, 0)}%` },
-          { label: "선발대", value: `${formatNum(CRYPTO_SLOT_PCT.scout, 0)}%` },
-          { label: "기초단계", value: `${CRYPTO_SLOT_PCT.starter}/${CRYPTO_SLOT_PCT.starterPlus10}/${CRYPTO_SLOT_PCT.starterPlus20}%` },
-          { label: "기본단계", value: `${CRYPTO_SLOT_PCT.base}/${CRYPTO_SLOT_PCT.basePlus17}/${CRYPTO_SLOT_PCT.full}%` },
-          { label: "기본증가", value: `${CRYPTO_BASE_REBUILD_MARKET_SLOT_PCT}%+20%` },
-          { label: "재진입", value: "5·7·10%" },
-          { label: "초과승인", value: `${CRYPTO_EXCEPTION_APPROVAL_RANGE.join("·")}%` },
-          { label: "절대상한", value: `${formatNum(CRYPTO_EXCEPTION_ABSOLUTE_MAX_POOL_PCT, 0)}%` },
-          { label: "박스기준", value: `${CRYPTO_INTRADAY_BOX_STOP_BARS}봉` },
-          { label: "고점컷", value: "15·20·25%+10%" },
-          { label: "불타기", value: `${formatNum(CRYPTO_PYRAMID_ADD_SLOT_PCT, 1)}%/${formatNum(CRYPTO_PYRAMID_MARKET_SLOT_PCT, 1)}%` },
-          { label: "불타기기준", value: `+${formatNum(CRYPTO_PYRAMID_VERTICAL_RISE_PCT, 0)}%·+${formatNum(CRYPTO_PYRAMID_SECOND_RISE_PCT, 0)}%·${formatNum(CRYPTO_PYRAMID_PULLBACK_PCT, 0)}%` },
-          { label: "현금조달", value: "부족분 USDT" },
-          { label: "현금성", value: (policy.cash_like_symbols || ["USDT"]).join("+") },
-        ])}
-        </div>
-      </details>
-    </article>
-  `;
-}
-
-function cryptoHotMoneyCard(assets = []) {
-  const rows = (Array.isArray(assets) ? assets : []).map((asset) => {
-    const selected = asset?.selected || asset?.latest || {};
-    const close = number(selected.close);
-    const volume = number(selected.volume);
-    const changePct = number(selected.change_pct);
-    return {
-      asset,
-      name: cryptoAssetName(asset),
-      close,
-      volume,
-      changePct,
-      tradeValue: close != null && volume != null ? close * volume : null,
-      timeText: cryptoSignalTimeText(selected),
-      profile: cryptoAssetProfile(asset),
-      trendReversal: cryptoThirtyMinuteEntryAnalysis(cryptoRowsForFrame(asset, "30m"), state.selectedDate).trendReversal,
-      weeklyTrend: cryptoWeeklyTrendAnalysis(cryptoRowsForFrame(asset, "1w"), state.selectedDate),
-    };
-  }).filter((row) => row.close != null);
-  if (!rows.length) return "";
-
-  const topValue = [...rows].sort((a, b) => (b.tradeValue || 0) - (a.tradeValue || 0))[0];
-  const topMove = [...rows].sort((a, b) => (b.changePct ?? -Infinity) - (a.changePct ?? -Infinity))[0];
-  const exceptionHot = rows
-    .filter((row) => row.profile.assetType === "exception")
-    .sort((a, b) => Math.max(b.tradeValue || 0, 0) - Math.max(a.tradeValue || 0, 0))[0];
-  const trendHot = [...rows]
-    .sort((a, b) => (b.trendReversal?.score || 0) - (a.trendReversal?.score || 0))[0];
-  const weeklyHot = [...rows]
-    .sort((a, b) => (b.weeklyTrend?.score || 0) - (a.weeklyTrend?.score || 0))[0];
-  const timeTexts = rows.map((row) => row.timeText).filter(Boolean).sort();
-  const latestTime = timeTexts[timeTexts.length - 1] || "-";
-  const valueText = topValue?.tradeValue != null ? formatCryptoTradeValue(topValue.tradeValue) : "-";
-  const moveText = topMove?.changePct != null ? `${formatSigned(topMove.changePct, 1)}%` : "-";
-  const exceptionText = exceptionHot ? `${exceptionHot.name} · ${formatCryptoTradeValue(exceptionHot.tradeValue)}` : "예외 후보 대기";
-  const trendText = trendHot ? `${trendHot.trendReversal?.label || "전환 대기"} · ${formatNum(trendHot.trendReversal?.score || 0, 0)}점` : "전환형 대기";
-  const weeklyText = weeklyHot ? `${weeklyHot.weeklyTrend?.label || "주봉 대기"} · ${formatNum(weeklyHot.weeklyTrend?.score || 0, 0)}점` : "주봉 대기";
-  const className = topMove?.changePct >= 7 || exceptionHot?.changePct >= 7 || trendHot?.trendReversal?.strong || weeklyHot?.weeklyTrend?.strong ? "candidate" : "watch";
-
-  return `
-    <article class="crypto-signal-card ${escapeAttr(className)}">
-      <header>
-        <h2>시장 핫체크</h2>
-        <span class="signal-pill ${escapeAttr(className)}">거래대금·수익률</span>
-      </header>
-      <p class="crypto-card-summary">대금 ${topValue?.name || "-"} · 수익률 ${topMove?.name || "-"} ${moveText} · 추적 ${latestTime}</p>
-      <details class="crypto-card-details">
-        <summary>시장 조건 보기</summary>
-        <p>거래대금과 당일 수익률이 커지는 종목, 후행스팬·구름·정배열 전환이 동시에 나오는 종목, 주봉 기준선 위에서 단기 매물대를 돌파하는 종목을 예외 후보로 계속 추적합니다.</p>
-        <div class="crypto-signal-grid">
-          ${cryptoSignalGridItems([
-          { label: "대금 1위", value: topValue?.name || "-", text: valueText },
-          { label: "수익률 1위", value: topMove?.name || "-", text: moveText },
-          { label: "추세전환", value: trendHot?.name || "-", text: trendText },
-          { label: "주봉초입", value: weeklyHot?.name || "-", text: weeklyText },
-          { label: "예외후보", value: exceptionHot?.name || "-", text: exceptionText },
-          { label: "추적시각", value: latestTime, text: "시간·분 기준" },
         ])}
         </div>
       </details>

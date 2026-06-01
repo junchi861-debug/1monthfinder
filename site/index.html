@@ -18,7 +18,7 @@
     <link rel="icon" href="icons/icon.svg" type="image/svg+xml" />
     <link rel="icon" href="icons/icon-192.png" sizes="192x192" type="image/png" />
     <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
-    <link rel="stylesheet" href="styles.css?v=20260601-algo-visibility-1" />
+    <link rel="stylesheet" href="styles.css?v=20260601-workbox-1" />
   </head>
   <body>
     <main class="app-shell" aria-live="polite">
@@ -59,6 +59,10 @@
           </div>
           <h1>모음</h1>
           <p id="collectionMessage">직접 감시 중인 카드만 표시합니다.</p>
+          <div class="collection-toolbar" aria-label="모음 정렬 방식">
+            <button type="button" data-collection-sort="auto">오늘 할 일</button>
+            <button type="button" data-collection-sort="manual">수동 순서</button>
+          </div>
           <div class="watch-card-grid collection-watch-grid" id="collectionWatchGrid"></div>
         </section>
       </section>
@@ -91,6 +95,7 @@
               <small>61.8%</small>
             </article>
           </div>
+          <div class="crypto-signal-list option-signal-list" id="optionSignalList"></div>
 
           <div class="chart-frame live-chart-frame">
             <canvas id="liveChart" height="320" aria-label="KOSPI200 5분봉 실시간 차트"></canvas>
@@ -127,7 +132,7 @@
 
         <section class="log-panel" id="signalLogPanel" aria-labelledby="signalLogTitle">
           <div class="section-title">
-            <h2 id="signalLogTitle">최근 신호</h2>
+            <h2 id="signalLogTitle">당일 신호</h2>
             <span id="logCount">0개</span>
           </div>
           <div class="signal-log" id="signalLog">
@@ -153,7 +158,7 @@
             </div>
           </div>
           <div class="chart-legend" id="etfLegend"></div>
-          <div class="guide-list" id="etfGuideList"></div>
+          <div class="crypto-signal-list etf-signal-list" id="etfSignalList"></div>
         </section>
       </section>
 
@@ -176,7 +181,7 @@
           <div class="chart-legend" id="stocksLegend"></div>
           <details class="asset-manage-panel" id="domesticManagePanel">
             <summary>
-              <span>국장 추가/삭제</span>
+              <span>국장 추가</span>
               <small id="domesticManageSummary">관심종목을 불러오는 중입니다.</small>
             </summary>
             <div class="asset-manage-content">
@@ -189,15 +194,12 @@
                 <div class="search-results" id="domesticSearchResults"></div>
               </section>
               <section>
-                <strong>감시 중</strong>
-                <div class="asset-manage-list" id="domesticWatchList"></div>
-              </section>
-              <section>
                 <strong>추가 후보</strong>
                 <div class="asset-candidate-list" id="domesticManageCandidateList"></div>
               </section>
             </div>
           </details>
+          <div class="crypto-signal-list stock-signal-list" id="domesticSignalList"></div>
         </section>
       </section>
 
@@ -220,7 +222,7 @@
           <div class="chart-legend" id="usStocksLegend"></div>
           <details class="asset-manage-panel" id="usManagePanel">
             <summary>
-              <span>미장 추가/삭제</span>
+              <span>미장 추가</span>
               <small id="usManageSummary">관심종목을 불러오는 중입니다.</small>
             </summary>
             <div class="asset-manage-content">
@@ -233,16 +235,12 @@
                 <div class="search-results" id="usSearchResults"></div>
               </section>
               <section>
-                <strong>감시 중</strong>
-                <div class="asset-manage-list" id="usWatchList"></div>
-              </section>
-              <section>
                 <strong>추가 후보</strong>
                 <div class="asset-candidate-list" id="usManageCandidateList"></div>
               </section>
             </div>
           </details>
-          <div class="guide-list" id="usFilterGuideList"></div>
+          <div class="crypto-signal-list stock-signal-list" id="usSignalList"></div>
         </section>
       </section>
 
@@ -321,12 +319,13 @@
           <div class="modal-panel" data-modal-panel="signals" hidden>
             <div class="signal-inbox-tools">
               <div class="signal-filter-tabs" role="tablist" aria-label="신호 필터">
-                <button type="button" data-signal-filter="all" class="active">전체</button>
+                <button type="button" data-signal-filter="all" class="active">오늘</button>
                 <button type="button" data-signal-filter="action">진입</button>
                 <button type="button" data-signal-filter="risk">위험</button>
+                <button type="button" data-signal-filter="weak">약화</button>
                 <button type="button" data-signal-filter="watch">관찰</button>
               </div>
-              <button class="soft-button" type="button" id="markSignalsRead">전체 확인</button>
+              <button class="soft-button" type="button" id="markSignalsRead">전체 확인 완료</button>
             </div>
             <p class="sheet-copy" id="signalInboxSummary">현재 화면의 신호를 모으는 중입니다.</p>
             <div class="signal-inbox-list" id="signalInboxList"></div>
@@ -428,7 +427,7 @@
                 <input type="checkbox" id="saveSignalLog" />
                 <span>
                   <strong>신호 기록 저장</strong>
-                  <small>브라우저 localStorage에 최근 신호를 남깁니다.</small>
+                  <small>브라우저 localStorage에 신호를 저장하고 화면에는 당일만 표시합니다.</small>
                 </span>
               </label>
               <label class="setting-row select-setting">
@@ -463,6 +462,6 @@
       </section>
     </div>
 
-    <script src="script.js?v=20260601-algo-visibility-1"></script>
+    <script src="script.js?v=20260601-workbox-1"></script>
   </body>
 </html>
