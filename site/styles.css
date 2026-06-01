@@ -217,6 +217,14 @@ p {
   font-size: 0.7rem;
 }
 
+.mode-toggle {
+  flex: 0 0 auto;
+  min-width: 4.75rem;
+  min-height: 1.72rem;
+  padding: 0.18rem 0.48rem;
+  font-size: 0.68rem;
+}
+
 .signal-board,
 .log-panel {
   border: 1px solid var(--line);

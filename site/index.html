@@ -18,7 +18,7 @@
     <link rel="icon" href="icons/icon.svg" type="image/svg+xml" />
     <link rel="icon" href="icons/icon-192.png" sizes="192x192" type="image/png" />
     <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
-    <link rel="stylesheet" href="styles.css?v=20260601-stock-manage-4" />
+    <link rel="stylesheet" href="styles.css?v=20260601-replay-dashboard-1" />
   </head>
   <body>
     <main class="app-shell" aria-live="polite">
@@ -29,6 +29,7 @@
         </div>
         <div class="top-actions">
           <small class="app-updated-at" aria-label="앱 업데이트 시각">2026-05-31</small>
+          <button class="mode-toggle signal-pill watch" type="button" id="dashboardModeToggle" aria-pressed="false">과거 확인</button>
           <button class="ghost-button" type="button" id="refreshMonitor">새로고침</button>
           <button class="ghost-button" type="button" data-open-modal="settings">설정</button>
         </div>
@@ -111,9 +112,8 @@
           <div class="chart-legend" id="liveLegend"></div>
           <div class="trade-strip neutral" id="liveTradePlan" aria-label="실시간 가상 매매 플랜"></div>
 
-          <div class="action-row action-row-two">
+          <div class="action-row">
             <button class="primary-button" type="button" id="enableAlerts">알림 켜기</button>
-            <button class="soft-button" type="button" data-open-modal="replay">복기</button>
           </div>
           <p class="board-status" id="boardStatus">소리 대기 · 진동 ON · 화면유지 OFF</p>
         </section>
@@ -451,6 +451,6 @@
       </section>
     </div>
 
-    <script src="script.js?v=20260601-stock-manage-4"></script>
+    <script src="script.js?v=20260601-replay-dashboard-1"></script>
   </body>
 </html>

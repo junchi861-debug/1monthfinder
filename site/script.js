@@ -318,6 +318,7 @@ const state = {
   assetArchive: null,
   monitor: null,
   monitorTimer: null,
+  dashboardMode: "live",
   activeTab: "collection",
   cryptoTab: "all",
   cryptoFrame: "240m",
@@ -520,7 +521,9 @@ async function init() {
   await registerServiceWorker();
 
   state.activeTab = tabFromHash();
-  state.selectedDate = dateFromQuery() || kstDateString();
+  const requestedDate = dateFromQuery();
+  state.dashboardMode = requestedDate && requestedDate < kstDateString() ? "replay" : "live";
+  state.selectedDate = state.dashboardMode === "replay" ? requestedDate : kstDateString();
   state.activeReplayDate = state.selectedDate === kstDateString() ? null : state.selectedDate;
 
   const [weeklyOptions, replayPayload, publicReplay, signalLogPayload, assetArchive] = await Promise.all([
@@ -590,6 +593,44 @@ function setCryptoFrame(frame) {
   scheduleChartRedraw();
 }
 
+async function toggleDashboardMode() {
+  await setDashboardMode(state.dashboardMode === "replay" ? "live" : "replay");
+}
+
+async function setDashboardMode(mode) {
+  const nextMode = mode === "replay" ? "replay" : "live";
+  state.dashboardMode = nextMode;
+  const targetDate = nextMode === "replay" ? replayDashboardDate() : kstDateString();
+  if (targetDate !== state.selectedDate) {
+    await setSelectedDate(targetDate);
+    return;
+  }
+  renderStaticPanels();
+  renderMonitor();
+}
+
+function replayDashboardDate() {
+  const selected = clampDate(state.selectedDate || "");
+  if (selected < kstDateString()) return selected;
+  return defaultReplayDate();
+}
+
+function defaultReplayDate() {
+  const today = kstDateString();
+  const sessions = Array.isArray(state.replay?.sessions) ? state.replay.sessions : [];
+  const candidates = [
+    activeReplaySession()?.date,
+    state.replay?.active_session?.date,
+    state.replay?.active_session_id,
+    ...sessions.map((session) => session.date || session.id),
+  ]
+    .filter((date) => /^\d{4}-\d{2}-\d{2}$/.test(String(date || "")))
+    .filter((date) => date < today)
+    .sort()
+    .reverse();
+  return candidates[0] || offsetDate(today, -1);
+}
+
 async function setSelectedDate(date) {
   const next = clampDate(date || kstDateString());
   const requestSeq = state.dateLoadSeq + 1;
@@ -636,7 +677,9 @@ async function setSelectedDate(date) {
 function moveSelectedDate(deltaDays) {
   const current = parseDate(state.selectedDate) || parseDate(kstDateString());
   current.setUTCDate(current.getUTCDate() + deltaDays);
-  setSelectedDate(clampDate(current.toISOString().slice(0, 10)));
+  const next = clampDate(current.toISOString().slice(0, 10));
+  if (state.dashboardMode === "replay" && next >= kstDateString()) return;
+  setSelectedDate(next);
 }
 
 async function refreshAssetArchive(date = state.selectedDate) {
@@ -696,9 +739,10 @@ async function loadReplayDate(date, options = {}) {
 }
 
 function bindControls() {
-  document.querySelector("#refreshMonitor")?.addEventListener("click", () => loadMonitor(true));
+  document.querySelector("#refreshMonitor")?.addEventListener("click", refreshDashboard);
+  document.querySelector("#dashboardModeToggle")?.addEventListener("click", () => toggleDashboardMode());
   document.querySelector("#globalDateSelector")?.addEventListener("change", (event) => setSelectedDate(event.target.value || kstDateString()));
-  document.querySelector("#dateToday")?.addEventListener("click", () => setSelectedDate(kstDateString()));
+  document.querySelector("#dateToday")?.addEventListener("click", () => setDashboardMode("live"));
   document.querySelector("#datePrev")?.addEventListener("click", () => moveSelectedDate(-1));
   document.querySelector("#dateNext")?.addEventListener("click", () => moveSelectedDate(1));
   document.querySelectorAll("[data-tab-target]").forEach((button) => {
@@ -867,6 +911,14 @@ async function loadMonitor(manual = false) {
     };
     renderMonitor();
   }
+}
+
+async function refreshDashboard() {
+  if (state.dashboardMode === "replay") {
+    await setSelectedDate(state.selectedDate);
+    return;
+  }
+  await loadMonitor(true);
 }
 
 function renderMonitor() {
@@ -1430,13 +1482,29 @@ function renderNavigation() {
 }
 
 function renderDateToolbar() {
-  const selected = clampDate(state.selectedDate || kstDateString());
+  const replayMode = state.dashboardMode === "replay";
+  const todayText = kstDateString();
+  const maxReplayDate = offsetDate(todayText, -1);
+  const selected = replayMode
+    ? (clampDate(state.selectedDate || maxReplayDate) >= todayText ? maxReplayDate : clampDate(state.selectedDate || maxReplayDate))
+    : todayText;
   state.selectedDate = selected;
+  document.querySelector(".app-shell")?.classList.toggle("replay-dashboard", replayMode);
+  document.querySelector(".app-shell")?.classList.toggle("live-dashboard", !replayMode);
+  const toolbar = document.querySelector(".date-toolbar");
+  if (toolbar) toolbar.hidden = !replayMode;
+  const toggle = document.querySelector("#dashboardModeToggle");
+  if (toggle) {
+    toggle.textContent = replayMode ? "실시간" : "과거 확인";
+    toggle.setAttribute("aria-pressed", replayMode ? "true" : "false");
+    toggle.title = replayMode ? "실시간 대시보드로 돌아가기" : "과거 확인 대시보드 열기";
+    toggle.className = `mode-toggle signal-pill ${replayMode ? "candidate" : "watch"}`;
+  }
   const input = document.querySelector("#globalDateSelector");
   if (input) {
     input.value = selected;
     input.min = offsetDate(kstDateString(), -SUMMARY_ARCHIVE_DAYS);
-    input.max = kstDateString();
+    input.max = replayMode ? maxReplayDate : todayText;
   }
   const mode = archiveMode(selected);
   const badge = document.querySelector("#dateModeBadge");
@@ -1451,8 +1519,11 @@ function renderDateToolbar() {
   const inputDisabled = state.dateLoading;
   if (input) input.disabled = inputDisabled;
   if (prev) prev.disabled = inputDisabled;
-  if (today) today.disabled = inputDisabled;
-  if (next) next.disabled = inputDisabled || selected >= kstDateString();
+  if (today) {
+    today.disabled = inputDisabled;
+    today.textContent = replayMode ? "실시간" : "오늘";
+  }
+  if (next) next.disabled = inputDisabled || selected >= (replayMode ? maxReplayDate : todayText);
 }
 
 function renderAssetTabs() {
