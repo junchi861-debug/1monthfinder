@@ -626,13 +626,15 @@ p {
   line-height: 1.35;
 }
 
-.crypto-manage-panel {
+.crypto-manage-panel,
+.asset-manage-panel {
   border: 1px solid var(--line);
   border-radius: 8px;
   background: rgba(26, 38, 53, 0.62);
 }
 
-.crypto-manage-panel summary {
+.crypto-manage-panel summary,
+.asset-manage-panel summary {
   display: flex;
   min-height: 2.15rem;
   align-items: center;
@@ -645,35 +647,42 @@ p {
   font-weight: 950;
 }
 
-.crypto-manage-panel summary small {
+.crypto-manage-panel summary small,
+.asset-manage-panel summary small {
   color: var(--muted);
   font-size: 0.68rem;
   font-weight: 850;
 }
 
-.crypto-manage-content {
+.crypto-manage-content,
+.asset-manage-content {
   display: grid;
   gap: 0.58rem;
   padding: 0 0.58rem 0.58rem;
 }
 
-.crypto-manage-content section {
+.crypto-manage-content section,
+.asset-manage-content section {
   display: grid;
   gap: 0.36rem;
 }
 
-.crypto-manage-content section > strong {
+.crypto-manage-content section > strong,
+.asset-manage-content section > strong {
   color: var(--ink-soft);
   font-size: 0.72rem;
 }
 
 .crypto-watch-list,
-.crypto-candidate-list {
+.crypto-candidate-list,
+.asset-manage-list,
+.asset-candidate-list {
   display: grid;
   gap: 0.36rem;
 }
 
-.crypto-watch-chip {
+.crypto-watch-chip,
+.asset-watch-chip {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 0.38rem;
@@ -685,7 +694,8 @@ p {
   background: var(--surface-soft);
 }
 
-.crypto-watch-chip > button:first-child {
+.crypto-watch-chip > button:first-child,
+.asset-watch-chip > .asset-watch-main {
   display: grid;
   min-width: 0;
   justify-items: start;
@@ -695,7 +705,8 @@ p {
   text-align: left;
 }
 
-.crypto-watch-chip small {
+.crypto-watch-chip small,
+.asset-watch-chip small {
   overflow: hidden;
   color: var(--muted);
   font-size: 0.68rem;
@@ -704,23 +715,36 @@ p {
 }
 
 .crypto-watch-chip.candidate,
-.crypto-watch-chip.buy {
+.crypto-watch-chip.buy,
+.asset-watch-chip.candidate,
+.asset-watch-chip.buy {
   border-left-color: var(--green);
 }
 
-.crypto-watch-chip.watch {
+.crypto-watch-chip.watch,
+.asset-watch-chip.watch {
   border-left-color: var(--blue);
 }
 
-.crypto-watch-chip.warning {
+.crypto-watch-chip.warning,
+.asset-watch-chip.warning {
   border-left-color: var(--amber);
 }
 
-.crypto-watch-chip.sell {
+.crypto-watch-chip.sell,
+.crypto-watch-chip.avoid,
+.asset-watch-chip.sell,
+.asset-watch-chip.avoid {
   border-left-color: var(--red);
 }
 
-.crypto-manage-empty {
+.crypto-watch-chip.neutral,
+.asset-watch-chip.neutral {
+  border-left-color: var(--muted);
+}
+
+.crypto-manage-empty,
+.asset-manage-empty {
   padding: 0.46rem;
   border: 1px dashed var(--line);
   border-radius: 8px;

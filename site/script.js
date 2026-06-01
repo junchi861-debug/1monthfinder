@@ -1669,8 +1669,7 @@ function renderStocksPanel() {
     { label: "지수 필터", value: indexFilter.label || "-", text: `점수 ${formatNum(indexFilter.score, 1)}` },
   ].map(metricCard).join("");
   const rows = [...(shortTerm.top || []).map((row) => ({ ...row, bucket: "1일" })), ...(swing.top || []).slice(0, 5).map((row) => ({ ...row, bucket: "1달" }))];
-  renderSearchResults("domestic");
-  renderWatchList("domestic", "#domesticWatchList");
+  renderStockManagePanel("domestic");
   document.querySelector("#stocksCandidateList").innerHTML = rows.length
     ? rows.slice(0, 12).map(stockItem).join("")
     : `<article class="asset-item watch"><div class="asset-main"><strong>후보 없음</strong><small>${escapeHtml(stocks.archive_note || "시장 데이터 생성 후 표시됩니다.")}</small></div></article>`;
@@ -1693,8 +1692,7 @@ function renderUsStocksPanel() {
     { label: "후보", value: formatNum(usStocks.candidate_count, 0), text: "상승 후보" },
     { label: "기준", value: "SPY/QQQ", text: "상대강도" },
   ].map(metricCard).join("");
-  renderSearchResults("us");
-  renderWatchList("us", "#usWatchList");
+  renderStockManagePanel("us");
   const top = usStocks.top || [];
   document.querySelector("#usFilterGuideList").innerHTML = top.length
     ? top.slice(0, 8).map(usStockItem).join("")
@@ -1703,6 +1701,135 @@ function renderUsStocksPanel() {
       guideItem("추세", "20일선 회복, 50일선 방향, 200일선 위치를 함께 봅니다."),
       guideItem("위험", "VIX 급등, 갭 하락, 거래량 없는 상승은 신호 강도를 낮춥니다."),
     ].join("");
+}
+
+function renderStockManagePanel(scope) {
+  const config = stockManageConfig(scope);
+  const panel = document.querySelector(config.panel);
+  if (!panel) return;
+  renderSearchResults(scope);
+  const activeItems = watchItemsForScope(scope);
+  const candidates = stockManageCandidateItems(scope);
+  setText(config.summary, `감시 ${activeItems.length}개 · 후보 ${candidates.length}개 · 좋은 신호순`);
+  const activeRoot = document.querySelector(config.activeList);
+  if (activeRoot) {
+    activeRoot.innerHTML = activeItems.length
+      ? activeItems.map(stockActiveWatchItem).join("")
+      : `<article class="asset-manage-empty">감시 중인 ${config.label} 관심종목이 없습니다. 검색하거나 아래 후보에서 추가하세요.</article>`;
+  }
+  const candidateRoot = document.querySelector(config.candidateList);
+  if (candidateRoot) {
+    candidateRoot.innerHTML = candidates.length
+      ? candidates.slice(0, 16).map((item) => searchResultItem(item)).join("")
+      : `<article class="asset-manage-empty">추가 가능한 ${config.label} 후보가 없습니다.</article>`;
+  }
+}
+
+function stockManageConfig(scope) {
+  return scope === "us"
+    ? {
+      label: "미장",
+      panel: "#usManagePanel",
+      summary: "#usManageSummary",
+      activeList: "#usWatchList",
+      candidateList: "#usManageCandidateList",
+    }
+    : {
+      label: "국장",
+      panel: "#domesticManagePanel",
+      summary: "#domesticManageSummary",
+      activeList: "#domesticWatchList",
+      candidateList: "#domesticManageCandidateList",
+    };
+}
+
+function stockActiveWatchItem(item) {
+  const signal = signalClass(item.signal || "watch");
+  return `
+    <article class="asset-watch-chip ${escapeAttr(signal)}">
+      <div class="asset-watch-main">
+        <strong>${escapeHtml(item.title || item.symbol || "-")}</strong>
+        <small>${escapeHtml(item.badge || item.kind || "관찰")} · ${escapeHtml(item.value || item.symbol || "-")}</small>
+        <small>${escapeHtml(item.detail || "")}</small>
+      </div>
+      <button class="mini-remove" type="button" data-watch-scope="${escapeAttr(item.scope)}" data-watch-remove="${escapeAttr(item.symbol)}">삭제</button>
+    </article>
+  `;
+}
+
+function stockManageCandidateItems(scope) {
+  const selected = new Set((state.watchlists[scope] || []).map((item) => normalizeSearchText(item.symbol)));
+  const universe = scope === "us" ? usManageCandidateUniverse() : domesticManageCandidateUniverse();
+  return uniqueStockItems(universe)
+    .filter((item) => item.symbol && !selected.has(normalizeSearchText(item.symbol)))
+    .map((item) => ({ ...item, scope, alreadyAdded: false }))
+    .sort((a, b) => stockCandidateScore(b) - stockCandidateScore(a) || String(a.symbol).localeCompare(String(b.symbol)));
+}
+
+function domesticSignalRows() {
+  const stocks = state.assetArchive?.stocks || {};
+  const shortTerm = stocks.short_term || {};
+  const swing = stocks.swing || {};
+  return uniqueStockItems([
+    ...(shortTerm.top || []).map((row) => ({ ...row, bucket: "1일" })),
+    ...(shortTerm.watch || []).map((row) => ({ ...row, bucket: "1일 관찰" })),
+    ...(swing.top || []).map((row) => ({ ...row, bucket: "1달" })),
+    ...(swing.watch || []).map((row) => ({ ...row, bucket: "1달 관찰" })),
+  ]);
+}
+
+function domesticManageCandidateUniverse() {
+  const rows = domesticSignalRows();
+  const source = rows.length ? rows : domesticSearchUniverse().slice(0, 40);
+  return source.map((item) => ({
+    scope: "domestic",
+    symbol: String(item.symbol || "").trim(),
+    name: String(item.name || item.symbol || "").trim(),
+    market: item.market || "국장",
+    group: item.bucket || item.group || "추천 후보",
+    close: item.close ?? item.last_close,
+    change_pct: item.change_pct ?? item.ret_1d ?? item.ret_21d,
+  })).filter((item) => item.symbol && item.name);
+}
+
+function usManageCandidateUniverse() {
+  const usStocks = state.assetArchive?.us_stocks || {};
+  const rows = [
+    ...(usStocks.top || []),
+    ...(usStocks.assets || []),
+  ];
+  if (!rows.length) return usSearchUniverse();
+  return rows.map((asset) => {
+    const selected = asset.selected || asset.latest || {};
+    return {
+      scope: "us",
+      symbol: String(asset.symbol || "").trim(),
+      name: String(asset.label || asset.name || asset.symbol || "").trim(),
+      market: asset.market || "US",
+      group: asset.group || "미장",
+      close: selected.close,
+      change_pct: asset.summary?.ret_21d,
+    };
+  }).filter((item) => item.symbol && item.name);
+}
+
+function uniqueStockItems(items = []) {
+  const seen = new Set();
+  return (Array.isArray(items) ? items : []).filter((item) => {
+    const key = normalizeSearchText(item.symbol);
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function stockCandidateScore(item) {
+  const hint = searchSignalHint(item);
+  const classScore = { candidate: 700, buy: 700, watch: 470, neutral: 320, warning: 220, sell: 80, avoid: 40 }[signalClass(hint.signal)] || 0;
+  const match = item.scope === "us" ? findUsAsset(item.symbol) : findDomesticCandidate(item.symbol);
+  const rawScore = number(match?.summary?.score ?? match?.score) || 0;
+  const momentum = number(match?.summary?.ret_21d ?? item.change_pct) || 0;
+  return classScore + rawScore * 3 + momentum * 100;
 }
 
 function cryptoAssetUniverse(crypto = state.assetArchive?.crypto || {}) {
@@ -4688,13 +4815,7 @@ function watchListItem(item) {
 
 function findDomesticCandidate(symbol) {
   const text = String(symbol || "").trim().toUpperCase();
-  const stocks = state.assetArchive?.stocks || {};
-  const rows = [
-    ...(stocks.short_term?.top || []),
-    ...(stocks.short_term?.watch || []),
-    ...(stocks.swing?.top || []),
-    ...(stocks.swing?.watch || []),
-  ];
+  const rows = domesticSignalRows();
   return rows.find((row) => {
     const code = String(row.symbol || "").trim().toUpperCase();
     const name = String(row.name || "").trim().toUpperCase();
@@ -4777,8 +4898,14 @@ function clearSearchResults(scope) {
 
 function removeWatchSymbol(scope, symbol) {
   if (!state.watchlists[scope]) return;
-  const target = String(symbol || "").toUpperCase();
-  state.watchlists[scope] = state.watchlists[scope].filter((item) => item.symbol !== target);
+  const target = normalizeSearchText(symbol);
+  if (!target) return;
+  const current = state.watchlists[scope] || [];
+  const item = current.find((entry) => normalizeSearchText(entry.symbol) === target);
+  const scopeLabel = scope === "us" ? "미장" : "국장";
+  const name = item?.name || symbol;
+  if (!window.confirm(`${name}을(를) ${scopeLabel} 관심종목에서 삭제할까요?`)) return;
+  state.watchlists[scope] = current.filter((entry) => normalizeSearchText(entry.symbol) !== target);
   saveWatchlists();
   renderAssetTabs();
 }

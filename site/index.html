@@ -18,7 +18,7 @@
     <link rel="icon" href="icons/icon.svg" type="image/svg+xml" />
     <link rel="icon" href="icons/icon-192.png" sizes="192x192" type="image/png" />
     <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
-    <link rel="stylesheet" href="styles.css?v=20260531-crypto-risk-8" />
+    <link rel="stylesheet" href="styles.css?v=20260601-stock-manage-2" />
   </head>
   <body>
     <main class="app-shell" aria-live="polite">
@@ -184,12 +184,30 @@
             </div>
           </div>
           <div class="chart-legend" id="stocksLegend"></div>
-          <div class="watch-tools" aria-label="국장 관심종목 추가">
-            <input id="domesticWatchInput" type="text" inputmode="search" placeholder="국장 관심 종목 추가" />
-            <button class="soft-button" type="button" id="addDomesticWatch">추가</button>
-          </div>
-          <div class="search-results" id="domesticSearchResults"></div>
-          <div class="asset-list" id="domesticWatchList"></div>
+          <details class="asset-manage-panel" id="domesticManagePanel">
+            <summary>
+              <span>국장 추가/삭제</span>
+              <small id="domesticManageSummary">관심종목을 불러오는 중입니다.</small>
+            </summary>
+            <div class="asset-manage-content">
+              <section>
+                <strong>검색 추가</strong>
+                <div class="watch-tools" aria-label="국장 관심종목 추가">
+                  <input id="domesticWatchInput" type="text" inputmode="search" placeholder="삼성전자, 005930" />
+                  <button class="soft-button" type="button" id="addDomesticWatch">추가</button>
+                </div>
+                <div class="search-results" id="domesticSearchResults"></div>
+              </section>
+              <section>
+                <strong>감시 중</strong>
+                <div class="asset-manage-list" id="domesticWatchList"></div>
+              </section>
+              <section>
+                <strong>추가 후보</strong>
+                <div class="asset-candidate-list" id="domesticManageCandidateList"></div>
+              </section>
+            </div>
+          </details>
           <div class="asset-list" id="stocksCandidateList"></div>
         </section>
       </section>
@@ -211,12 +229,30 @@
             </div>
           </div>
           <div class="chart-legend" id="usStocksLegend"></div>
-          <div class="watch-tools" aria-label="미장 관심종목 추가">
-            <input id="usWatchInput" type="text" inputmode="search" placeholder="AAPL, MSFT, NVDA" />
-            <button class="soft-button" type="button" id="addUsWatch">추가</button>
-          </div>
-          <div class="search-results" id="usSearchResults"></div>
-          <div class="asset-list" id="usWatchList"></div>
+          <details class="asset-manage-panel" id="usManagePanel">
+            <summary>
+              <span>미장 추가/삭제</span>
+              <small id="usManageSummary">관심종목을 불러오는 중입니다.</small>
+            </summary>
+            <div class="asset-manage-content">
+              <section>
+                <strong>검색 추가</strong>
+                <div class="watch-tools" aria-label="미장 관심종목 추가">
+                  <input id="usWatchInput" type="text" inputmode="search" placeholder="AAPL, MSFT, NVDA" />
+                  <button class="soft-button" type="button" id="addUsWatch">추가</button>
+                </div>
+                <div class="search-results" id="usSearchResults"></div>
+              </section>
+              <section>
+                <strong>감시 중</strong>
+                <div class="asset-manage-list" id="usWatchList"></div>
+              </section>
+              <section>
+                <strong>추가 후보</strong>
+                <div class="asset-candidate-list" id="usManageCandidateList"></div>
+              </section>
+            </div>
+          </details>
           <div class="guide-list" id="usFilterGuideList"></div>
         </section>
       </section>
@@ -416,6 +452,6 @@
       </section>
     </div>
 
-    <script src="script.js?v=20260531-crypto-risk-8"></script>
+    <script src="script.js?v=20260601-stock-manage-2"></script>
   </body>
 </html>
