@@ -231,25 +231,42 @@ p {
   gap: 0.52rem;
   padding: 0.66rem;
   border-left: 4px solid var(--muted);
+  background: linear-gradient(90deg, rgba(154, 168, 184, 0.07), transparent 44%);
 }
 
 .signal-board.neutral {
   border-left-color: var(--muted);
+  background: linear-gradient(90deg, rgba(154, 168, 184, 0.07), transparent 44%);
 }
 
-.signal-board.watch,
+.signal-board.watch {
+  border-left-color: var(--blue);
+  background: linear-gradient(90deg, rgba(130, 167, 230, 0.09), transparent 44%);
+}
+
 .signal-board.warning {
   border-left-color: var(--amber);
+  background: linear-gradient(90deg, rgba(213, 160, 78, 0.1), transparent 44%);
 }
 
-.signal-board.candidate,
-.signal-board.buy {
+.signal-board.candidate {
   border-left-color: var(--green);
+  background: linear-gradient(90deg, rgba(95, 199, 155, 0.1), transparent 44%);
 }
 
-.signal-board.sell,
-.signal-board.avoid {
+.signal-board.buy {
+  border-left-color: var(--teal);
+  background: linear-gradient(90deg, rgba(78, 183, 177, 0.11), transparent 44%);
+}
+
+.signal-board.sell {
   border-left-color: var(--red);
+  background: linear-gradient(90deg, rgba(223, 122, 114, 0.11), transparent 44%);
+}
+
+.signal-board.avoid {
+  border-left-color: #b88be8;
+  background: linear-gradient(90deg, rgba(184, 139, 232, 0.11), transparent 44%);
 }
 
 .signal-meta {
@@ -272,6 +289,7 @@ p {
   align-items: center;
   justify-content: center;
   padding: 0.18rem 0.5rem;
+  border: 1px solid rgba(154, 168, 184, 0.34);
   border-radius: 999px;
   background: rgba(154, 168, 184, 0.16);
   color: #c3cfdc;
@@ -280,25 +298,44 @@ p {
   white-space: nowrap;
 }
 
-.signal-pill.watch,
-.signal-pill.warning {
-  background: rgba(213, 160, 78, 0.15);
-  color: #f0c781;
+.signal-pill.watch {
+  border-color: rgba(130, 167, 230, 0.58);
+  background: rgba(130, 167, 230, 0.18);
+  color: #c7dcff;
 }
 
-.signal-pill.candidate,
-.signal-pill.buy {
-  background: rgba(95, 199, 155, 0.15);
+.signal-pill.warning {
+  border-color: rgba(213, 160, 78, 0.6);
+  background: rgba(213, 160, 78, 0.19);
+  color: #f2cc8c;
+}
+
+.signal-pill.candidate {
+  border-color: rgba(95, 199, 155, 0.62);
+  background: rgba(95, 199, 155, 0.2);
   color: #93e0bd;
 }
 
-.signal-pill.sell,
-.signal-pill.avoid {
-  background: rgba(223, 122, 114, 0.15);
+.signal-pill.buy {
+  border-color: rgba(78, 183, 177, 0.66);
+  background: rgba(78, 183, 177, 0.22);
+  color: #a7ece5;
+}
+
+.signal-pill.sell {
+  border-color: rgba(223, 122, 114, 0.66);
+  background: rgba(223, 122, 114, 0.21);
   color: #f1aaa5;
 }
 
+.signal-pill.avoid {
+  border-color: rgba(184, 139, 232, 0.62);
+  background: rgba(184, 139, 232, 0.19);
+  color: #d9c3fb;
+}
+
 .signal-pill.neutral {
+  border-color: rgba(154, 168, 184, 0.42);
   background: rgba(154, 168, 184, 0.16);
   color: #c3cfdc;
 }
@@ -436,6 +473,260 @@ p {
   line-height: 1.12;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+#cryptoMetricGrid article {
+  align-content: start;
+  min-height: 4.95rem;
+}
+
+#cryptoMetricGrid small {
+  display: -webkit-box;
+  min-height: 2.1em;
+  overflow: hidden;
+  line-height: 1.25;
+  white-space: normal;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+#cryptoBoard .signal-meta {
+  order: 1;
+}
+
+#cryptoTitle {
+  order: 2;
+}
+
+#cryptoMessage {
+  order: 3;
+}
+
+#cryptoMessage[hidden] {
+  display: none;
+}
+
+#cryptoBoard.crypto-overview-board .signal-meta,
+#cryptoBoard.crypto-overview-board #cryptoTitle,
+#cryptoBoard.crypto-overview-board #cryptoMessage {
+  display: none;
+}
+
+#cryptoSubTabs {
+  order: 4;
+}
+
+#cryptoTimeframeTabs {
+  order: 5;
+}
+
+#cryptoManagePanel {
+  order: 6;
+}
+
+#cryptoBoard .asset-chart-frame {
+  order: 7;
+  height: clamp(20rem, 48dvh, 38rem);
+  min-height: 320px;
+}
+
+#cryptoLegend {
+  order: 8;
+}
+
+#cryptoMetricGrid {
+  order: 9;
+}
+
+#cryptoSignalList {
+  order: 10;
+}
+
+#cryptoAssetList {
+  order: 11;
+}
+
+#cryptoBoard.crypto-detail-board #cryptoMetricGrid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+#cryptoBoard.crypto-detail-board #cryptoMetricGrid article {
+  min-height: 4.3rem;
+}
+
+#cryptoBoard .sub-tab-row {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 0.34rem;
+  overflow-x: auto;
+  padding-bottom: 0.06rem;
+  scrollbar-width: none;
+}
+
+#cryptoBoard .sub-tab-row::-webkit-scrollbar {
+  display: none;
+}
+
+#cryptoBoard .sub-tab-row button {
+  flex: 0 0 auto;
+  min-width: 4.4rem;
+  min-height: 1.92rem;
+  border-radius: 999px;
+}
+
+#cryptoBoard .sub-tab-row button.neutral {
+  border-color: rgba(154, 168, 184, 0.34);
+  background: rgba(154, 168, 184, 0.13);
+  color: #c3cfdc;
+}
+
+#cryptoBoard .sub-tab-row button.watch {
+  border-color: rgba(130, 167, 230, 0.48);
+  background: rgba(130, 167, 230, 0.15);
+  color: #c7dcff;
+}
+
+#cryptoBoard .sub-tab-row button.warning {
+  border-color: rgba(213, 160, 78, 0.54);
+  background: rgba(213, 160, 78, 0.18);
+  color: #f2cc8c;
+}
+
+#cryptoBoard .sub-tab-row button.candidate,
+#cryptoBoard .sub-tab-row button.buy {
+  border-color: rgba(95, 199, 155, 0.58);
+  background: rgba(95, 199, 155, 0.17);
+  color: #93e0bd;
+}
+
+#cryptoBoard .sub-tab-row button.sell {
+  border-color: rgba(223, 122, 114, 0.62);
+  background: rgba(223, 122, 114, 0.2);
+  color: #f1aaa5;
+}
+
+#cryptoBoard .sub-tab-row button.avoid {
+  border-color: rgba(184, 139, 232, 0.58);
+  background: rgba(184, 139, 232, 0.17);
+  color: #d9c3fb;
+}
+
+#cryptoBoard .sub-tab-row button.active {
+  border-color: currentColor;
+  box-shadow: inset 0 0 0 1px currentColor, 0 0 0 1px rgba(255, 255, 255, 0.1);
+  filter: saturate(1.18) brightness(1.08);
+}
+
+#cryptoBoard #cryptoTimeframeTabs button {
+  min-width: 4.15rem;
+}
+
+#cryptoBoard #cryptoDateText {
+  color: var(--ink-soft);
+  line-height: 1.35;
+}
+
+.crypto-manage-panel {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(26, 38, 53, 0.62);
+}
+
+.crypto-manage-panel summary {
+  display: flex;
+  min-height: 2.15rem;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.42rem 0.58rem;
+  color: var(--ink);
+  cursor: pointer;
+  font-size: 0.78rem;
+  font-weight: 950;
+}
+
+.crypto-manage-panel summary small {
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-weight: 850;
+}
+
+.crypto-manage-content {
+  display: grid;
+  gap: 0.58rem;
+  padding: 0 0.58rem 0.58rem;
+}
+
+.crypto-manage-content section {
+  display: grid;
+  gap: 0.36rem;
+}
+
+.crypto-manage-content section > strong {
+  color: var(--ink-soft);
+  font-size: 0.72rem;
+}
+
+.crypto-watch-list,
+.crypto-candidate-list {
+  display: grid;
+  gap: 0.36rem;
+}
+
+.crypto-watch-chip {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.38rem;
+  align-items: center;
+  padding: 0.36rem;
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--muted);
+  border-radius: 8px;
+  background: var(--surface-soft);
+}
+
+.crypto-watch-chip > button:first-child {
+  display: grid;
+  min-width: 0;
+  justify-items: start;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  text-align: left;
+}
+
+.crypto-watch-chip small {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 0.68rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.crypto-watch-chip.candidate,
+.crypto-watch-chip.buy {
+  border-left-color: var(--green);
+}
+
+.crypto-watch-chip.watch {
+  border-left-color: var(--blue);
+}
+
+.crypto-watch-chip.warning {
+  border-left-color: var(--amber);
+}
+
+.crypto-watch-chip.sell {
+  border-left-color: var(--red);
+}
+
+.crypto-manage-empty {
+  padding: 0.46rem;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  color: var(--muted);
+  font-size: 0.74rem;
+  font-weight: 820;
 }
 
 canvas {
@@ -1171,6 +1462,11 @@ canvas {
     min-height: 320px;
   }
 
+  #cryptoBoard .asset-chart-frame {
+    height: clamp(24rem, 56dvh, 42rem);
+    min-height: 380px;
+  }
+
   .replay-chart-frame {
     height: clamp(24rem, 52dvh, 38rem);
     min-height: 380px;
@@ -1472,6 +1768,11 @@ canvas {
     min-height: 0;
   }
 
+  #cryptoBoard .asset-chart-frame {
+    height: clamp(17rem, 54dvh, 30rem);
+    min-height: 280px;
+  }
+
   .replay-stepper {
     grid-template-columns: repeat(4, minmax(0, 1fr));
   }
@@ -1551,5 +1852,21 @@ canvas {
 
   .date-toolbar small {
     grid-column: 2 / -1;
+  }
+}
+
+#cryptoMetricGrid.price-grid small {
+  display: -webkit-box;
+  min-height: 2.1em;
+  overflow: hidden;
+  line-height: 1.25;
+  white-space: normal;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+@media (max-width: 430px) {
+  #cryptoBoard.crypto-detail-board #cryptoMetricGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
