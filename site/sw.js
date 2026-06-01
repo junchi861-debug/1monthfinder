@@ -1,10 +1,10 @@
-const PWA_VERSION = "20260601-replay-dashboard-1";
+const PWA_VERSION = "20260601-full-polish-1";
 const APP_CACHE = `1monthfinder-app-${PWA_VERSION}`;
 const APP_SHELL = [
   "./",
   "./index.html",
-  "./styles.css?v=20260601-replay-dashboard-1",
-  "./script.js?v=20260601-replay-dashboard-1",
+  "./styles.css?v=20260601-full-polish-1",
+  "./script.js?v=20260601-full-polish-1",
   "./manifest.webmanifest",
   "./icons/icon.svg",
   "./icons/icon-192.png",
