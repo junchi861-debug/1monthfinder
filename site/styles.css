@@ -1248,6 +1248,30 @@ canvas {
   justify-items: end;
 }
 
+.asset-item .score-badge {
+  justify-self: end;
+}
+
+.asset-watch-meta {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.35rem;
+}
+
+.asset-watch-meta strong {
+  min-width: 0;
+}
+
+.asset-watch-chip .score-badge {
+  flex: 0 0 auto;
+}
+
+.next-action {
+  color: var(--ink-soft);
+}
+
 .asset-item.candidate,
 .crypto-signal-card.candidate,
 .asset-item.buy {
@@ -1387,6 +1411,106 @@ canvas {
   white-space: nowrap;
 }
 
+.score-badge {
+  display: inline-grid;
+  place-items: center;
+  min-width: 2rem;
+  height: 1.35rem;
+  padding: 0 0.34rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: rgba(154, 168, 184, 0.13);
+  color: var(--ink);
+  font-size: 0.68rem;
+  font-weight: 950;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.score-badge.candidate,
+.score-badge.buy {
+  border-color: rgba(95, 199, 155, 0.5);
+  background: rgba(95, 199, 155, 0.16);
+  color: var(--green);
+}
+
+.score-badge.watch {
+  border-color: rgba(213, 160, 78, 0.48);
+  background: rgba(213, 160, 78, 0.14);
+  color: var(--amber);
+}
+
+.score-badge.warning {
+  border-color: rgba(213, 160, 78, 0.58);
+  background: rgba(213, 160, 78, 0.18);
+  color: var(--amber);
+}
+
+.score-badge.sell,
+.score-badge.avoid {
+  border-color: rgba(223, 122, 114, 0.52);
+  background: rgba(223, 122, 114, 0.16);
+  color: var(--red);
+}
+
+.decision-stack {
+  grid-column: 1 / 2;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.28rem;
+}
+
+.decision-stack div {
+  display: grid;
+  min-width: 0;
+  gap: 0.08rem;
+  padding: 0.4rem 0.42rem;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--surface-soft);
+}
+
+.decision-stack span,
+.recommendation-tags em,
+.next-action {
+  color: var(--muted);
+  font-size: 0.62rem;
+  font-weight: 950;
+}
+
+.decision-stack strong {
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 0.74rem;
+  line-height: 1.16;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.watch-card-details {
+  grid-column: 1 / 2;
+  padding: 0.38rem 0 0;
+  border-top: 1px solid var(--line);
+}
+
+.watch-card-details summary {
+  color: var(--ink-soft);
+  cursor: pointer;
+  font-size: 0.72rem;
+  font-weight: 950;
+}
+
+.watch-card-details p,
+.watch-card-details small {
+  display: block;
+  margin-top: 0.24rem;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 800;
+  line-height: 1.36;
+  white-space: normal;
+}
+
 .crypto-card-summary {
   display: -webkit-box;
   overflow: hidden;
@@ -1521,7 +1645,7 @@ canvas {
   border-left-color: var(--red);
 }
 
-.watch-card > div {
+.watch-card > div:not(.decision-stack):not(.collection-card-actions):not(.collection-empty-actions) {
   display: flex;
   min-width: 0;
   align-items: center;
@@ -1606,6 +1730,26 @@ canvas {
   font-size: 0.8rem;
   line-height: 1.34;
   -webkit-line-clamp: 3;
+}
+
+.collection-card .decision-stack,
+.crypto-signal-card .decision-stack {
+  display: grid;
+  grid-column: 1 / 2;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.collection-card .decision-stack strong,
+.crypto-signal-card .decision-stack strong {
+  color: var(--ink);
+  font-size: 0.74rem;
+  line-height: 1.16;
+  white-space: nowrap;
+}
+
+.crypto-signal-card .decision-stack {
+  grid-column: 1 / -1;
+  margin-top: 0.16rem;
 }
 
 .collection-card-metrics {
@@ -1761,6 +1905,30 @@ canvas {
 
 .search-result .search-hint {
   color: var(--ink-soft);
+}
+
+.recommendation-tags {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 0.2rem;
+  margin-top: 0.08rem;
+  overflow: visible;
+  white-space: normal;
+}
+
+.recommendation-tags em {
+  display: inline-grid;
+  max-width: 100%;
+  min-height: 1.12rem;
+  align-items: center;
+  padding: 0.08rem 0.34rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: rgba(130, 167, 230, 0.1);
+  color: var(--ink-soft);
+  font-style: normal;
+  line-height: 1.05;
 }
 
 .search-result .soft-button {
@@ -2175,6 +2343,12 @@ canvas {
 
   .collection-card-metrics {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .decision-stack,
+  .collection-card .decision-stack,
+  .crypto-signal-card .decision-stack {
+    grid-template-columns: 1fr;
   }
 
   .collection-empty-actions {
