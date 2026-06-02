@@ -6,6 +6,10 @@ const SETTINGS_KEY = "1monthfinder.options.settings";
 const WATCHLIST_KEY = "1monthfinder.watchlists";
 const COLLECTION_ORDER_KEY = "1monthfinder.collection.order";
 const COLLECTION_SORT_KEY = "1monthfinder.collection.sortMode";
+const COLLECTION_HIDDEN_KEY = "1monthfinder.collection.hiddenKeys";
+const VERIFIER_KEY = "1monthfinder.tradeVerifier.buyScenarios.v2";
+const VERIFIER_TIME_STEP_MINUTES = 5;
+const VERIFIER_MAX_TIME_OPTIONS = 220;
 const API_CACHE_KEY = "1monthfinder.api.lastGood";
 const SIGNAL_ALERT_THROTTLE_MS = 10 * 60000;
 const API_TIMEOUT_MS = 12000;
@@ -18,6 +22,39 @@ const ASSET_ARCHIVE_CACHE_MAX_AGE_MS = 60 * 60000;
 const API_CACHE_RECORD_MAX_CHARS = 1500000;
 const ASSET_ARCHIVE_SECTIONS = ["options", "etf", "stocks", "us_stocks", "crypto", "market"];
 const MANAGE_FILTERS = ["all", "strong", "watch", "risk"];
+const OPTION_PANEL_FILTERS = ["all", "entry", "watch", "risk"];
+const SIGNAL_EXPIRY_MINUTES = {
+  options: 20,
+  etf: 390,
+  stocks: 390,
+  usStocks: 1440,
+  crypto: 240,
+  collection: 240,
+};
+const ALERT_MODE_OPTIONS = ["all", "strong", "risk", "off"];
+const DEFAULT_ALERT_MODES = {
+  options: "strong",
+  etf: "strong",
+  domestic: "strong",
+  us: "strong",
+  crypto: "strong",
+};
+const ALERT_SCOPE_LABELS = {
+  options: "옵션",
+  etf: "ETF",
+  domestic: "국장",
+  us: "미장",
+  crypto: "코인",
+};
+const VERIFIER_SCOPE_LABELS = {
+  options: "옵션 실시간",
+  optionArchive: "옵션 복기",
+  replay: "복기 모달",
+  etf: "ETF",
+  stocks: "국장",
+  usStocks: "미장",
+  crypto: "코인",
+};
 const API_FEED_LABELS = {
   "options-monitor": "옵션",
   "asset-archive": "자산",
@@ -398,7 +435,10 @@ const state = {
   watchlists: loadWatchlists(),
   collectionOrder: loadCollectionOrder(),
   collectionSortMode: loadCollectionSortMode(),
+  collectionHiddenKeys: loadCollectionHiddenKeys(),
+  verifiers: loadVerifierScenarios(),
   manageFilters: { domestic: "all", us: "all", crypto: "all" },
+  panelFilters: { options: "all", etf: "all", domestic: "all", us: "all" },
   focusedAssets: { domestic: "", us: "" },
   searchCursor: { domestic: -1, us: -1 },
   wakeLock: null,
@@ -445,31 +485,41 @@ const fallbackWeeklyOptions = {
 };
 
 function loadSettings() {
+  const defaults = {
+    repeatStrongAlerts: true,
+    vibrationEnabled: true,
+    saveSignalLog: true,
+    assetAlertMode: "all",
+    alertModes: { ...DEFAULT_ALERT_MODES },
+    alertsEnabled: false,
+    apiBaseUrl: "",
+    backendEnvDraft: "",
+  };
   try {
-    return {
-      repeatStrongAlerts: true,
-      vibrationEnabled: true,
-      saveSignalLog: true,
-      assetAlertMode: "all",
-      alertsEnabled: false,
-      apiBaseUrl: "",
-      backendEnvDraft: "",
-      ...JSON.parse(localStorage.getItem(SETTINGS_KEY) || "{}"),
-    };
+    return normalizeSettings({ ...defaults, ...JSON.parse(localStorage.getItem(SETTINGS_KEY) || "{}") });
   } catch (error) {
-    return {
-      repeatStrongAlerts: true,
-      vibrationEnabled: true,
-      saveSignalLog: true,
-      assetAlertMode: "all",
-      alertsEnabled: false,
-      apiBaseUrl: "",
-      backendEnvDraft: "",
-    };
+    return normalizeSettings(defaults);
   }
 }
 
+function normalizeSettings(settings = {}) {
+  const legacyMode = ALERT_MODE_OPTIONS.includes(settings.assetAlertMode) ? settings.assetAlertMode : "all";
+  const alertModes = { ...DEFAULT_ALERT_MODES, ...(settings.alertModes || {}) };
+  ["etf", "domestic", "us"].forEach((scope) => {
+    if (!settings.alertModes?.[scope]) alertModes[scope] = legacyMode;
+  });
+  Object.keys(alertModes).forEach((scope) => {
+    if (!ALERT_MODE_OPTIONS.includes(alertModes[scope])) alertModes[scope] = DEFAULT_ALERT_MODES[scope] || "strong";
+  });
+  return {
+    ...settings,
+    assetAlertMode: legacyMode,
+    alertModes,
+  };
+}
+
 function saveSettings() {
+  state.settings = normalizeSettings(state.settings);
   localStorage.setItem(SETTINGS_KEY, JSON.stringify(state.settings));
 }
 
@@ -566,6 +616,67 @@ function saveCollectionSortMode() {
   const mode = state.collectionSortMode === "auto" ? "auto" : "manual";
   state.collectionSortMode = mode;
   localStorage.setItem(COLLECTION_SORT_KEY, mode);
+}
+
+function loadCollectionHiddenKeys() {
+  try {
+    const keys = JSON.parse(localStorage.getItem(COLLECTION_HIDDEN_KEY) || "[]");
+    return new Set(Array.isArray(keys) ? keys.filter(Boolean).map(String) : []);
+  } catch (error) {
+    return new Set();
+  }
+}
+
+function saveCollectionHiddenKeys() {
+  const keys = [...(state.collectionHiddenKeys || new Set())].filter(Boolean).map(String).slice(0, 300);
+  state.collectionHiddenKeys = new Set(keys);
+  localStorage.setItem(COLLECTION_HIDDEN_KEY, JSON.stringify(keys));
+}
+
+function loadVerifierScenarios() {
+  try {
+    const stored = JSON.parse(localStorage.getItem(VERIFIER_KEY) || "{}");
+    if (!stored || typeof stored !== "object") return {};
+    return Object.fromEntries(
+      Object.entries(stored)
+        .map(([scope, scenario]) => [scope, normalizeVerifierScenario(scenario)])
+        .filter(([, scenario]) => scenario),
+    );
+  } catch (error) {
+    return {};
+  }
+}
+
+function normalizeVerifierScenario(value) {
+  if (!value || typeof value !== "object") return null;
+  const quantity = number(value.quantity) ?? number(value.qty) ?? 1;
+  const price = number(value.price);
+  if (price == null) return null;
+  const side = value.side === "short" ? "short" : "long";
+  return {
+    timeKey: String(value.timeKey || value.time || ""),
+    price,
+    quantity: Math.max(0, quantity),
+    side,
+    updatedAt: value.updatedAt || "",
+    label: String(value.label || ""),
+    intervalLabel: String(value.intervalLabel || ""),
+    selectedDate: String(value.selectedDate || ""),
+    cryptoKey: normalizeCryptoKey(value.cryptoKey || ""),
+    cryptoFrame: String(value.cryptoFrame || ""),
+    jumpTab: String(value.jumpTab || ""),
+    focusKey: String(value.focusKey || ""),
+  };
+}
+
+function saveVerifierScenarios() {
+  const clean = Object.fromEntries(
+    Object.entries(state.verifiers || {})
+      .map(([scope, scenario]) => [scope, normalizeVerifierScenario(scenario)])
+      .filter(([, scenario]) => scenario),
+  );
+  state.verifiers = clean;
+  localStorage.setItem(VERIFIER_KEY, JSON.stringify(clean));
 }
 
 function loadApiCache() {
@@ -797,6 +908,112 @@ function compactDateTime(value) {
   if (match) return `${match[2]}-${match[3]} ${match[4]}:${match[5]}`;
   if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return shortDate(text);
   return "";
+}
+
+function signalTimeDisplay(...values) {
+  const flat = values.flat().filter((value) => value != null && String(value).trim());
+  for (const value of flat) {
+    const text = String(value).trim();
+    const full = text.match(/^(\d{4})-(\d{2})-(\d{2})(?:T|\s)(\d{2}):(\d{2})(?::(\d{2}))?/);
+    if (full) return `${full[2]}-${full[3]} ${full[4]}:${full[5]}:${full[6] || "00"}`;
+    const short = text.match(/^(\d{2})-(\d{2})\s+(\d{2}):(\d{2})(?::(\d{2}))?/);
+    if (short) return `${short[1]}-${short[2]} ${short[3]}:${short[4]}:${short[5] || "00"}`;
+    const clock = text.match(/(?:^|T|\s)(\d{1,2}):(\d{2})(?::(\d{2}))?/);
+    if (clock) return `${clock[1].padStart(2, "0")}:${clock[2]}:${clock[3] || "00"}`;
+  }
+  const dateOnly = flat.map(String).find((value) => /^\d{4}-\d{2}-\d{2}$/.test(value.trim()));
+  return dateOnly ? shortDate(dateOnly.trim()) : "-";
+}
+
+function signalTimeBadgeHtml(timeText = "", label = "신호") {
+  const text = signalTimeDisplay(timeText);
+  return `<span class="signal-time-badge">${escapeHtml(`${label} ${text}`)}</span>`;
+}
+
+function parseSignalDateTime(...values) {
+  const flat = values.flat().filter((value) => value != null && String(value).trim());
+  const selected = parseDate(state.selectedDate || kstDateString()) || parseDate(kstDateString());
+  const selectedYear = selected ? selected.getUTCFullYear() : new Date().getFullYear();
+  const selectedMonth = selected ? selected.getUTCMonth() + 1 : new Date().getMonth() + 1;
+  const selectedDay = selected ? selected.getUTCDate() : new Date().getDate();
+  for (const value of flat) {
+    const text = String(value).trim();
+    const full = text.match(/^(\d{4})-(\d{2})-(\d{2})(?:T|\s)(\d{1,2}):(\d{2})(?::(\d{2}))?/);
+    if (full) return new Date(Number(full[1]), Number(full[2]) - 1, Number(full[3]), Number(full[4]), Number(full[5]), Number(full[6] || 0));
+    const short = text.match(/^(\d{2})-(\d{2})\s+(\d{1,2}):(\d{2})(?::(\d{2}))?/);
+    if (short) return new Date(selectedYear, Number(short[1]) - 1, Number(short[2]), Number(short[3]), Number(short[4]), Number(short[5] || 0));
+    const clock = text.match(/(?:^|T|\s)(\d{1,2}):(\d{2})(?::(\d{2}))?/);
+    if (clock) return new Date(selectedYear, selectedMonth - 1, selectedDay, Number(clock[1]), Number(clock[2]), Number(clock[3] || 0));
+    if (/^\d{4}-\d{2}-\d{2}/.test(text)) {
+      const direct = Date.parse(text);
+      if (Number.isFinite(direct)) return new Date(direct);
+    }
+  }
+  return null;
+}
+
+function signalScopeKey(item = {}) {
+  if (item.jumpTab === "options" || item.scope === "options") return "options";
+  if (item.jumpTab === "etf" || item.scope === "etf") return "etf";
+  if (item.jumpTab === "stocks" || item.scope === "domestic") return "domestic";
+  if (item.jumpTab === "usStocks" || item.scope === "us") return "us";
+  if (item.jumpTab === "crypto" || item.scope === "crypto") return "crypto";
+  return item.scope || item.jumpTab || "collection";
+}
+
+function signalExpiryMinutes(item = {}) {
+  const scope = signalScopeKey(item);
+  if (scope === "domestic") return SIGNAL_EXPIRY_MINUTES.stocks;
+  if (scope === "us") return SIGNAL_EXPIRY_MINUTES.usStocks;
+  return SIGNAL_EXPIRY_MINUTES[scope] || SIGNAL_EXPIRY_MINUTES.collection;
+}
+
+function signalLifecycle(item = {}) {
+  if (!isLiveDate()) return { key: "replay", label: "복기", order: 3, ageMinutes: null, expiresIn: null };
+  const sourceTime = parseSignalDateTime(item.sourceAt, item.datetime, item.signalTimeText, item.time, item.generatedAt, item.createdAt);
+  if (!sourceTime) return { key: "unknown", label: "시간확인", order: 2, ageMinutes: null, expiresIn: null };
+  const expiryMinutes = signalExpiryMinutes(item);
+  const ageMinutes = Math.max(0, Math.floor((Date.now() - sourceTime.getTime()) / 60000));
+  const expiresIn = expiryMinutes - ageMinutes;
+  if (expiresIn <= 0) return { key: "expired", label: "만료", order: 5, ageMinutes, expiresIn };
+  if (ageMinutes <= Math.min(5, Math.ceil(expiryMinutes / 5))) return { key: "new", label: "신규", order: 1, ageMinutes, expiresIn };
+  return { key: "active", label: `활성 ${Math.max(1, expiresIn)}분`, order: 2, ageMinutes, expiresIn };
+}
+
+function signalLifecycleBadgeHtml(item = {}) {
+  const lifecycle = signalLifecycle(item);
+  return `<span class="signal-lifecycle-badge ${escapeAttr(lifecycle.key)}">${escapeHtml(lifecycle.label)}</span>`;
+}
+
+function signalFreshnessScore(item = {}) {
+  const lifecycle = signalLifecycle(item);
+  if (lifecycle.key === "replay") return 70;
+  if (lifecycle.key === "unknown") return 45;
+  if (lifecycle.key === "expired") return 20;
+  const expiryMinutes = signalExpiryMinutes(item);
+  const ratio = lifecycle.ageMinutes == null ? 0.6 : Math.min(1, lifecycle.ageMinutes / Math.max(1, expiryMinutes));
+  return clampScore(100 - ratio * 52);
+}
+
+function calibratedSignalConfidence(item = {}) {
+  const score = commonSignalScore(item);
+  const freshness = signalFreshnessScore(item);
+  const lifecycle = signalLifecycle(item);
+  const signal = signalClass(item.signal || item.type || "watch");
+  const riskBoost = ["warning", "sell", "avoid"].includes(signal) ? 5 : 0;
+  const expiredPenalty = lifecycle.key === "expired" ? 22 : 0;
+  return clampScore(Math.round(score * 0.68 + freshness * 0.28 + riskBoost - expiredPenalty));
+}
+
+function signalConfidenceText(item = {}) {
+  return `신뢰 ${formatNum(calibratedSignalConfidence(item), 0)}%`;
+}
+
+function signalInboxTimeBucket(item = {}) {
+  const sourceTime = parseSignalDateTime(item.sourceAt, item.datetime, item.signalTimeText, item.time, item.generatedAt, item.createdAt);
+  if (!sourceTime) return "no-time";
+  const windowMs = Math.max(5, signalExpiryMinutes(item)) * 60000;
+  return String(Math.floor(sourceTime.getTime() / windowMs));
 }
 
 function loadSignalLog() {
@@ -1232,6 +1449,26 @@ function bindControls() {
       setManageFilter(manageFilterButton.dataset.manageScope, manageFilterButton.dataset.manageFilter);
       return;
     }
+    const panelFilterButton = event.target.closest("[data-panel-filter]");
+    if (panelFilterButton) {
+      setPanelFilter(panelFilterButton.dataset.panelFilterScope, panelFilterButton.dataset.panelFilter);
+      return;
+    }
+    const verifierRunButton = event.target.closest("[data-verifier-run]");
+    if (verifierRunButton) {
+      applyVerifierFromPanel(verifierRunButton.dataset.verifierRun);
+      return;
+    }
+    const verifierResetButton = event.target.closest("[data-verifier-reset]");
+    if (verifierResetButton) {
+      resetVerifierScenario(verifierResetButton.dataset.verifierReset);
+      return;
+    }
+    const stockTabButton = event.target.closest("[data-stock-tab]");
+    if (stockTabButton) {
+      setStockFocus(stockTabButton.dataset.stockTabScope, stockTabButton.dataset.stockTab);
+      return;
+    }
     const cryptoFocusCard = event.target.closest("[data-crypto-focus]");
     if (cryptoFocusCard && !event.target.closest("button, summary, .crypto-card-details")) {
       setCryptoTab(cryptoFocusCard.dataset.cryptoFocus);
@@ -1265,6 +1502,16 @@ function bindControls() {
     const collectionSortButton = event.target.closest("[data-collection-sort]");
     if (collectionSortButton) {
       setCollectionSortMode(collectionSortButton.dataset.collectionSort);
+      return;
+    }
+    const collectionHideButton = event.target.closest("[data-collection-hide]");
+    if (collectionHideButton) {
+      setCollectionItemVisible(collectionHideButton.dataset.collectionHide, false);
+      return;
+    }
+    const collectionResetButton = event.target.closest("[data-collection-reset]");
+    if (collectionResetButton) {
+      resetCollectionHiddenItems();
       return;
     }
     const collectionMoveButton = event.target.closest("[data-collection-move]");
@@ -1305,6 +1552,17 @@ function bindControls() {
   });
   document.querySelector("#addDomesticWatch")?.addEventListener("click", () => addWatchSymbol("domestic"));
   document.querySelector("#addUsWatch")?.addEventListener("click", () => addWatchSymbol("us"));
+  document.addEventListener("change", (event) => {
+    const collectionToggle = event.target.closest("[data-collection-toggle]");
+    if (collectionToggle) {
+      setCollectionItemVisible(collectionToggle.dataset.collectionToggle, collectionToggle.checked);
+      return;
+    }
+    const verifierTime = event.target.closest("[data-verifier-time]");
+    if (verifierTime) {
+      syncVerifierPriceFromTime(verifierTime.dataset.verifierTime);
+    }
+  });
   window.addEventListener("hashchange", () => setActiveTab(tabFromHash(), { updateHash: false }));
   document.querySelector("#enableAlerts")?.addEventListener("click", requestAlertToggle);
   document.querySelector("#testAlert")?.addEventListener("click", testAlert);
@@ -1366,8 +1624,24 @@ function bindControls() {
   });
   document.querySelector("#assetAlertMode")?.addEventListener("change", (event) => {
     state.settings.assetAlertMode = event.target.value;
+    state.settings.alertModes = {
+      ...normalizedAlertModes(),
+      etf: event.target.value,
+      domestic: event.target.value,
+      us: event.target.value,
+    };
     saveSettings();
     renderSettings();
+  });
+  document.querySelectorAll("[data-alert-scope]").forEach((select) => {
+    select.addEventListener("change", (event) => {
+      const scope = event.target.dataset.alertScope;
+      const mode = ALERT_MODE_OPTIONS.includes(event.target.value) ? event.target.value : "strong";
+      state.settings.alertModes = { ...normalizedAlertModes(), [scope]: mode };
+      saveSettings();
+      renderSettings();
+      renderAlgorithmAuditPanel();
+    });
   });
   document.querySelector("#clearSignalLog")?.addEventListener("click", clearSignalLog);
   document.querySelector("#markSignalsRead")?.addEventListener("click", markAllSignalInboxRead);
@@ -1505,6 +1779,7 @@ function renderMonitor() {
   renderLiveLegend(levels);
   renderOptionSignalCard(snapshot, livePlan);
   renderLiveTradePlan(livePlan);
+  renderVerifierPanel("options", "#optionsVerifier", verifierSourceForScope("options"));
   drawLiveChart(livePlan);
   renderSettings();
   renderAssetTabs();
@@ -1619,6 +1894,7 @@ function renderOptionSignalCard(snapshot = state.monitor || {}, livePlan = null)
     className,
     title: signal.title || signal.label || "옵션 신호",
     badge: signal.label || "대기",
+    timeText: signalTimeDisplay(signal.datetime, signal.time, latest.datetime, latest.time, snapshot.generated_at),
     score,
     summary: signal.message || "KOSPI200 5분봉 신호를 카드 기준으로 확인합니다.",
     decision,
@@ -1635,13 +1911,14 @@ function optionActionText(signal = {}, livePlan = null, score = 0) {
   return signalActionText(type, score, "options");
 }
 
-function optionDecisionCard({ className = "watch", title = "신호", badge = "관찰", score = 0, summary = "", decision = {}, items = [] } = {}) {
+function optionDecisionCard({ className = "watch", title = "신호", badge = "관찰", timeText = "", score = 0, summary = "", decision = {}, items = [] } = {}) {
   const normalized = signalClass(className);
   return `
     <article class="crypto-signal-card option-signal-card ${escapeAttr(normalized)}">
       <header>
         <h2>${escapeHtml(title)}</h2>
         <span class="signal-pill ${escapeAttr(normalized)}">${escapeHtml(badge)}</span>
+        ${signalTimeBadgeHtml(timeText)}
         ${scoreBadgeHtml(score, normalized)}
       </header>
       <details class="crypto-card-details">
@@ -1946,12 +2223,16 @@ function mergeSignalLog(additions) {
 }
 
 function signalLogTimestamp(item = {}) {
-  const parsed = Date.parse(item.sourceAt || item.createdAt || "");
-  return Number.isFinite(parsed) ? parsed : 0;
+  const parsed = Date.parse(item.sourceAt || item.generatedAt || item.createdAt || "");
+  if (Number.isFinite(parsed)) return parsed;
+  const signalTime = parseSignalDateTime(item.signalTimeText, item.time);
+  return signalTime ? signalTime.getTime() : 0;
 }
 
 function renderSignalLog() {
-  const visibleLog = signalLogForDisplayDate();
+  const allLog = signalLogForDisplayDate();
+  renderOptionsStatusTabs(allLog);
+  const visibleLog = allLog.filter((item) => itemMatchesPanelFilter(item, "options"));
   setText("#logCount", `${visibleLog.length}개`);
   const root = document.querySelector("#signalLog");
   if (!root) return;
@@ -1993,6 +2274,7 @@ function optionLogCard(item = {}) {
       <header>
         <h2>${escapeHtml(item.trade?.status || item.title || "옵션 신호")}</h2>
         <span class="signal-pill ${escapeAttr(signal)}">${escapeHtml(item.title || "신호")}</span>
+        ${signalTimeBadgeHtml(signalTimeDisplay(item.sourceAt, item.datetime, item.time, item.createdAt))}
         ${scoreBadgeHtml(score, signal)}
       </header>
       <details class="crypto-card-details">
@@ -2093,6 +2375,7 @@ function renderReplay() {
   renderReplayTradeStats(tradePlan, missing);
   renderReplayList(tradePlan.events, missing);
   renderReplayLegend();
+  renderVerifierPanel("replay", "#replayVerifier", missing ? null : verifierSourceForScope("replay", { session: visibleSession }));
   drawReplayChart(visibleSession, tradePlan);
 }
 
@@ -2190,6 +2473,189 @@ function renderNavigation() {
   });
 }
 
+function panelScopeKey(scope) {
+  const value = String(scope || "");
+  if (value === "stocks" || value === "domestic") return "domestic";
+  if (value === "usStocks" || value === "us") return "us";
+  if (value === "options") return "options";
+  if (value === "etf") return "etf";
+  return value || "options";
+}
+
+function panelFiltersForScope(scope) {
+  return panelScopeKey(scope) === "options" ? OPTION_PANEL_FILTERS : MANAGE_FILTERS;
+}
+
+function currentPanelFilter(scope) {
+  const key = panelScopeKey(scope);
+  const filters = panelFiltersForScope(key);
+  const active = state.panelFilters?.[key] || "all";
+  return filters.includes(active) ? active : "all";
+}
+
+function setPanelFilter(scope, filter) {
+  const key = panelScopeKey(scope);
+  const filters = panelFiltersForScope(key);
+  const next = filters.includes(filter) ? filter : "all";
+  state.panelFilters[key] = currentPanelFilter(key) === next && next !== "all" ? "all" : next;
+  renderAssetTabs();
+  if (key === "options") renderSignalLog();
+}
+
+function statusBucketForItem(item = {}) {
+  const signal = signalClass(item.signal || item.className || item.type || "watch");
+  const score = commonSignalScore(item);
+  if (["warning", "sell", "avoid"].includes(signal) || score <= 44) return "risk";
+  if (["candidate", "buy"].includes(signal) || score >= 72) return "strong";
+  return "watch";
+}
+
+function optionBucketForItem(item = {}) {
+  const signal = signalClass(item.signal || item.className || item.type || "watch");
+  const score = commonSignalScore(item);
+  const text = `${item.title || ""} ${item.message || ""} ${item.trade?.status || ""}`.toLowerCase();
+  if (["warning", "sell", "avoid"].includes(signal) || score <= 44 || text.includes("손절") || text.includes("청산")) return "risk";
+  if (["candidate", "buy"].includes(signal) || score >= 72 || text.includes("진입") || text.includes("entry")) return "entry";
+  return "watch";
+}
+
+function countBuckets(items = [], filters = MANAGE_FILTERS, bucketFn = statusBucketForItem) {
+  const counts = Object.fromEntries(filters.map((filter) => [filter, 0]));
+  counts.all = items.length;
+  items.forEach((item) => {
+    const bucket = bucketFn(item);
+    if (Object.prototype.hasOwnProperty.call(counts, bucket)) counts[bucket] += 1;
+  });
+  return counts;
+}
+
+function itemMatchesPanelFilter(item = {}, scope = "domestic") {
+  const filter = currentPanelFilter(scope);
+  if (filter === "all") return true;
+  const bucketFn = panelScopeKey(scope) === "options" ? optionBucketForItem : statusBucketForItem;
+  return bucketFn(item) === filter;
+}
+
+function statusButtonClass(filter, count = 0) {
+  if (!count) return "neutral";
+  if (filter === "risk") return "warning";
+  if (filter === "strong" || filter === "entry") return "candidate";
+  if (filter === "watch") return "watch";
+  return "neutral";
+}
+
+function renderStatusCountTabs(selector, scope, items = [], options = {}) {
+  const root = document.querySelector(selector);
+  if (!root) return;
+  const filters = options.filters || panelFiltersForScope(scope);
+  const labels = {
+    all: "전체",
+    strong: "좋은 신호",
+    entry: "진입",
+    watch: "관찰",
+    risk: "위험",
+    ...(options.labels || {}),
+  };
+  const bucketFn = options.bucketFn || (panelScopeKey(scope) === "options" ? optionBucketForItem : statusBucketForItem);
+  const counts = countBuckets(items, filters, bucketFn);
+  const active = currentPanelFilter(scope);
+  root.innerHTML = filters.map((filter) => {
+    const className = statusButtonClass(filter, counts[filter]);
+    return `
+      <button type="button" class="${escapeAttr(`${className} ${active === filter ? "active" : ""}`.trim())}" data-panel-filter-scope="${escapeAttr(panelScopeKey(scope))}" data-panel-filter="${escapeAttr(filter)}">
+        <span>${escapeHtml(labels[filter] || filter)}</span>
+        <strong>${formatNum(counts[filter] || 0, 0)}</strong>
+      </button>
+    `;
+  }).join("");
+}
+
+function tabCountSignal(items = [], bucketFn = statusBucketForItem) {
+  if (!items.length) return "neutral";
+  if (items.some((item) => bucketFn(item) === "risk")) return "warning";
+  if (items.some((item) => ["strong", "entry"].includes(bucketFn(item)))) return "candidate";
+  return "watch";
+}
+
+function renderTabCounts() {
+  const archive = state.assetArchive || fallbackAssetArchive();
+  const collectionItems = collectionWatchItems(archive);
+  const optionLogs = signalLogForDisplayDate();
+  const optionReplayEvents = optionReplayEventItems();
+  const optionItems = isLiveDate() ? optionLogs : optionReplayEvents;
+  const etfItem = etfCountSignalItem();
+  const domesticItems = watchItemsForScope("domestic");
+  const usItems = watchItemsForScope("us");
+  const crypto = archive.crypto || {};
+  const cryptoItems = cryptoVisibleAssets(cryptoAssetUniverse(crypto)).map((asset) => cryptoWatchedSignalItem(asset, crypto.assets || []));
+  const summaries = {
+    collection: {
+      count: collectionItems.length,
+      signal: tabCountSignal(collectionItems),
+      title: `모음 매수 ${collectionItems.length}개`,
+    },
+    options: {
+      count: optionItems.length,
+      signal: tabCountSignal(optionItems, optionBucketForItem),
+      title: isLiveDate() ? `당일 옵션 신호 ${optionItems.length}개` : `복기 신호 ${optionItems.length}개`,
+    },
+    etf: {
+      count: etfItem ? 1 : 0,
+      signal: etfItem ? statusButtonClass(statusBucketForItem(etfItem), 1) : "neutral",
+      title: etfItem ? `ETF ${signalStatusText(etfItem.signal, etfItem.signalScore)}` : "ETF 신호 대기",
+    },
+    stocks: {
+      count: domesticItems.length,
+      signal: tabCountSignal(domesticItems),
+      title: `국장 감시 ${domesticItems.length}개 · 후보 ${stockManageCandidateItems("domestic").length}개`,
+    },
+    usStocks: {
+      count: usItems.length,
+      signal: tabCountSignal(usItems),
+      title: `미장 감시 ${usItems.length}개 · 후보 ${stockManageCandidateItems("us").length}개`,
+    },
+    crypto: {
+      count: cryptoItems.length,
+      signal: tabCountSignal(cryptoItems),
+      title: `코인 감시 ${cryptoItems.length}개`,
+    },
+  };
+  document.querySelectorAll("[data-tab-target]").forEach((button) => {
+    const tab = button.dataset.tabTarget;
+    const summary = summaries[tab] || { count: 0, signal: "neutral", title: button.textContent.trim() };
+    const count = button.querySelector("[data-tab-count]");
+    if (count) {
+      count.textContent = summary.count > 99 ? "99+" : String(summary.count);
+      count.className = `tab-count ${signalClass(summary.signal || "neutral")}`;
+      count.hidden = false;
+    }
+    button.title = summary.title || "";
+  });
+}
+
+function optionReplayEventItems() {
+  const session = replaySessionForDate(state.selectedDate);
+  if (!session) return [];
+  return (buildReplayTradePlan(session).events || []).map((event) => ({
+    ...event,
+    signal: event.kind || event.type || "watch",
+    signalScore: commonSignalScore({ signal: event.kind || event.type || "watch" }),
+  }));
+}
+
+function etfCountSignalItem() {
+  const archive = state.assetArchive || fallbackAssetArchive();
+  const etf = archive.etf || {};
+  const context = state.monitor?.etf_context || {};
+  const summary = isLiveDate() && context.thirty_minute ? etfLiveSummary(context) : etf.summary || {};
+  const signal = signalClass(summary.signal || "watch");
+  return {
+    signal,
+    signalScore: commonSignalScore({ signal, score: summary.score }),
+    title: "ETF",
+  };
+}
+
 function renderDateToolbar() {
   const replayMode = state.dashboardMode === "replay";
   const todayText = kstDateString();
@@ -2248,45 +2714,39 @@ function renderAssetTabs() {
   renderUsStocksPanel();
   renderCryptoPanel();
   renderSignalInbox();
+  renderTabCounts();
   scheduleChartRedraw();
 }
 
 function renderCollectionPanel() {
   const archive = state.assetArchive || fallbackAssetArchive();
-  const items = collectionWatchItems(archive);
+  const allItems = collectionCandidateItems(archive);
+  syncCollectionHiddenKeys(allItems);
+  const items = visibleCollectionItems(allItems);
   const urgentCount = items.filter(signalNeedsAttention).length;
-  const actionCount = items.filter((item) => ["action", "risk", "weak"].includes(collectionTaskBucket(item).key)).length;
   const board = document.querySelector("#collectionBoard");
   const boardSignal = urgentCount ? "watch" : "neutral";
   if (board) board.className = signalBoardClass(boardSignal);
-  setText("#collectionBadge", items.length ? `${items.length}개 감시` : "감시 없음");
+  setText("#collectionBadge", `${items.length}개 매수`);
   const badge = document.querySelector("#collectionBadge");
   if (badge) badge.className = `signal-pill ${urgentCount ? "watch" : "neutral"}`;
   setText("#collectionDateText", `${state.selectedDate} · ${isLiveDate() ? "실시간" : "복기"}`);
-  setText("#collectionMessage", items.length
-    ? `직접 감시 중인 카드만 표시합니다. 오늘 할 일 ${actionCount}개 · ${state.collectionSortMode === "auto" ? "자동 정렬" : "수동 순서"}`
-    : "국장·미장·코인 화면에서 감시 항목을 추가하면 이곳에 카드로 표시됩니다.");
-  renderBoardDecision("#collectionBoard", {
-    scope: "collection",
-    signal: urgentCount ? "watch" : "neutral",
-    signalScore: items.length ? Math.round(items.reduce((sum, item) => sum + commonSignalScore(item), 0) / items.length) : 0,
-    detail: items.length ? `처리 필요 ${actionCount}개 · 감시 ${items.length}개` : "감시 항목을 먼저 추가하세요.",
-    actionText: actionCount ? "작업함과 각 카드의 다음 행동 확인" : "후보 화면에서 감시 추가",
-  });
+  clearBoardDecision("#collectionBoard");
   renderCollectionSortControls();
+  renderCollectionTargetPanel(allItems, items);
   renderTodayFocusGrid(items);
   const root = document.querySelector("#collectionWatchGrid");
   if (!root) return;
   root.innerHTML = items.length
     ? items.map((item, index) => collectionCard(item, { index, total: items.length })).join("")
     : collectionCard({
-      kind: "선택 감시",
-      title: "감시 카드 없음",
+      kind: "모음 0",
+      title: "매수 카드 0개",
       signal: "neutral",
       badge: "대기",
-      value: "추가 필요",
-      detail: "국장·미장·코인 화면에서 감시 항목을 추가하세요.",
-      jumpTab: "stocks",
+      value: "0",
+      detail: "각 탭의 검증기구에서 매수 실행 시 모음에 표시됩니다.",
+      jumpTab: "options",
       emptyActions: true,
     });
 }
@@ -2294,22 +2754,20 @@ function renderCollectionPanel() {
 function renderTodayFocusGrid(items = []) {
   const root = document.querySelector("#todayFocusGrid");
   if (!root) return;
-  const topItems = autoSortedCollectionItems(items).slice(0, 3);
-  root.innerHTML = topItems.length
-    ? topItems.map(todayFocusCard).join("")
-    : `<article class="today-focus-card neutral"><span>오늘 핵심</span><strong>대기</strong><small>감시 항목을 추가하면 우선순위 3개가 표시됩니다.</small></article>`;
+  const topItems = autoSortedCollectionItems(items).filter((item) => signalLifecycle(item).key !== "expired").slice(0, 3);
+  root.innerHTML = topItems.length ? topItems.map(todayFocusCard).join("") : "";
+  root.hidden = !topItems.length;
 }
 
 function todayFocusCard(item = {}) {
   const signal = signalClass(item.signal || "watch");
-  const decision = signalDecisionSummary(item);
   const cryptoAttr = item.jumpCrypto ? ` data-jump-crypto="${escapeAttr(item.jumpCrypto)}"` : "";
   const focusAttr = item.focusKey ? ` data-jump-focus="${escapeAttr(item.focusKey)}"` : "";
   return `
     <article class="today-focus-card ${escapeAttr(signal)}" role="button" tabindex="0" data-jump-tab="${escapeAttr(item.jumpTab || "")}"${cryptoAttr}${focusAttr}>
-      <span>${escapeHtml(item.kind || "핵심")} · ${escapeHtml(item.badge || decision.status)}</span>
+      <span>${escapeHtml(item.kind || "핵심")}</span>
       <strong>${escapeHtml(item.title || "-")}</strong>
-      <small>${escapeHtml(decision.action)}</small>
+      <small>${escapeHtml(collectionSignalText(item))} · ${escapeHtml(collectionItemSignalTime(item))}</small>
     </article>
   `;
 }
@@ -2323,14 +2781,16 @@ function renderAlgorithmAuditPanel() {
     : 0;
   const weakCount = auditItems.filter((item) => item.signal === "warning" || item.score < 50).length;
   const liveFeeds = Object.values(state.dataFeeds || {}).filter((feed) => feed.ok && feed.source === "live").length;
+  const lifecycle = signalLifecycleSummary();
+  const calibration = scoreCalibrationSummary();
   setText("#algorithmAuditStatus", auditItems.length ? `${averageScore}점 · 점검 ${weakCount}개` : "대기");
   const grid = document.querySelector("#algorithmAuditGrid");
   if (grid) {
     grid.innerHTML = [
       { label: "검증점수", value: `${averageScore || "-"}점`, text: weakCount ? `개선 ${weakCount}개` : "정상" },
       { label: "실제 API", value: `${liveFeeds}개`, text: "실시간 응답" },
-      { label: "캐시/오류", value: `${Object.values(state.dataFeeds || {}).filter((feed) => feed.source === "cache" || !feed.ok).length}개`, text: "상태 표시" },
-      { label: "감시카드", value: `${collectionWatchItems().length}개`, text: state.collectionSortMode === "auto" ? "자동 정렬" : "수동 정렬" },
+      { label: "활성/만료", value: `${lifecycle.active} / ${lifecycle.expired}`, text: `${lifecycle.total}개 신호` },
+      { label: "보정신뢰", value: `${calibration.average || "-"}%`, text: calibration.label },
     ].map(metricCard).join("");
   }
   const list = document.querySelector("#algorithmAuditList");
@@ -2370,6 +2830,10 @@ function algorithmAuditItems() {
   const feedItems = Object.values(state.dataFeeds || {});
   const feedScore = clampScore(30 + feedItems.filter((feed) => feed.ok && feed.source === "live").length * 18 - feedItems.filter((feed) => !feed.ok).length * 16 - feedItems.filter((feed) => feed.source === "cache").length * 7);
   const proof = signalProofSummary();
+  const lifecycle = signalLifecycleSummary();
+  const calibration = scoreCalibrationSummary();
+  const alertSummary = alertModeSummary();
+  const walkForward = walkForwardSummary();
 
   return [
     {
@@ -2389,12 +2853,44 @@ function algorithmAuditItems() {
       action: optionStops ? "손절 구간 재점검" : "실시간 신호 유지",
     },
     {
+      title: "워크포워드 복기",
+      signal: walkForward.score >= 70 ? "candidate" : walkForward.score >= 50 ? "watch" : "warning",
+      score: walkForward.score,
+      status: walkForward.status,
+      reason: walkForward.reason,
+      action: walkForward.action,
+    },
+    {
       title: "신호 성과 로그",
       signal: proof.score >= 70 ? "candidate" : proof.score >= 50 ? "watch" : "warning",
       score: proof.score,
       status: `${proof.count}개 기록`,
       reason: proof.reason,
       action: proof.action,
+    },
+    {
+      title: "신호 생애주기",
+      signal: lifecycle.expired > lifecycle.active ? "warning" : lifecycle.active ? "candidate" : "watch",
+      score: lifecycle.score,
+      status: `활성 ${lifecycle.active} · 만료 ${lifecycle.expired}`,
+      reason: `쿨다운 ${lifecycle.cooldown}개 · 신규 ${lifecycle.newCount}개`,
+      action: lifecycle.expired ? "만료 신호는 작업함 뒤로 이동" : "활성 신호 중심으로 확인",
+    },
+    {
+      title: "점수 보정",
+      signal: calibration.average >= 70 ? "candidate" : calibration.average >= 50 ? "watch" : "warning",
+      score: calibration.average,
+      status: `${calibration.average || "-"}% 평균 신뢰`,
+      reason: calibration.reason,
+      action: calibration.action,
+    },
+    {
+      title: "알림 강도",
+      signal: alertSummary.offCount >= 3 ? "warning" : "watch",
+      score: alertSummary.score,
+      status: alertSummary.status,
+      reason: alertSummary.reason,
+      action: "설정에서 탭별 알림 강도 조절",
     },
     {
       title: "국장 알고리즘",
@@ -2430,6 +2926,89 @@ function signalProofSummary() {
   };
 }
 
+function walkForwardSummary() {
+  const sessions = Array.isArray(state.replay?.sessions) ? state.replay.sessions.slice(0, 20) : [];
+  if (sessions.length < 4) {
+    return {
+      score: 42,
+      status: `${sessions.length}일 표본`,
+      reason: "워크포워드 표본이 아직 부족합니다.",
+      action: "최근 복기 데이터를 더 누적",
+    };
+  }
+  const split = Math.max(2, Math.min(5, Math.floor(sessions.length / 3)));
+  const recent = sessions.slice(0, split).map((session) => buildReplayTradePlan(session).stats || {});
+  const prior = sessions.slice(split, split * 2 + 2).map((session) => buildReplayTradePlan(session).stats || {});
+  const sumStats = (items) => ({
+    entries: items.reduce((sum, stats) => sum + (Number(stats.entries) || 0), 0),
+    stops: items.reduce((sum, stats) => sum + (Number(stats.stops) || 0), 0),
+    net: items.reduce((sum, stats) => sum + (Number(stats.netProfit) || 0), 0),
+  });
+  const recentStats = sumStats(recent);
+  const priorStats = sumStats(prior);
+  const drift = recentStats.net - priorStats.net;
+  const score = clampScore(56 + Math.max(-18, Math.min(18, drift * 0.3)) + Math.min(recentStats.entries, 12) - recentStats.stops * 3);
+  return {
+    score,
+    status: `최근 ${recent.length}일 / 이전 ${prior.length}일`,
+    reason: `최근 순손익 ${formatNum(recentStats.net, 2)} · 이전 ${formatNum(priorStats.net, 2)} · 손절 ${recentStats.stops}`,
+    action: drift < 0 ? "최근 구간 손절/진입 조건 재점검" : "최근 구간 신호 유지",
+  };
+}
+
+function signalLifecycleSummary() {
+  const items = signalInboxItems();
+  const counts = items.reduce((acc, item) => {
+    const key = signalLifecycle(item).key;
+    acc[key] = (acc[key] || 0) + 1;
+    return acc;
+  }, {});
+  const sourceKeys = new Set(items.map((item) => item.sourceKey).filter(Boolean));
+  const total = items.length;
+  const active = (counts.new || 0) + (counts.active || 0);
+  const expired = counts.expired || 0;
+  const cooldown = Math.max(0, total - sourceKeys.size);
+  const score = clampScore(42 + active * 7 - expired * 5 + Math.min(sourceKeys.size, 8) * 2);
+  return {
+    total,
+    active,
+    expired,
+    cooldown,
+    newCount: counts.new || 0,
+    score,
+  };
+}
+
+function scoreCalibrationSummary() {
+  const items = signalInboxItems();
+  const confidences = items.map(calibratedSignalConfidence).filter((value) => Number.isFinite(value));
+  const average = confidences.length
+    ? Math.round(confidences.reduce((sum, value) => sum + value, 0) / confidences.length)
+    : 0;
+  const high = confidences.filter((value) => value >= 70).length;
+  const low = confidences.filter((value) => value < 45).length;
+  return {
+    average,
+    label: confidences.length ? `${high}개 고신뢰` : "표본 없음",
+    reason: confidences.length ? `고신뢰 ${high}개 · 낮은 신뢰 ${low}개 · 시간 보정 포함` : "신호가 쌓이면 보정 신뢰를 계산합니다.",
+    action: low ? "낮은 신뢰 신호는 만료/시장 국면 확인" : "고신뢰 신호만 알림 우선",
+  };
+}
+
+function alertModeSummary() {
+  const modes = normalizedAlertModes();
+  const values = Object.values(modes);
+  const offCount = values.filter((mode) => mode === "off").length;
+  const riskCount = values.filter((mode) => mode === "risk").length;
+  const activeCount = values.length - offCount;
+  return {
+    offCount,
+    score: clampScore(45 + activeCount * 10 + riskCount * 3 - offCount * 8),
+    status: `${activeCount}/${values.length}개 탭 ON`,
+    reason: Object.entries(modes).map(([scope, mode]) => `${ALERT_SCOPE_LABELS[scope] || scope}:${alertModeLabel(mode)}`).join(" · "),
+  };
+}
+
 function algorithmAuditCard(item = {}) {
   const signal = signalClass(item.signal || "watch");
   return `
@@ -2445,6 +3024,7 @@ function algorithmAuditCard(item = {}) {
 }
 
 function signalNeedsAttention(item = {}) {
+  if (signalLifecycle(item).key === "expired") return false;
   const signal = signalClass(item.signal || item.className || item.type || "watch");
   if (["candidate", "buy", "warning", "sell", "avoid"].includes(signal)) return true;
   return commonSignalScore(item) >= 72;
@@ -2464,28 +3044,172 @@ function setCollectionSortMode(mode = "manual") {
   renderCollectionPanel();
 }
 
+function setCollectionItemVisible(key, visible = true) {
+  if (!key) return;
+  if (!state.collectionHiddenKeys) state.collectionHiddenKeys = new Set();
+  if (visible) state.collectionHiddenKeys.delete(key);
+  else state.collectionHiddenKeys.add(key);
+  saveCollectionHiddenKeys();
+  renderAssetTabs();
+}
+
+function resetCollectionHiddenItems() {
+  state.collectionHiddenKeys = new Set();
+  saveCollectionHiddenKeys();
+  renderAssetTabs();
+}
+
 function collectionWatchItems(archive = state.assetArchive || fallbackAssetArchive()) {
-  const crypto = archive.crypto || {};
-  const normalAssets = cryptoVisibleAssets(crypto.assets || []);
-  const exceptionAssets = cryptoVisibleAssets(crypto.exception_assets || []);
-  const stockItems = [
-    ...watchItemsForScope("domestic"),
-    ...watchItemsForScope("us"),
-  ].map((item) => ({
-    ...item,
-    collectionKey: collectionItemKey(item.scope, item.symbol),
-    focusKey: collectionItemKey(item.scope, item.symbol),
-  }));
-  const cryptoItems = [
-    ...normalAssets.map((asset) => collectionCryptoWatchItem(asset, normalAssets)),
-    ...exceptionAssets.map((asset) => collectionCryptoWatchItem(asset, normalAssets, { exceptionMode: true })),
-  ].filter(Boolean);
-  return orderedCollectionItems([...stockItems, ...cryptoItems]);
+  const allItems = collectionCandidateItems(archive);
+  syncCollectionHiddenKeys(allItems);
+  return visibleCollectionItems(allItems);
+}
+
+function collectionCandidateItems(archive = state.assetArchive || fallbackAssetArchive()) {
+  return collectionVerifierItems(archive);
+}
+
+function collectionVerifierItems(archive = state.assetArchive || fallbackAssetArchive()) {
+  const scopes = ["options", "etf", "stocks", "usStocks", "crypto"];
+  return scopes
+    .map((scope) => collectionVerifierItem(scope, state.verifiers?.[scope], archive))
+    .filter(Boolean);
+}
+
+function collectionVerifierItem(scope, rawScenario, archive = state.assetArchive || fallbackAssetArchive()) {
+  const scenario = normalizeVerifierScenario(rawScenario);
+  if (!scenario || scenario.side !== "long" || scenario.quantity <= 0) return null;
+  const source = verifierSourceForCollection(scope, scenario, archive);
+  const report = source?.points?.length ? buildVerifierReport(scope, source, scenario) : null;
+  const key = verifierCollectionKey(scope, scenario);
+  const signal = signalClass(report?.signal || "watch");
+  const title = scenario.label || source?.label || VERIFIER_SCOPE_LABELS[scope] || "매수";
+  const digits = verifierDigits(scope, scenario.price);
+  const currentText = report?.current != null ? formatNum(report.current, digits) : "-";
+  const pnlText = report ? `${formatSigned(report.pnlPct, 2)}%` : "0.00%";
+  const pnlTone = report?.pnlPct > 0 ? "gain" : report?.pnlPct < 0 ? "loss" : "flat";
+  const pnlLabel = pnlTone === "gain" ? "이득" : pnlTone === "loss" ? "손해" : "보합";
+  const badge = report?.label || "매수 보유";
+  const buyTimeText = report?.entryDateTime || "-";
+  const recordTimeText = signalTimeDisplay(scenario.updatedAt) || collectionItemSignalTime({ sourceAt: scenario.updatedAt });
+  return {
+    scope,
+    kind: verifierCollectionKind(scope),
+    title,
+    symbol: scenario.cryptoKey || scope,
+    signal,
+    badge,
+    signalScore: commonSignalScore({ signal, score: report ? 58 + Math.min(28, Math.max(-22, report.rMultiple * 12)) : 50 }),
+    statusLabel: badge,
+    actionText: report?.signal === "warning" ? "위험선 확인" : "보유 상태 확인",
+    signalTimeText: recordTimeText,
+    buyTimeText,
+    timeBadgeLabel: "검증",
+    sourceAt: scenario.updatedAt || "",
+    generatedAt: scenario.updatedAt || "",
+    value: `${formatNum(scenario.quantity, 2)}개`,
+    detail: report?.detail || `${formatNum(scenario.price, digits)} 매수 입력`,
+    jumpTab: scenario.jumpTab || verifierJumpTab(scope),
+    jumpCrypto: scenario.cryptoKey,
+    collectionKey: key,
+    focusKey: scenario.focusKey || key,
+    verifierScope: scope,
+    metrics: [
+      { label: "매수시각", value: buyTimeText, tone: "time" },
+      { label: "매수가", value: formatNum(scenario.price, digits) },
+      { label: "수량", value: `${formatNum(scenario.quantity, 2)}개` },
+      { label: "현재가", value: currentText },
+      { label: "손익", value: `${pnlLabel} ${pnlText}`, text: report ? `평가 ${formatSigned(report.pnl, digits)}` : "평가 0", tone: pnlTone },
+    ],
+  };
+}
+
+function verifierSourceForCollection(scope, scenario = {}, archive = state.assetArchive || fallbackAssetArchive()) {
+  if (scope === "crypto") {
+    const crypto = archive.crypto || {};
+    const assets = cryptoVisibleAssets([...(crypto.assets || []), ...(crypto.exception_assets || [])]);
+    const target = assets.find((asset) => cryptoAssetKey(asset) === scenario.cryptoKey) || null;
+    if (!target) return null;
+    return cryptoVerifierSourceForAsset(target);
+  }
+  return verifierSourceForScope(scope);
+}
+
+function verifierCollectionKind(scope) {
+  return {
+    options: "옵션 매수",
+    etf: "ETF 매수",
+    stocks: "국장 매수",
+    usStocks: "미장 매수",
+    crypto: "코인 매수",
+  }[scope] || "매수";
+}
+
+function verifierJumpTab(scope) {
+  return {
+    options: "options",
+    etf: "etf",
+    stocks: "stocks",
+    usStocks: "usStocks",
+    crypto: "crypto",
+  }[scope] || scope;
+}
+
+function verifierCollectionKey(scope, scenario = {}) {
+  const suffix = scope === "crypto" && scenario.cryptoKey ? scenario.cryptoKey : scope;
+  return `buy:${scope}:${suffix}`;
+}
+
+function visibleCollectionItems(items = []) {
+  const hidden = state.collectionHiddenKeys || new Set();
+  return orderedCollectionItems(items.filter((item) => !hidden.has(item.collectionKey)));
+}
+
+function syncCollectionHiddenKeys(items = []) {
+  const valid = new Set(items.map((item) => item.collectionKey).filter(Boolean));
+  const before = state.collectionHiddenKeys || new Set();
+  const next = new Set([...before].filter((key) => valid.has(key)));
+  if (next.size !== before.size) {
+    state.collectionHiddenKeys = next;
+    saveCollectionHiddenKeys();
+  }
+}
+
+function renderCollectionTargetPanel(allItems = [], visibleItems = []) {
+  const root = document.querySelector("#collectionTargetList");
+  const summary = document.querySelector("#collectionManageSummary");
+  if (!root) return;
+  const visible = new Set(visibleItems.map((item) => item.collectionKey));
+  if (summary) summary.textContent = allItems.length ? `매수 ${visible.size}개 · 숨김 ${allItems.length - visible.size}개` : "매수 0개";
+  if (!allItems.length) {
+    root.innerHTML = `<article class="collection-target-empty">각 탭의 검증기구에서 매수로 실행하면 모음 대상에 표시됩니다.</article>`;
+    return;
+  }
+  const ordered = orderedCollectionItems(allItems);
+  root.innerHTML = [
+    `<div class="collection-target-actions"><button type="button" data-collection-reset="1">전체 표시</button></div>`,
+    ...ordered.map((item) => collectionTargetRow(item, visible.has(item.collectionKey))),
+  ].join("");
+}
+
+function collectionTargetRow(item = {}, visible = true) {
+  const signal = signalClass(item.signal || "neutral");
+  return `
+    <label class="collection-target-row ${escapeAttr(signal)}">
+      <input type="checkbox" data-collection-toggle="${escapeAttr(item.collectionKey || "")}" ${visible ? "checked" : ""} />
+      <span>
+        <strong>${escapeHtml(item.title || item.symbol || "-")}</strong>
+        <small>${escapeHtml(item.kind || "매수")} · ${escapeHtml(item.badge || "보유")} · ${escapeHtml(signalTimeDisplay(item.signalTimeText))}</small>
+      </span>
+      <em>${visible ? "표시" : "숨김"}</em>
+    </label>
+  `;
 }
 
 function collectionCryptoWatchItem(asset, assets = [], options = {}) {
   const signal = cryptoSignalPlan(asset, assets, options);
   const signalScore = cryptoQualityScore(signal);
+  const selected = asset?.selected || asset?.latest || {};
   return {
     scope: "crypto",
     kind: "코인",
@@ -2496,6 +3220,8 @@ function collectionCryptoWatchItem(asset, assets = [], options = {}) {
     signalScore,
     statusLabel: signalStatusText(signal.className || "watch", signalScore),
     actionText: signalActionText(signal.className || "watch", signalScore, "crypto"),
+    signalTimeText: signal.signalTimeText,
+    sourceAt: selected.datetime || signal.signalTimeText || "",
     value: signal.portfolioText || formatNum(signal.close, priceDigits(signal.close)),
     detail: signal.message || signal.thirtySubText || "코인 운용 신호",
     jumpTab: "crypto",
@@ -2530,6 +3256,8 @@ function autoSortedCollectionItems(items = []) {
     .map((item, index) => ({ item, index, bucket: collectionTaskBucket(item) }))
     .sort((a, b) => {
       if (a.bucket.order !== b.bucket.order) return a.bucket.order - b.bucket.order;
+      const lifecycleDiff = signalLifecycle(a.item).order - signalLifecycle(b.item).order;
+      if (lifecycleDiff) return lifecycleDiff;
       const scoreDiff = commonSignalScore(b.item) - commonSignalScore(a.item);
       if (scoreDiff) return scoreDiff;
       const scopeDiff = signalInboxScopeOrder(a.item.jumpTab) - signalInboxScopeOrder(b.item.jumpTab);
@@ -2540,12 +3268,24 @@ function autoSortedCollectionItems(items = []) {
 }
 
 function collectionTaskBucket(item = {}) {
+  if (signalLifecycle(item).key === "expired") return { key: "expired", label: "만료", order: 5 };
   const signal = signalClass(item.signal || "watch");
   const score = commonSignalScore(item);
   if (["warning", "sell", "avoid"].includes(signal)) return { key: "risk", label: "위험", order: 1 };
   if (["candidate", "buy"].includes(signal) || score >= 72) return { key: "action", label: "진입", order: 2 };
   if (score <= 45) return { key: "weak", label: "약화", order: 3 };
   return { key: "watch", label: "관찰", order: 4 };
+}
+
+function collectionSignalText(item = {}) {
+  const signal = signalClass(item.signal || "watch");
+  const score = commonSignalScore(item);
+  const lifecycle = signalLifecycle(item);
+  return `${item.badge || item.statusLabel || signalStatusText(signal, score)} · ${lifecycle.label}`;
+}
+
+function collectionItemSignalTime(item = {}) {
+  return signalTimeDisplay(item.signalTimeText, item.sourceAt, item.datetime, item.time, item.generatedAt, state.monitor?.generated_at, state.assetArchive?.generated_at);
 }
 
 function moveCollectionItem(key, delta) {
@@ -2582,12 +3322,16 @@ function collectionItemKey(scope, symbol) {
 
 function addCollectionOrderKey(key) {
   if (!key) return;
+  state.collectionHiddenKeys?.delete(key);
+  saveCollectionHiddenKeys();
   state.collectionOrder = [key, ...(state.collectionOrder || []).filter((entry) => entry !== key)];
   saveCollectionOrder();
 }
 
 function removeCollectionOrderKey(key) {
   if (!key) return;
+  state.collectionHiddenKeys?.delete(key);
+  saveCollectionHiddenKeys();
   state.collectionOrder = (state.collectionOrder || []).filter((entry) => entry !== key);
   saveCollectionOrder();
 }
@@ -2610,6 +3354,8 @@ function collectionCoreItems(archive = state.assetArchive || fallbackAssetArchiv
       signalScore: commonSignalScore({ signal: optionSignal.type || "neutral", score: optionSignal.score, momentum: optionSignal.metrics?.momentum }),
       value: formatNum(optionLatest.close, 2),
       detail: optionSignal.title || optionSignal.message || "실시간 옵션 신호",
+      signalTimeText: signalTimeDisplay(optionSignal.datetime, optionSignal.time, optionLatest.datetime, optionLatest.time, snapshot.generated_at),
+      sourceAt: optionSignal.datetime || optionLatest.datetime || snapshot.generated_at || "",
       jumpTab: "options",
     },
     {
@@ -2620,6 +3366,8 @@ function collectionCoreItems(archive = state.assetArchive || fallbackAssetArchiv
       signalScore: commonSignalScore({ signal: etfSummary.signal || "watch", score: etfSummary.score }),
       value: formatNum(etfSelected.close, 0),
       detail: etfSummary.message || "ETF 분할매수 컨텍스트",
+      signalTimeText: signalTimeDisplay(etfSelected.datetime, etfSelected.time, archive.etf?.generated_at, archive.generated_at),
+      sourceAt: etfSelected.datetime || archive.etf?.generated_at || archive.generated_at || "",
       jumpTab: "etf",
     },
     cryptoCollectionItem(btc, assets, "BTC", "btc"),
@@ -2639,6 +3387,8 @@ function cryptoCollectionItem(asset, assets, title, cryptoTab) {
     signalScore,
     value: formatNum(selected.close, priceDigits(selected.close)),
     detail: signal.message || "코인 신호",
+    signalTimeText: signal.signalTimeText,
+    sourceAt: selected.datetime || signal.signalTimeText || "",
     jumpTab: "crypto",
     jumpCrypto: cryptoTab,
   };
@@ -2648,56 +3398,74 @@ function collectionCard(item, options = {}) {
   const signal = signalClass(item.signal || "neutral");
   const index = Number(options.index) || 0;
   const total = Number(options.total) || 0;
-  const decision = signalDecisionSummary(item);
-  const moveControls = item.collectionKey && total > 1
-    ? `
-      <div class="collection-card-actions">
-        <button type="button" data-collection-key="${escapeAttr(item.collectionKey)}" data-collection-pin="1" aria-label="맨 위로 이동" ${index <= 0 ? "disabled" : ""}>⇧</button>
-        <button type="button" data-collection-key="${escapeAttr(item.collectionKey)}" data-collection-move="-1" aria-label="위로 이동" ${index <= 0 ? "disabled" : ""}>&uarr;</button>
-        <button type="button" data-collection-key="${escapeAttr(item.collectionKey)}" data-collection-move="1" aria-label="아래로 이동" ${index >= total - 1 ? "disabled" : ""}>&darr;</button>
-      </div>
-    `
+  const moveControls = item.collectionKey && total > 1 && state.collectionSortMode !== "auto"
+    ? [
+      `<button type="button" data-collection-key="${escapeAttr(item.collectionKey)}" data-collection-pin="1" aria-label="맨 위로 이동" ${index <= 0 ? "disabled" : ""}>⇧</button>`,
+      `<button type="button" data-collection-key="${escapeAttr(item.collectionKey)}" data-collection-move="-1" aria-label="위로 이동" ${index <= 0 ? "disabled" : ""}>&uarr;</button>`,
+      `<button type="button" data-collection-key="${escapeAttr(item.collectionKey)}" data-collection-move="1" aria-label="아래로 이동" ${index >= total - 1 ? "disabled" : ""}>&darr;</button>`,
+    ].join("")
     : "";
-  const controls = state.collectionSortMode === "auto" ? "" : moveControls;
+  const hideControl = item.collectionKey
+    ? `<button type="button" data-collection-hide="${escapeAttr(item.collectionKey)}" aria-label="모음에서 숨김">숨김</button>`
+    : "";
+  const controls = item.emptyActions || (!moveControls && !hideControl) ? "" : `<div class="collection-card-actions">${hideControl}${moveControls}</div>`;
   const focusAttr = item.focusKey ? ` data-focus-key="${escapeAttr(item.focusKey)}"` : "";
-  const metrics = collectionCardMetrics(item);
-  const bucket = collectionTaskBucket(item);
   const emptyActions = item.emptyActions
     ? `
       <div class="collection-empty-actions">
-        <button type="button" data-quick-tab="stocks">국장 추가</button>
-        <button type="button" data-quick-tab="usStocks">미장 추가</button>
-        <button type="button" data-quick-tab="crypto">코인 추가</button>
+        <button type="button" data-quick-tab="options">옵션 매수</button>
+        <button type="button" data-quick-tab="stocks">국장 매수</button>
+        <button type="button" data-quick-tab="crypto">코인 매수</button>
       </div>
     `
     : "";
+  const signalText = collectionSignalText(item);
+  const timeText = collectionItemSignalTime(item);
+  const subtitle = item.emptyActions
+    ? item.detail || "각 탭에서 매수 실행 시 모음에 표시됩니다."
+    : item.buyTimeText
+      ? `${signalText} · 매수 ${item.buyTimeText}`
+      : `${signalText} · ${timeText}`;
+  const lifecycle = signalLifecycle(item);
+  const metricsHtml = item.emptyActions ? "" : collectionCardMetricsHtml(item);
   return `
-    <article class="watch-card collection-card ${escapeAttr(signal)}" role="button" tabindex="0" data-jump-tab="${escapeAttr(item.jumpTab || "")}" data-jump-crypto="${escapeAttr(item.jumpCrypto || "")}" data-jump-focus="${escapeAttr(item.focusKey || "")}"${focusAttr}>
+    <article class="watch-card collection-card ${escapeAttr(signal)} ${escapeAttr(lifecycle.key)}" role="button" tabindex="0" data-jump-tab="${escapeAttr(item.jumpTab || "")}" data-jump-crypto="${escapeAttr(item.jumpCrypto || "")}" data-jump-focus="${escapeAttr(item.focusKey || "")}"${focusAttr}>
       <div class="collection-card-head">
         <span class="watch-kind">${escapeHtml(item.kind || "감시")}</span>
-        ${item.emptyActions ? "" : `<span class="task-badge ${escapeAttr(bucket.key)}">${escapeHtml(bucket.label)}</span>`}
         <span class="signal-pill ${escapeAttr(signal)}">${escapeHtml(item.badge || "관찰")}</span>
-        ${scoreBadgeHtml(decision.score, signal)}
+        ${item.emptyActions ? "" : signalTimeBadgeHtml(timeText, item.timeBadgeLabel || "신호")}
       </div>
       <div class="collection-card-title">
         <strong>${escapeHtml(item.title || "-")}</strong>
-        <small>${escapeHtml(item.value || "-")}</small>
+        <small>${escapeHtml(subtitle)}</small>
       </div>
-      ${decisionDetailHtml(decision)}
-      ${foldedDecisionDetails(item.detail, decision)}
-      <div class="collection-card-metrics">
-        ${metrics.map((metric) => `<span><b>${escapeHtml(metric.label)}</b>${escapeHtml(metric.value || "-")}</span>`).join("")}
-      </div>
+      ${metricsHtml}
       ${emptyActions}
       ${controls}
     </article>
   `;
 }
 
+function collectionCardMetricsHtml(item = {}) {
+  const metrics = collectionCardMetrics(item);
+  if (!metrics.length) return "";
+  return `
+    <div class="collection-card-metrics">
+      ${metrics.map((metric) => `
+        <span class="${escapeAttr(metric.tone || "")}">
+          <b>${escapeHtml(metric.label || "-")}</b>
+          <strong>${escapeHtml(metric.value || "-")}</strong>
+          ${metric.text ? `<em>${escapeHtml(metric.text)}</em>` : ""}
+        </span>
+      `).join("")}
+    </div>
+  `;
+}
+
 function collectionCardMetrics(item = {}) {
   const decision = signalDecisionSummary(item);
   if (Array.isArray(item.metrics) && item.metrics.length) {
-    const metrics = compactDetailMetrics(item.metrics, 4);
+    const metrics = compactDetailMetrics(item.metrics, item.verifierScope ? 5 : 4);
     if (metrics.length) return metrics;
   }
   return [
@@ -2967,8 +3735,10 @@ function renderSignalInbox() {
     ? Math.round(items.reduce((sum, item) => sum + commonSignalScore(item), 0) / items.length)
     : 0;
   const doneCount = Math.max(0, items.length - pendingCount);
+  const activeCount = items.filter((item) => ["new", "active"].includes(signalLifecycle(item).key)).length;
+  const expiredCount = items.filter((item) => signalLifecycle(item).key === "expired").length;
   setText("#signalInboxSummary", items.length
-    ? `${state.selectedDate} 오늘 신호 ${items.length}개 · 처리 필요 ${pendingCount}개 · 확인 완료 ${doneCount}개 · 평균 ${avgScore}점 · ${signalInboxFilterLabel(state.signalInboxFilter)} ${filteredItems.length}개`
+    ? `${state.selectedDate} 오늘 신호 ${items.length}개 · 활성 ${activeCount}개 · 만료 ${expiredCount}개 · 처리 필요 ${pendingCount}개 · 확인 완료 ${doneCount}개 · 평균 ${avgScore}점 · ${signalInboxFilterLabel(state.signalInboxFilter)} ${filteredItems.length}개`
     : `${state.selectedDate} 기준 처리할 오늘 신호가 없습니다.`);
   renderSignalInboxBuckets(items);
   const root = document.querySelector("#signalInboxList");
@@ -3021,6 +3791,8 @@ function signalInboxItems() {
       badge: indexFilter.label || "관찰",
       value: `점수 ${formatNum(indexFilter.score, 1)}`,
       detail: indexFilter.message || "국장 시장 필터를 확인합니다.",
+      signalTimeText: signalTimeDisplay(stocks.generated_at, archive.generated_at),
+      sourceAt: stocks.generated_at || archive.generated_at || "",
       jumpTab: "stocks",
       sourceKey: "stocks:index-filter",
     });
@@ -3035,6 +3807,8 @@ function signalInboxItems() {
     badge: row.final_action || row.trade_signal || row.bucket || "관찰",
     value: row.score != null ? `점수 ${formatNum(row.score, 1)}` : row.symbol || "-",
     detail: row.reason || row.bucket || "국장 후보 신호",
+    signalTimeText: signalTimeDisplay(row.datetime, row.time, stocks.generated_at, archive.generated_at, row.date),
+    sourceAt: row.datetime || stocks.generated_at || archive.generated_at || "",
     jumpTab: "stocks",
     sourceKey: `stocks:domestic:${normalizeSearchText(row.symbol || row.name)}`,
   }));
@@ -3055,6 +3829,8 @@ function signalInboxItems() {
       badge: usSummary.label || "관찰",
       value: `후보 ${formatNum(usStocks.candidate_count, 0)}`,
       detail: usSummary.message || "미장 전체 조건을 확인합니다.",
+      signalTimeText: signalTimeDisplay(usStocks.generated_at, archive.generated_at),
+      sourceAt: usStocks.generated_at || archive.generated_at || "",
       jumpTab: "usStocks",
       sourceKey: "stocks:us-filter",
     });
@@ -3071,6 +3847,8 @@ function signalInboxItems() {
       badge: summary.label || "관찰",
       value: selected.close != null ? formatNum(selected.close, 2) : asset.symbol || "-",
       detail: usSignalDetail(asset),
+      signalTimeText: signalTimeDisplay(selected.datetime, selected.time, usStocks.generated_at, archive.generated_at, selected.date),
+      sourceAt: selected.datetime || usStocks.generated_at || archive.generated_at || "",
       jumpTab: "usStocks",
       sourceKey: `stocks:us:${normalizeSearchText(asset.symbol || asset.label)}`,
     });
@@ -3138,10 +3916,11 @@ function signalInboxIsUnread(item = {}) {
 }
 
 function signalInboxNeedsAction(item = {}) {
-  return signalInboxIsUnread(item);
+  return signalInboxIsUnread(item) && signalLifecycle(item).key !== "expired";
 }
 
 function signalInboxWorkBucket(item = {}) {
+  if (signalLifecycle(item).key === "expired") return { key: "weak", label: "만료", order: 5 };
   const signal = signalClass(item.signal || "watch");
   const score = commonSignalScore(item);
   if (["warning", "sell", "avoid"].includes(signal)) return { key: "risk", label: "위험", order: 1 };
@@ -3150,8 +3929,8 @@ function signalInboxWorkBucket(item = {}) {
   return { key: "watch", label: "관찰", order: 4 };
 }
 
-function signalInboxItemKey(sourceKey, signal, badge) {
-  return [state.selectedDate, sourceKey, signalClass(signal), signalInboxKeyText(badge)].join(":");
+function signalInboxItemKey(sourceKey, signal, badge, timeBucket = "") {
+  return [state.selectedDate, sourceKey, signalClass(signal), signalInboxKeyText(badge), timeBucket || "steady"].join(":");
 }
 
 function signalInboxKeyText(value) {
@@ -3176,6 +3955,7 @@ function signalInboxCryptoItem(plan = {}) {
     statusLabel: signalStatusText(plan.className || "watch", signalScore),
     actionText: signalActionText(plan.className || "watch", signalScore, "crypto"),
     detail: plan.message || plan.thirtySubText || "코인 운용 신호",
+    signalTimeText: plan.signalTimeText,
     jumpTab: "crypto",
     jumpCrypto: plan.key,
     sourceKey: `crypto:${plan.key || plan.name}`,
@@ -3191,6 +3971,17 @@ function addSignalInboxItem(items, item = {}) {
   const badge = item.badge || item.label || "관찰";
   const focusKey = item.focusKey || (item.scope && item.symbol ? collectionItemKey(item.scope, item.symbol) : "");
   const signalScore = commonSignalScore({ ...item, signal });
+  const signalTimeText = signalTimeDisplay(item.signalTimeText, item.sourceAt, item.datetime, item.time, item.generatedAt, item.createdAt);
+  const sourceAt = item.sourceAt || item.datetime || "";
+  const keyedItem = {
+    ...item,
+    signal,
+    signalScore,
+    jumpTab: item.jumpTab,
+    scope: item.scope || signalScopeKey(item),
+    signalTimeText,
+    sourceAt,
+  };
   items.push({
     kind: item.kind || "신호",
     title: item.title || item.symbol || "신호",
@@ -3202,11 +3993,14 @@ function addSignalInboxItem(items, item = {}) {
     statusLabel: signalStatusText(signal, signalScore),
     actionText: signalActionText(signal, signalScore, item.scope),
     detail: item.detail || item.message || "",
+    signalTimeText,
+    sourceAt,
+    generatedAt: item.generatedAt || state.assetArchive?.generated_at || state.monitor?.generated_at || "",
     jumpTab: item.jumpTab,
     jumpCrypto: item.jumpCrypto || "",
     sourceKey,
     focusKey,
-    key: signalInboxItemKey(sourceKey, signal, badge),
+    key: signalInboxItemKey(sourceKey, signal, badge, signalInboxTimeBucket(keyedItem)),
   });
 }
 
@@ -3215,11 +4009,17 @@ function signalInboxUnique(items = []) {
   items.forEach((item) => {
     const key = item.sourceKey || `${item.jumpTab}:${normalizeSearchText(item.symbol || item.title)}`;
     const previous = byKey.get(key);
-    if (!previous || signalInboxPriority(item.signal) > signalInboxPriority(previous.signal)) {
+    if (!previous || signalInboxUniqueRank(item) > signalInboxUniqueRank(previous)) {
       byKey.set(key, item);
     }
   });
   return [...byKey.values()];
+}
+
+function signalInboxUniqueRank(item = {}) {
+  const lifecycle = signalLifecycle(item);
+  const freshness = lifecycle.key === "expired" ? 0 : lifecycle.key === "new" ? 18 : lifecycle.key === "active" ? 12 : 4;
+  return signalInboxPriority(item.signal) * 1000 + commonSignalScore(item) * 10 + freshness + signalLogTimestamp(item) / 1000000000000;
 }
 
 function signalInboxPriority(signal) {
@@ -3237,6 +4037,8 @@ function signalInboxPriority(signal) {
 function signalInboxSort(a, b) {
   const statusDiff = Number(signalInboxNeedsAction(b)) - Number(signalInboxNeedsAction(a));
   if (statusDiff) return statusDiff;
+  const lifecycleDiff = signalLifecycle(a).order - signalLifecycle(b).order;
+  if (lifecycleDiff) return lifecycleDiff;
   const bucketDiff = signalInboxWorkBucket(a).order - signalInboxWorkBucket(b).order;
   if (bucketDiff) return bucketDiff;
   const scoreDiff = commonSignalScore(b) - commonSignalScore(a);
@@ -3259,17 +4061,19 @@ function signalInboxItemHtml(item) {
   const focusAttr = item.focusKey ? ` data-jump-focus="${escapeAttr(item.focusKey)}"` : "";
   const pending = signalInboxNeedsAction(item);
   const bucket = signalInboxWorkBucket(item);
+  const lifecycle = signalLifecycle(item);
   return `
-    <article class="signal-inbox-item ${escapeAttr(signal)} ${pending ? "unread needs-action" : "done"}" role="button" tabindex="0" data-signal-key="${escapeAttr(item.key || "")}" data-jump-tab="${escapeAttr(item.jumpTab)}"${cryptoAttr}${focusAttr}>
+    <article class="signal-inbox-item ${escapeAttr(signal)} ${escapeAttr(lifecycle.key)} ${pending ? "unread needs-action" : "done"}" role="button" tabindex="0" data-signal-key="${escapeAttr(item.key || "")}" data-jump-tab="${escapeAttr(item.jumpTab)}"${cryptoAttr}${focusAttr}>
       <div class="signal-inbox-main">
-        <span>${escapeHtml(item.kind || "신호")}<em class="${pending ? "pending" : "complete"}">${pending ? "처리" : "완료"}</em><em class="bucket">${escapeHtml(bucket.label)}</em></span>
+        <span>${escapeHtml(item.kind || "신호")}<em class="${pending ? "pending" : "complete"}">${pending ? "처리" : "완료"}</em><em class="bucket">${escapeHtml(bucket.label)}</em><em class="${escapeAttr(lifecycle.key)}">${escapeHtml(lifecycle.label)}</em></span>
         <strong>${escapeHtml(item.title || "-")}</strong>
         <small>${escapeHtml(decision.status)} · ${escapeHtml(item.detail || "해당 화면에서 세부 조건을 확인하세요.")}</small>
-        <small class="next-action">${escapeHtml(decision.action)}</small>
+        <small class="next-action">${escapeHtml(decision.action)} · ${escapeHtml(signalTimeDisplay(item.signalTimeText, item.sourceAt))}</small>
       </div>
       <div class="signal-inbox-side">
         <span class="signal-pill ${escapeAttr(signal)}">${escapeHtml(item.badge || "관찰")}</span>
         ${scoreBadgeHtml(decision.score, signal)}
+        <small class="signal-confidence">${escapeHtml(signalConfidenceText(item))}</small>
       </div>
     </article>
   `;
@@ -3283,6 +4087,7 @@ function renderOptionsPanel() {
   if (signalBoard) signalBoard.hidden = !live;
   if (logPanel) logPanel.hidden = !live;
   if (archivePanel) archivePanel.hidden = live;
+  renderOptionsStatusTabs();
   if (live) return;
 
   const mode = archiveMode();
@@ -3302,6 +4107,7 @@ function renderOptionsPanel() {
     }
     setText("#optionArchiveCount", `${sessions.length}일`);
     drawEmptyChart(document.querySelector("#optionArchiveChart"), "상세 차트 없음", 320, mode.isDetail ? "저장된 거래일을 선택하세요." : "90일보다 오래된 날짜는 1년 요약으로 확인합니다.");
+    renderVerifierPanel("optionArchive", "#optionArchiveVerifier", null);
     if (listRoot) {
       listRoot.innerHTML = `<article class="replay-item watch"><strong>${escapeHtml(mode.label)}</strong><small>${escapeHtml(mode.text)}</small></article>`;
     }
@@ -3320,6 +4126,7 @@ function renderOptionsPanel() {
     ].map(metricCard).join("");
   }
   setText("#optionArchiveCount", `${tradePlan.events?.length || 0}개`);
+  renderVerifierPanel("optionArchive", "#optionArchiveVerifier", verifierSourceForScope("optionArchive", { session }));
   drawOptionArchiveChart(session, tradePlan);
   if (listRoot) {
     listRoot.innerHTML = tradePlan.events?.length
@@ -3332,6 +4139,15 @@ function renderOptionsPanel() {
         `).join("")
       : `<article class="replay-item watch"><strong>신호 없음</strong><small>선택일에는 기록된 옵션 행동 신호가 없습니다.</small></article>`;
   }
+}
+
+function renderOptionsStatusTabs(items = null) {
+  const sourceItems = items || (isLiveDate() ? signalLogForDisplayDate() : optionReplayEventItems());
+  renderStatusCountTabs("#optionsStatusTabs", "options", sourceItems, {
+    filters: OPTION_PANEL_FILTERS,
+    bucketFn: optionBucketForItem,
+    labels: { all: "전체", entry: "진입", watch: "관찰", risk: "위험" },
+  });
 }
 
 function renderEtfPanel() {
@@ -3365,17 +4181,47 @@ function renderEtfPanel() {
     { label: "30분 50%", value: formatNum(context.thirty_minute?.fib_50, 0), text: etfStanceLabel(context.thirty_minute?.stance) },
     { label: "61.8%", value: formatNum(context.thirty_minute?.fib_618, 0), text: "재투입 후보" },
   ].map(metricCard).join("");
-  renderEtfSignalCard({
-    signal,
-    score: etfScore,
-    summary,
-    selected,
-    context,
-    indexFilter: archive.etf?.index_filter || {},
+  const etfItem = { signal, signalScore: etfScore, title: "ETF" };
+  renderStatusCountTabs("#etfStatusTabs", "etf", [etfItem], {
+    labels: { all: "전체", strong: "좋은 신호", watch: "관찰", risk: "위험" },
   });
+  if (itemMatchesPanelFilter(etfItem, "etf")) {
+    renderEtfSignalCard({
+      signal,
+      score: etfScore,
+      summary,
+      selected,
+      context,
+      indexFilter: archive.etf?.index_filter || {},
+      timeText: signalTimeDisplay(selected.datetime, selected.time, context.thirty_minute?.datetime, state.monitor?.generated_at, etf.generated_at),
+    });
+  } else {
+    renderEtfEmptySignalCard();
+  }
+  renderVerifierPanel("etf", "#etfVerifier", verifierSourceForScope("etf"));
 }
 
-function renderEtfSignalCard({ signal = "watch", score = 0, summary = {}, selected = {}, context = {}, indexFilter = {} } = {}) {
+function renderEtfEmptySignalCard() {
+  const root = document.querySelector("#etfSignalList");
+  if (!root) return;
+  root.innerHTML = `
+    <article class="crypto-signal-card option-signal-card watch">
+      <header>
+        <h2>표시할 ETF 신호 없음</h2>
+        <span class="signal-pill watch">대기</span>
+      </header>
+      <details class="crypto-card-details">
+        <summary>상세 조건 보기</summary>
+        <div class="crypto-detail-section">
+          <strong>안내</strong>
+          <p class="crypto-card-summary">선택한 필터에 맞는 ETF 신호가 없습니다.</p>
+        </div>
+      </details>
+    </article>
+  `;
+}
+
+function renderEtfSignalCard({ signal = "watch", score = 0, summary = {}, selected = {}, context = {}, indexFilter = {}, timeText = "" } = {}) {
   const root = document.querySelector("#etfSignalList");
   if (!root) return;
   const decision = signalDecisionSummary({
@@ -3399,6 +4245,7 @@ function renderEtfSignalCard({ signal = "watch", score = 0, summary = {}, select
     className: signal,
     title: "ETF 판단",
     badge: summary.label || "관찰",
+    timeText,
     score,
     summary: summary.message || "KODEX200 ETF 분할매수 컨텍스트를 카드 기준으로 확인합니다.",
     decision,
@@ -3419,28 +4266,13 @@ function renderStocksPanel() {
   setText("#stocksTitle", "국장 종목");
   setText("#stocksDateText", `${state.selectedDate} · ${isLiveDate() ? "실시간" : "요약"}`);
   setText("#stocksMessage", indexFilter.message || "국내 주식 후보를 지수 흐름 필터와 함께 확인합니다.");
-  const universe = stocks.universe_summary || {};
-  const shortTerm = stocks.short_term || {};
-  const swing = stocks.swing || {};
-  const activeItems = watchItemsForScope("domestic");
-  const candidateItems = stockManageCandidateItems("domestic");
-  const stats = stockManageStats(activeItems, candidateItems);
-  const panelScore = stats.avgScore || commonSignalScore({ signal, score: indexFilter.score });
-  renderBoardDecision("#stocksBoard", {
-    scope: "domestic",
-    signal,
-    signalScore: panelScore,
-    detail: indexFilter.message || `후보 ${candidateItems.length}개 · 감시 ${activeItems.length}개`,
-    actionText: stats.strong ? "강한 후보 차트 확인" : signalActionText(signal, panelScore, "domestic"),
-  });
-  document.querySelector("#stocksMetricGrid").innerHTML = [
-    { label: "공통점수", value: `${panelScore}점`, text: `감시 ${activeItems.length}개` },
-    { label: "오늘 확인", value: `${stats.strong}개`, text: "신규 부각/강한 관찰" },
-    { label: "위험/약화", value: `${stats.risk}개`, text: "축소 또는 보류" },
-    { label: "분석 종목", value: formatNum(universe.total_count, 0), text: `1일 ${formatNum(shortTerm.candidate_count, 0)} · 1달 ${formatNum(swing.candidate_count, 0)}` },
-  ].map(metricCard).join("");
+  const message = document.querySelector("#stocksMessage");
+  if (message) message.hidden = true;
+  clearBoardDecision("#stocksBoard");
+  hideStockSummaryBlocks("domestic");
   renderStockReliability("domestic", stocks);
   renderStockManagePanel("domestic");
+  renderVerifierPanel("stocks", "#stocksVerifier", verifierSourceForScope("stocks"));
 }
 
 function renderUsStocksPanel() {
@@ -3455,54 +4287,30 @@ function renderUsStocksPanel() {
   if (badge) badge.className = `signal-pill ${signal}`;
   setText("#usStocksDateText", `${state.selectedDate} · ${isLiveDate() ? "실시간" : "복기"}`);
   setText("#usStocksMessage", summary.message || "미장은 SPY/QQQ 상대강도와 20/50/200일선으로 관심종목 신호를 봅니다.");
-  const activeItems = watchItemsForScope("us");
-  const candidateItems = stockManageCandidateItems("us");
-  const stats = stockManageStats(activeItems, candidateItems);
-  const panelScore = stats.avgScore || commonSignalScore({ signal, score: summary.score });
-  renderBoardDecision("#usStocksBoard", {
-    scope: "us",
-    signal,
-    signalScore: panelScore,
-    detail: summary.message || `후보 ${candidateItems.length}개 · 감시 ${activeItems.length}개`,
-    actionText: stats.strong ? "상대강도 유지 확인" : signalActionText(signal, panelScore, "us"),
-  });
-  document.querySelector("#usStocksMetricGrid").innerHTML = [
-    { label: "공통점수", value: `${panelScore}점`, text: `감시 ${activeItems.length}개` },
-    { label: "오늘 확인", value: `${stats.strong}개`, text: "신규 부각/상대강도" },
-    { label: "위험/약화", value: `${stats.risk}개`, text: "갭/추세 이탈" },
-    { label: "추적군", value: formatNum(usStocks.ready_count, 0), text: `${formatNum(usStocks.tracked_count, 0)}개 중` },
-  ].map(metricCard).join("");
+  clearBoardDecision("#usStocksBoard");
+  hideStockSummaryBlocks("us");
   renderStockReliability("us", usStocks);
   renderStockManagePanel("us");
+  renderVerifierPanel("usStocks", "#usStocksVerifier", verifierSourceForScope("usStocks"));
+}
+
+function hideStockSummaryBlocks(scope = "domestic") {
+  const ids = scope === "us"
+    ? ["#usStocksMessage", "#usStocksMetricGrid", "#usStocksReliabilityStrip"]
+    : ["#stocksMessage", "#stocksMetricGrid", "#stocksReliabilityStrip"];
+  ids.forEach((selector) => {
+    const node = document.querySelector(selector);
+    if (!node) return;
+    node.hidden = true;
+    if (selector.includes("MetricGrid") || selector.includes("ReliabilityStrip")) node.innerHTML = "";
+  });
 }
 
 function renderStockReliability(scope, payload = {}) {
   const root = document.querySelector(scope === "us" ? "#usStocksReliabilityStrip" : "#stocksReliabilityStrip");
   if (!root) return;
-  const feed = state.dataFeeds?.["asset-archive"] || {};
-  const hasData = scope === "us"
-    ? Boolean((payload.assets || []).length || (payload.top || []).length)
-    : Boolean((payload.short_term?.top || []).length || (payload.swing?.top || []).length || payload.index_filter?.label);
-  const dataState = assetSectionDataState(scope === "us" ? "us_stocks" : "stocks", hasData, feed);
-  const items = scope === "us"
-    ? [
-      { label: "데이터", value: dataState.value, signal: dataState.signal },
-      { label: "준비", value: `${formatNum(payload.ready_count, 0)}/${formatNum(payload.tracked_count, 0)}`, signal: number(payload.ready_count) ? "candidate" : "warning" },
-      { label: "후보", value: `${formatNum(payload.candidate_count, 0)}개`, signal: number(payload.candidate_count) ? "watch" : "neutral" },
-      { label: "기준", value: (payload.benchmarks || []).some((asset) => asset?.ok) ? "SPY/QQQ" : "부족", signal: (payload.benchmarks || []).some((asset) => asset?.ok) ? "candidate" : "warning" },
-    ]
-    : [
-      { label: "데이터", value: dataState.value, signal: dataState.signal },
-      { label: "지수", value: payload.index_filter?.label || "-", signal: signalClass(payload.index_filter?.signal || "watch") },
-      { label: "1일", value: `${formatNum(payload.short_term?.candidate_count, 0)}개`, signal: number(payload.short_term?.candidate_count) ? "watch" : "neutral" },
-      { label: "1달", value: `${formatNum(payload.swing?.candidate_count, 0)}개`, signal: number(payload.swing?.candidate_count) ? "watch" : "neutral" },
-    ];
-  root.innerHTML = items.map((item) => `
-    <article class="${escapeAttr(signalClass(item.signal || "neutral"))}">
-      <span>${escapeHtml(item.label)}</span>
-      <strong>${escapeHtml(item.value || "-")}</strong>
-    </article>
-  `).join("");
+  root.hidden = true;
+  root.innerHTML = "";
 }
 
 function renderCryptoReliability(crypto = state.assetArchive?.crypto || {}) {
@@ -3523,7 +4331,12 @@ function setStockFocus(scope, symbol) {
   const key = manageScopeKey(scope);
   if (!["domestic", "us"].includes(key)) return;
   const target = normalizeSearchText(symbol);
-  if (!target) return;
+  if (!target || target === "ALL") {
+    state.focusedAssets[key] = "";
+    renderAssetTabs();
+    scheduleChartRedraw();
+    return;
+  }
   state.focusedAssets[key] = target;
   renderAssetTabs();
   scheduleChartRedraw();
@@ -3537,6 +4350,61 @@ function manageScopeKey(scope) {
 function currentManageFilter(scope) {
   const key = manageScopeKey(scope);
   return MANAGE_FILTERS.includes(state.manageFilters[key]) ? state.manageFilters[key] : "all";
+}
+
+function renderStockWatchTabs(scope, activeItems = []) {
+  const config = stockManageConfig(scope);
+  const root = document.querySelector(config.subTabs);
+  if (!root) return;
+  const key = manageScopeKey(scope);
+  const sorted = sortBySignalPriority(activeItems);
+  const activeFocus = normalizeSearchText(state.focusedAssets[key]);
+  if (activeFocus && !sorted.some((item) => normalizeSearchText(item.symbol) === activeFocus)) {
+    state.focusedAssets[key] = "";
+  }
+  const visible = sorted.slice(0, 8);
+  const buttons = [
+    ...visible.map((item) => stockWatchTabButton({
+      scope: key,
+      symbol: item.symbol,
+      label: item.title || item.symbol,
+      count: item.signalScore,
+      active: normalizeSearchText(state.focusedAssets[key]) === normalizeSearchText(item.symbol),
+      signal: item.signal,
+      scoreSuffix: "점",
+    })),
+  ];
+  if (sorted.length > visible.length) {
+    buttons.push(`<span class="tab-overflow-count">+${formatNum(sorted.length - visible.length, 0)}</span>`);
+  }
+  root.innerHTML = buttons.join("");
+}
+
+function stockWatchTabButton({ scope, symbol, label, count, active = false, signal = "neutral", scoreSuffix = "" } = {}) {
+  const className = signalClass(signal || "neutral");
+  const countText = count != null ? `${formatNum(count, 0)}${scoreSuffix}` : "";
+  return `
+    <button type="button" class="${escapeAttr(`${className} ${active ? "active" : ""}`.trim())}" data-stock-tab-scope="${escapeAttr(scope)}" data-stock-tab="${escapeAttr(symbol || "all")}" title="${escapeAttr(label || "")}">
+      <span>${escapeHtml(label || "-")}</span>
+      ${countText ? `<strong>${escapeHtml(countText)}</strong>` : ""}
+    </button>
+  `;
+}
+
+function renderStockStatusTabs(scope, activeItems = []) {
+  const config = stockManageConfig(scope);
+  const root = document.querySelector(config.statusTabs);
+  if (!root) return;
+  root.hidden = true;
+  root.innerHTML = "";
+}
+
+function filteredStockPanelItems(scope, activeItems = []) {
+  const key = manageScopeKey(scope);
+  const focused = normalizeSearchText(state.focusedAssets[key]);
+  return activeItems
+    .filter((item) => !focused || normalizeSearchText(item.symbol) === focused)
+    .filter((item) => itemMatchesPanelFilter(item, key));
 }
 
 function manageCandidateSignalItem(item, scope) {
@@ -3608,7 +4476,9 @@ function renderStockManagePanel(scope) {
   const candidates = stockManageCandidateItems(scope);
   const stats = stockManageStats(activeItems, candidates);
   setText(config.summary, `감시 ${activeItems.length}개 · 추가 후보 ${candidates.length}개 · 평균 ${stats.avgScore}점`);
-  renderStockSignalList(config, activeItems);
+  renderStockWatchTabs(scope, activeItems);
+  renderStockStatusTabs(scope, activeItems);
+  renderStockSignalList(config, filteredStockPanelItems(scope, activeItems));
   const candidateRoot = document.querySelector(config.candidateList);
   if (candidateRoot) {
     const filtered = filteredManageCandidates(scope, candidates);
@@ -3649,6 +4519,8 @@ function stockManageConfig(scope) {
       label: "미장",
       panel: "#usManagePanel",
       summary: "#usManageSummary",
+      subTabs: "#usStocksSubTabs",
+      statusTabs: "#usStocksStatusTabs",
       signalList: "#usSignalList",
       candidateList: "#usManageCandidateList",
     }
@@ -3656,6 +4528,8 @@ function stockManageConfig(scope) {
       label: "국장",
       panel: "#domesticManagePanel",
       summary: "#domesticManageSummary",
+      subTabs: "#stocksSubTabs",
+      statusTabs: "#stocksStatusTabs",
       signalList: "#domesticSignalList",
       candidateList: "#domesticManageCandidateList",
     };
@@ -3675,6 +4549,7 @@ function stockSignalCard(item) {
       <header>
         <h2>${escapeHtml(item.title || item.symbol || "-")}</h2>
         <span class="signal-pill ${escapeAttr(signal)}">${escapeHtml(badgeText)}</span>
+        ${signalTimeBadgeHtml(item.signalTimeText)}
         ${scoreBadgeHtml(decision.score, signal)}
         <button class="mini-remove" type="button" data-watch-scope="${escapeAttr(item.scope)}" data-watch-remove="${escapeAttr(item.symbol)}">삭제</button>
       </header>
@@ -4188,6 +5063,7 @@ function renderCryptoPanel() {
     ...sortedExceptionAssets.map((asset) => cryptoSignalCard(asset, assets, { exceptionMode: true, removable: true })),
     cryptoExceptionApprovalCard(exceptionAssets, assets),
   ].filter(Boolean);
+  renderVerifierPanel("crypto", "#cryptoVerifier", null, { emptyText: "코인 세부 탭에서 검증" });
   document.querySelector("#cryptoSignalList").innerHTML = cards.length
     ? cards.join("")
     : `<article class="crypto-signal-card watch"><header><h2>감시 코인 없음</h2><span class="signal-pill watch">대기</span></header><details class="crypto-card-details"><summary>상세 조건 보기</summary><div class="crypto-detail-section"><strong>안내</strong><p class="crypto-card-summary">코인 추가 패널에서 감시할 코인을 추가하면 이곳에 한 카드로 정리됩니다.</p></div></details></article>`;
@@ -4220,6 +5096,7 @@ function renderCryptoDetailPanel(asset, assets = []) {
   }
   renderCryptoDetailFocus(null);
   clearCryptoAssetList();
+  renderVerifierPanel("crypto", "#cryptoVerifier", verifierSourceForScope("crypto", { asset, assets }));
   document.querySelector("#cryptoSignalList").innerHTML = asset
     ? cryptoSignalCard(asset, assets, { rows, frame: state.cryptoFrame })
     : `<article class="crypto-signal-card watch"><header><h2>${name}</h2><span class="signal-pill watch">대기</span></header><details class="crypto-card-details"><summary>상세 조건 보기</summary><div class="crypto-detail-section"><strong>안내</strong><p>분봉 데이터를 기다리는 중입니다.</p></div></details></article>`;
@@ -5748,6 +6625,7 @@ function cryptoSignalCard(asset, allAssets = [], options = {}) {
       <header>
         <h2>${escapeHtml(signal.name)}</h2>
         <span class="signal-pill ${escapeAttr(signal.className)}">${escapeHtml(signal.label)}</span>
+        ${signalTimeBadgeHtml(signal.signalTimeText)}
         ${scoreBadgeHtml(score, signal.className)}
         ${removeButton}
       </header>
@@ -6185,6 +7063,655 @@ function cryptoFrameLabel(frame = state.cryptoFrame) {
   }[frame] || "240분봉";
 }
 
+function verifierSourceForScope(scope, options = {}) {
+  if (scope === "options") {
+    const session = buildLiveReplaySession(state.monitor);
+    return verifierSourceFromSeries(scope, session?.series, {
+      valueKey: "index",
+      timeKey: "time",
+      label: "KOSPI200",
+      intervalLabel: "5분봉",
+      timeStepMinutes: VERIFIER_TIME_STEP_MINUTES,
+    });
+  }
+  if (scope === "optionArchive" || scope === "replay") {
+    const session = options.session || (scope === "replay" ? activeReplaySession() : replaySessionForDate(state.selectedDate));
+    return verifierSourceFromSeries(scope, session?.series, {
+      valueKey: "index",
+      timeKey: "time",
+      label: "KOSPI200",
+      intervalLabel: "5분봉",
+      timeStepMinutes: VERIFIER_TIME_STEP_MINUTES,
+    });
+  }
+  if (scope === "etf") {
+    const instrument = state.assetArchive?.etf;
+    return verifierSourceFromSeries(scope, assetTrendPoints(instrument, state.selectedDate, 180), {
+      valueKey: "close",
+      timeKey: "date",
+      label: instrument?.label || "KODEX200",
+      intervalLabel: "일봉",
+    });
+  }
+  if (scope === "stocks") {
+    const chart = stocksChartInstrument();
+    return verifierSourceFromSeries(scope, assetTrendPoints(chart.instrument, state.selectedDate, 180), {
+      valueKey: "close",
+      timeKey: "date",
+      label: chart.label || "국장",
+      intervalLabel: "일봉",
+    });
+  }
+  if (scope === "usStocks") {
+    const chart = usStocksChartInstrument();
+    return verifierSourceFromSeries(scope, assetTrendPoints(chart.instrument, state.selectedDate, 180), {
+      valueKey: "close",
+      timeKey: "date",
+      label: chart.label || "미장",
+      intervalLabel: "일봉",
+    });
+  }
+  if (scope === "crypto") {
+    const crypto = state.assetArchive?.crypto || {};
+    const normalAssets = cryptoVisibleAssets(crypto.assets || []);
+    const exceptionAssets = cryptoVisibleAssets(crypto.exception_assets || []);
+    const assets = options.assets || [...normalAssets, ...exceptionAssets];
+    const asset = options.asset || cryptoSelectedAsset(assets);
+    if (!asset || state.cryptoTab === "all") return null;
+    return cryptoVerifierSourceForAsset(asset);
+  }
+  return null;
+}
+
+function cryptoVerifierSourceForAsset(asset) {
+  if (!asset) return null;
+  const rows = cryptoRowsForFrame(asset, "30m");
+  return verifierSourceFromSeries("crypto", cryptoDetailPoints(rows, "30m", 260), {
+    valueKey: "close",
+    timeKey: "date",
+    label: cryptoAssetName(asset),
+    intervalLabel: "5분 선택",
+    timeStepMinutes: VERIFIER_TIME_STEP_MINUTES,
+  });
+}
+
+function verifierSourceFromSeries(scope, points = [], options = {}) {
+  const valueKey = options.valueKey || "close";
+  const sourcePoints = (Array.isArray(points) ? points : [])
+    .filter((point) => point && number(point[valueKey]) != null);
+  if (!sourcePoints.length) return null;
+  return {
+    scope,
+    points: sourcePoints,
+    valueKey,
+    timeKey: options.timeKey || "date",
+    label: options.label || VERIFIER_SCOPE_LABELS[scope] || "검증",
+    intervalLabel: options.intervalLabel || "봉",
+    timeStepMinutes: Number(options.timeStepMinutes) || 0,
+  };
+}
+
+function renderVerifierPanel(scope, selector, source = verifierSourceForScope(scope), options = {}) {
+  const root = document.querySelector(selector);
+  if (!root) return;
+  if (!source?.points?.length) {
+    root.innerHTML = `
+      <details class="trade-verifier is-disabled">
+        <summary>
+          <span>${escapeHtml(VERIFIER_SCOPE_LABELS[scope] || "검증기구")}</span>
+          <small>${escapeHtml(options.emptyText || "검증 데이터 없음")}</small>
+        </summary>
+      </details>
+    `;
+    return;
+  }
+  const saved = normalizeVerifierScenario(state.verifiers?.[scope]);
+  const draft = saved || verifierDefaultScenario(scope, source);
+  const selectedIndex = verifierSelectedIndex(source, draft.timeKey);
+  const selectedPoint = source.points[selectedIndex] || source.points[source.points.length - 1] || {};
+  const selectedTimeKey = verifierControlTimeKey(source, draft.timeKey, selectedPoint, selectedIndex);
+  const price = draft.price ?? number(selectedPoint[source.valueKey]);
+  const quantity = draft.quantity || verifierDefaultQuantity(scope);
+  const report = saved ? buildVerifierReport(scope, source, saved) : null;
+  root.innerHTML = `
+    <details class="trade-verifier" open data-verifier-scope="${escapeAttr(scope)}">
+      <summary>
+        <span>${escapeHtml(VERIFIER_SCOPE_LABELS[scope] || "검증기구")}</span>
+        <small>${escapeHtml(source.intervalLabel)} · ${escapeHtml(source.label)}</small>
+      </summary>
+      <div class="verifier-form">
+        <label>
+          <span>시간</span>
+          <select data-verifier-time="${escapeAttr(scope)}">
+            ${verifierTimeOptions(source, selectedTimeKey)}
+          </select>
+        </label>
+        <label>
+          <span>가격</span>
+          <input type="number" inputmode="decimal" step="any" value="${escapeAttr(price ?? "")}" data-verifier-price="${escapeAttr(scope)}" />
+        </label>
+        <label>
+          <span>수량</span>
+          <input type="number" inputmode="decimal" step="any" min="0" value="${escapeAttr(quantity)}" data-verifier-quantity="${escapeAttr(scope)}" />
+        </label>
+        <label>
+          <span>방향</span>
+          <select data-verifier-side="${escapeAttr(scope)}">
+            <option value="long" ${draft.side !== "short" ? "selected" : ""}>매수</option>
+            <option value="short" ${draft.side === "short" ? "selected" : ""}>매도</option>
+          </select>
+        </label>
+        <div class="verifier-actions">
+          <button type="button" data-verifier-run="${escapeAttr(scope)}">라인/신호</button>
+          <button type="button" data-verifier-reset="${escapeAttr(scope)}" ${saved ? "" : "disabled"}>초기화</button>
+        </div>
+      </div>
+      ${report ? verifierReportHtml(report) : verifierPlaceholderHtml(source)}
+    </details>
+  `;
+}
+
+function verifierDefaultScenario(scope, source) {
+  const index = Math.max(0, (source?.points?.length || 1) - 1);
+  const point = source?.points?.[index] || {};
+  return {
+    timeKey: verifierDefaultTimeKey(source, point, index),
+    price: number(point[source?.valueKey || "close"]),
+    quantity: verifierDefaultQuantity(scope),
+    side: "long",
+  };
+}
+
+function verifierDefaultQuantity(scope) {
+  if (scope === "crypto") return 1;
+  return 1;
+}
+
+function verifierDefaultTimeKey(source, point = {}, index = 0) {
+  if (!verifierUsesFiveMinuteSlots(source)) return verifierPointKey(point, index, source);
+  const timestamp = verifierPointTimestamp(source, point);
+  return timestamp == null ? verifierPointKey(point, index, source) : verifierSlotKey(timestamp);
+}
+
+function verifierControlTimeKey(source, timeKey = "", point = {}, index = 0) {
+  if (!verifierUsesFiveMinuteSlots(source)) return verifierPointKey(point, index, source);
+  if (String(timeKey || "").startsWith("slot:")) return timeKey;
+  return verifierDefaultTimeKey(source, point, index);
+}
+
+function verifierUsesFiveMinuteSlots(source = {}) {
+  return Number(source.timeStepMinutes) === VERIFIER_TIME_STEP_MINUTES
+    && (source.points || []).some((point) => verifierPointTimestamp(source, point) != null);
+}
+
+function verifierTimeOptions(source, selectedKey = "") {
+  if (verifierUsesFiveMinuteSlots(source)) return verifierFiveMinuteTimeOptions(source, selectedKey);
+  const points = source?.points || [];
+  const maxOptions = VERIFIER_MAX_TIME_OPTIONS;
+  const start = Math.max(0, points.length - maxOptions);
+  const selectedIndex = verifierSelectedIndex(source, selectedKey);
+  const indexes = new Set([...points.slice(start).map((_, offset) => start + offset), selectedIndex]);
+  return [...indexes]
+    .sort((a, b) => a - b)
+    .map((index) => {
+      const point = points[index] || {};
+      const key = verifierPointKey(point, index, source);
+      const latest = index === points.length - 1 ? " · 최신" : "";
+      return `<option value="${escapeAttr(key)}" ${key === selectedKey ? "selected" : ""}>${escapeHtml(verifierPointLabel(point, index, source) + latest)}</option>`;
+    })
+    .join("");
+}
+
+function verifierFiveMinuteTimeOptions(source, selectedKey = "") {
+  const points = source?.points || [];
+  const timedPoints = points
+    .map((point, index) => ({ point, index, timestamp: verifierPointTimestamp(source, point) }))
+    .filter((item) => item.timestamp != null)
+    .sort((a, b) => a.timestamp - b.timestamp);
+  if (!timedPoints.length) return verifierTimeOptions({ ...source, timeStepMinutes: 0 }, selectedKey);
+  const latest = timedPoints[timedPoints.length - 1].timestamp;
+  const earliest = timedPoints[0].timestamp;
+  const selectedTimestamp = verifierTimeKeyTimestamp(source, selectedKey);
+  const stepMs = VERIFIER_TIME_STEP_MINUTES * 60000;
+  const minStart = latest - (VERIFIER_MAX_TIME_OPTIONS - 1) * stepMs;
+  let start = Math.max(earliest, minStart);
+  let end = latest;
+  if (selectedTimestamp != null) {
+    start = Math.min(start, selectedTimestamp);
+    end = Math.max(end, selectedTimestamp);
+  }
+  start = verifierRoundTimestampToStep(start, "floor");
+  end = verifierRoundTimestampToStep(end, "floor");
+  const slots = [];
+  for (let timestamp = start; timestamp <= end && slots.length < VERIFIER_MAX_TIME_OPTIONS + 1; timestamp += stepMs) {
+    slots.push(timestamp);
+  }
+  if (selectedTimestamp != null && !slots.some((timestamp) => verifierSlotKey(timestamp) === verifierSlotKey(selectedTimestamp))) {
+    slots.push(verifierRoundTimestampToStep(selectedTimestamp, "floor"));
+  }
+  return [...new Set(slots.map(verifierSlotKey))]
+    .map((key) => ({ key, timestamp: verifierTimeKeyTimestamp(source, key) }))
+    .filter((item) => item.timestamp != null)
+    .sort((a, b) => a.timestamp - b.timestamp)
+    .map((item) => {
+      const latestText = item.timestamp === verifierRoundTimestampToStep(latest, "floor") ? " · 최신" : "";
+      const selected = item.key === selectedKey || (selectedTimestamp != null && item.key === verifierSlotKey(selectedTimestamp));
+      return `<option value="${escapeAttr(item.key)}" ${selected ? "selected" : ""}>${escapeHtml(verifierSlotLabel(item.timestamp) + latestText)}</option>`;
+    })
+    .join("");
+}
+
+function verifierPointKey(point = {}, index = 0, source = {}) {
+  const raw = point.datetime || point.end_datetime || point.fullDate || point[source.timeKey] || point.time || point.date || "";
+  return `${source.scope || "scope"}:${String(raw)}:${index}`;
+}
+
+function verifierPointLabel(point = {}, index = 0, source = {}) {
+  const raw = point.display_time || point[source.timeKey] || point.time || point.date || `#${index + 1}`;
+  return compactAxisTimeLabel(raw, 520) || `#${index + 1}`;
+}
+
+function verifierSelectedIndex(source, timeKey = "") {
+  const points = source?.points || [];
+  if (!points.length) return 0;
+  const index = points.findIndex((point, pointIndex) => verifierPointKey(point, pointIndex, source) === timeKey);
+  if (index >= 0) return index;
+  const targetTimestamp = verifierTimeKeyTimestamp(source, timeKey);
+  if (targetTimestamp != null) return verifierIndexAtOrBefore(source, targetTimestamp);
+  return points.length - 1;
+}
+
+function verifierIndexAtOrBefore(source = {}, targetTimestamp = 0) {
+  const timed = (source.points || [])
+    .map((point, index) => ({ index, timestamp: verifierPointTimestamp(source, point) }))
+    .filter((item) => item.timestamp != null)
+    .sort((a, b) => a.timestamp - b.timestamp);
+  if (!timed.length) return 0;
+  let selected = timed[0];
+  for (const item of timed) {
+    if (item.timestamp > targetTimestamp) break;
+    selected = item;
+  }
+  return selected.index;
+}
+
+function verifierPointTimestamp(source = {}, point = {}) {
+  return verifierParseTimestamp(
+    point.datetime || point.end_datetime || point.fullDate || point[source.timeKey] || point.time || point.date,
+    point,
+  );
+}
+
+function verifierTimeKeyTimestamp(source = {}, timeKey = "") {
+  const text = String(timeKey || "");
+  if (text.startsWith("slot:")) return verifierParseTimestamp(text.slice(5), {});
+  const points = source?.points || [];
+  const index = points.findIndex((point, pointIndex) => verifierPointKey(point, pointIndex, source) === text);
+  if (index >= 0) return verifierPointTimestamp(source, points[index]);
+  return verifierParseTimestamp(text, {});
+}
+
+function verifierParseTimestamp(value, point = {}) {
+  const text = String(value || "").trim();
+  if (!text) return null;
+  const full = text.match(/^(\d{4})-(\d{2})-(\d{2})(?:[T\s])(\d{2}):(\d{2})/);
+  if (full) {
+    return Date.UTC(Number(full[1]), Number(full[2]) - 1, Number(full[3]), Number(full[4]) - 9, Number(full[5]));
+  }
+  const clock = text.match(/^(\d{2}):(\d{2})$/);
+  if (clock) {
+    const dateText = String(point.fullDate || point.date || state.selectedDate || kstDateString());
+    const date = dateText.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (!date) return null;
+    return Date.UTC(Number(date[1]), Number(date[2]) - 1, Number(date[3]), Number(clock[1]) - 9, Number(clock[2]));
+  }
+  return null;
+}
+
+function verifierRoundTimestampToStep(timestamp = 0, mode = "floor") {
+  const stepMs = VERIFIER_TIME_STEP_MINUTES * 60000;
+  const method = mode === "ceil" ? Math.ceil : Math.floor;
+  return method(timestamp / stepMs) * stepMs;
+}
+
+function verifierSlotKey(timestamp = 0) {
+  const rounded = verifierRoundTimestampToStep(timestamp, "floor");
+  const parts = verifierKstParts(rounded);
+  return `slot:${parts.date}T${parts.time}`;
+}
+
+function verifierSlotLabel(timestamp = 0) {
+  const parts = verifierKstParts(timestamp);
+  const selected = String(state.selectedDate || "");
+  return parts.date === selected ? parts.time : `${shortDate(parts.date)} ${parts.time}`;
+}
+
+function verifierScenarioTimeLabel(source = {}, timeKey = "", point = {}, index = 0) {
+  const timestamp = verifierTimeKeyTimestamp(source, timeKey);
+  if (timestamp != null && verifierUsesFiveMinuteSlots(source)) return verifierSlotLabel(timestamp);
+  return verifierPointLabel(point, index, source);
+}
+
+function verifierScenarioDateTimeLabel(source = {}, timeKey = "", point = {}, index = 0) {
+  const timestamp = verifierTimeKeyTimestamp(source, timeKey);
+  if (timestamp != null) {
+    const parts = verifierKstParts(timestamp);
+    return `${shortDate(parts.date)} ${parts.time}:00`;
+  }
+  const raw = point.datetime || point.end_datetime || point.fullDate || point[source.timeKey] || point.time || point.date || "";
+  const date = point.fullDate || point.date || state.selectedDate || "";
+  const time = minuteTimeText(raw) || minuteTimeText(point.time) || "";
+  if (date && time) return `${shortDate(date)} ${time}:00`;
+  return signalTimeDisplay(raw) || verifierPointLabel(point, index, source);
+}
+
+function verifierKstParts(timestamp = 0) {
+  const date = new Date(timestamp + 9 * 60 * 60000);
+  const year = date.getUTCFullYear();
+  const month = String(date.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(date.getUTCDate()).padStart(2, "0");
+  const hour = String(date.getUTCHours()).padStart(2, "0");
+  const minute = String(date.getUTCMinutes()).padStart(2, "0");
+  return { date: `${year}-${month}-${day}`, time: `${hour}:${minute}` };
+}
+
+function verifierPlaceholderHtml(source = {}) {
+  return `
+    <div class="verifier-result is-empty">
+      <article>
+        <span>상태</span>
+        <strong>입력 대기</strong>
+        <small>${escapeHtml(source.intervalLabel || "봉")} 기준</small>
+      </article>
+      <article>
+        <span>자료</span>
+        <strong>${formatNum(source.points?.length || 0, 0)}봉</strong>
+        <small>${escapeHtml(source.label || "-")}</small>
+      </article>
+    </div>
+  `;
+}
+
+function verifierReportHtml(report = {}) {
+  const digits = verifierDigits(report.scope, report.entryPrice);
+  const signalClassName = signalClass(report.signal || "watch");
+  const cards = [
+    { label: "신호", value: report.label, text: report.detail },
+    { label: "손익", value: `${formatSigned(report.pnlPct, 2)}%`, text: `평가 ${formatSigned(report.pnl, digits)}` },
+    { label: "R값", value: formatSigned(report.rMultiple, 2), text: `위험 ${formatNum(report.riskAmount, digits)}` },
+    { label: "경과", value: `${report.elapsedBars}봉`, text: report.elapsedTime || "-" },
+  ];
+  return `
+    <div class="verifier-result ${escapeAttr(signalClassName)}">
+      ${cards.map((item) => `
+        <article>
+          <span>${escapeHtml(item.label)}</span>
+          <strong>${escapeHtml(item.value || "-")}</strong>
+          <small>${escapeHtml(item.text || "")}</small>
+        </article>
+      `).join("")}
+    </div>
+    <div class="verifier-signals">
+      ${report.signals.map((item) => `<span class="${escapeAttr(signalClass(item.signal || "watch"))}">${escapeHtml(item.text)}</span>`).join("")}
+    </div>
+  `;
+}
+
+function applyVerifierFromPanel(scope) {
+  const root = document.querySelector(`[data-verifier-scope="${escapeAttr(scope)}"]`);
+  if (!root) return;
+  const source = verifierSourceForScope(scope);
+  if (!source?.points?.length) return;
+  const timeKey = root.querySelector("[data-verifier-time]")?.value || "";
+  const price = number(root.querySelector("[data-verifier-price]")?.value);
+  const quantity = number(root.querySelector("[data-verifier-quantity]")?.value);
+  const side = root.querySelector("[data-verifier-side]")?.value === "short" ? "short" : "long";
+  if (price == null || price <= 0 || quantity == null || quantity <= 0) return;
+  const scenario = {
+    timeKey,
+    price,
+    quantity,
+    side,
+    label: source.label || VERIFIER_SCOPE_LABELS[scope] || "",
+    intervalLabel: source.intervalLabel || "",
+    selectedDate: state.selectedDate,
+    cryptoKey: scope === "crypto" ? normalizeCryptoKey(state.cryptoTab) : "",
+    cryptoFrame: scope === "crypto" ? state.cryptoFrame : "",
+    jumpTab: verifierJumpTab(scope),
+    focusKey: verifierCollectionKey(scope, { cryptoKey: scope === "crypto" ? normalizeCryptoKey(state.cryptoTab) : "" }),
+    updatedAt: new Date().toISOString(),
+  };
+  state.verifiers[scope] = scenario;
+  saveVerifierScenarios();
+  if (side === "long") addCollectionOrderKey(verifierCollectionKey(scope, scenario));
+  else removeCollectionOrderKey(verifierCollectionKey(scope, scenario));
+  rerenderVerifierScope(scope);
+  renderCollectionPanel();
+  renderTabCounts();
+  scheduleChartRedraw();
+}
+
+function resetVerifierScenario(scope) {
+  if (!state.verifiers?.[scope]) return;
+  const key = verifierCollectionKey(scope, normalizeVerifierScenario(state.verifiers[scope]) || {});
+  delete state.verifiers[scope];
+  saveVerifierScenarios();
+  removeCollectionOrderKey(key);
+  rerenderVerifierScope(scope);
+  renderCollectionPanel();
+  renderTabCounts();
+  scheduleChartRedraw();
+}
+
+function rerenderVerifierScope(scope) {
+  const selector = {
+    options: "#optionsVerifier",
+    optionArchive: "#optionArchiveVerifier",
+    replay: "#replayVerifier",
+    etf: "#etfVerifier",
+    stocks: "#stocksVerifier",
+    usStocks: "#usStocksVerifier",
+    crypto: "#cryptoVerifier",
+  }[scope];
+  if (!selector) return;
+  if (scope === "replay") {
+    const active = activeReplaySession();
+    const visible = active ? clipReplaySession(active, replayCursorIndex(active)) : null;
+    renderVerifierPanel(scope, selector, visible ? verifierSourceForScope(scope, { session: visible }) : null);
+    return;
+  }
+  if (scope === "optionArchive") {
+    const session = replaySessionForDate(state.selectedDate);
+    renderVerifierPanel(scope, selector, session ? verifierSourceForScope(scope, { session }) : null);
+    return;
+  }
+  if (scope === "crypto" && state.cryptoTab === "all") {
+    renderVerifierPanel(scope, selector, null, { emptyText: "코인 세부 탭에서 검증" });
+    return;
+  }
+  renderVerifierPanel(scope, selector, verifierSourceForScope(scope));
+}
+
+function syncVerifierPriceFromTime(scope) {
+  const root = document.querySelector(`[data-verifier-scope="${escapeAttr(scope)}"]`);
+  const source = verifierSourceForScope(scope);
+  if (!root || !source?.points?.length) return;
+  const timeKey = root.querySelector("[data-verifier-time]")?.value || "";
+  const index = verifierSelectedIndex(source, timeKey);
+  const point = source.points[index] || {};
+  const price = number(point[source.valueKey]);
+  const input = root.querySelector("[data-verifier-price]");
+  if (input && price != null) input.value = String(price);
+}
+
+function verifierOverlayForScope(scope, source = verifierSourceForScope(scope)) {
+  const scenario = normalizeVerifierScenario(state.verifiers?.[scope]);
+  const report = scenario && source?.points?.length ? buildVerifierReport(scope, source, scenario) : null;
+  if (!report) return { levels: [], tradeMarkers: [] };
+  return {
+    levels: report.levels,
+    tradeMarkers: report.markers,
+  };
+}
+
+function buildVerifierReport(scope, source, scenario) {
+  const clean = normalizeVerifierScenario(scenario);
+  const points = source?.points || [];
+  if (!clean || !points.length || clean.price == null || clean.quantity <= 0) return null;
+  const entryIndex = verifierSelectedIndex(source, clean.timeKey);
+  const latestIndex = points.length - 1;
+  const entryPrice = clean.price;
+  const sideFactor = clean.side === "short" ? -1 : 1;
+  const current = number(points[latestIndex]?.[source.valueKey]);
+  if (current == null || entryPrice <= 0) return null;
+  const riskUnit = verifierRiskUnit(scope, points, source.valueKey, entryIndex, entryPrice);
+  const stop = entryPrice - sideFactor * riskUnit;
+  const tp1 = entryPrice + sideFactor * riskUnit;
+  const tp2 = entryPrice + sideFactor * riskUnit * 2;
+  const after = points.slice(entryIndex);
+  const hitIndex = (predicate) => {
+    const offset = after.findIndex((point) => predicate(point));
+    return offset >= 0 ? entryIndex + offset : -1;
+  };
+  const highOf = (point) => number(point.high) ?? number(point[source.valueKey]);
+  const lowOf = (point) => number(point.low) ?? number(point[source.valueKey]);
+  const stopHitIndex = hitIndex((point) => clean.side === "short" ? highOf(point) >= stop : lowOf(point) <= stop);
+  const tp1HitIndex = hitIndex((point) => clean.side === "short" ? lowOf(point) <= tp1 : highOf(point) >= tp1);
+  const tp2HitIndex = hitIndex((point) => clean.side === "short" ? lowOf(point) <= tp2 : highOf(point) >= tp2);
+  const pnlPerUnit = (current - entryPrice) * sideFactor;
+  const pnl = pnlPerUnit * clean.quantity;
+  const pnlPct = (pnlPerUnit / entryPrice) * 100;
+  const riskAmount = riskUnit * clean.quantity;
+  const rMultiple = riskUnit > 0 ? pnlPerUnit / riskUnit : 0;
+  const distanceToStopPct = Math.abs((current - stop) / entryPrice) * 100;
+  const trend = verifierTrendState(points[latestIndex], clean.side);
+  const signal = stopHitIndex >= 0
+    ? "warning"
+    : tp2HitIndex >= 0
+      ? "candidate"
+      : tp1HitIndex >= 0
+        ? "buy"
+        : distanceToStopPct <= Math.max(0.35, (riskUnit / entryPrice) * 35)
+          ? "warning"
+          : pnlPct > 0 && trend.aligned
+            ? "candidate"
+            : "watch";
+  const label = {
+    warning: stopHitIndex >= 0 ? "손절 검증" : "위험 근접",
+    candidate: "추세 우호",
+    buy: "목표 도달",
+    watch: "관찰",
+  }[signal] || "관찰";
+  const signals = verifierSignals({
+    scope,
+    signal,
+    stopHitIndex,
+    tp1HitIndex,
+    tp2HitIndex,
+    distanceToStopPct,
+    pnlPct,
+    rMultiple,
+    trend,
+    clean,
+    points,
+    entryIndex,
+    latestIndex,
+  });
+  const digits = verifierDigits(scope, entryPrice);
+  const levels = [
+    { label: "검증진입", value: entryPrice, color: "#e8eef5", dash: [2, 3] },
+    { label: "검증손절", value: stop, color: themeColor("--red", "#df7a72"), dash: [8, 4] },
+    { label: "검증1차", value: tp1, color: themeColor("--blue", "#82a7e6"), dash: [5, 4] },
+    { label: "검증2차", value: tp2, color: themeColor("--teal", "#4eb7b1"), dash: [5, 4] },
+  ];
+  const markers = [
+    { point_index: entryIndex, index_value: entryPrice, kind: "entry", label: "검증진입" },
+    { point_index: latestIndex, index_value: current, kind: signal === "warning" ? "risk" : "watch", label: "현재" },
+    stopHitIndex >= 0 ? { point_index: stopHitIndex, index_value: stop, kind: "stop", label: "손절" } : null,
+    tp1HitIndex >= 0 ? { point_index: tp1HitIndex, index_value: tp1, kind: "tp1", label: "1차" } : null,
+    tp2HitIndex >= 0 ? { point_index: tp2HitIndex, index_value: tp2, kind: "tp2", label: "2차" } : null,
+  ].filter(Boolean);
+  return {
+    scope,
+    signal,
+    label,
+    detail: `${clean.side === "short" ? "매도" : "매수"} ${formatNum(entryPrice, digits)} · 현재 ${formatNum(current, digits)}`,
+    entryPrice,
+    current,
+    quantity: clean.quantity,
+    pnl,
+    pnlPct,
+    riskAmount,
+    rMultiple,
+    elapsedBars: Math.max(0, latestIndex - entryIndex + 1),
+    elapsedTime: verifierScenarioTimeLabel(source, clean.timeKey, points[entryIndex], entryIndex),
+    entryDateTime: verifierScenarioDateTimeLabel(source, clean.timeKey, points[entryIndex], entryIndex),
+    levels,
+    markers,
+    signals,
+  };
+}
+
+function verifierRiskUnit(scope, points = [], valueKey = "close", entryIndex = 0, entryPrice = 0) {
+  const sample = points.slice(Math.max(0, entryIndex - 14), entryIndex + 1);
+  const ranges = sample.map((point, index) => {
+    const high = number(point.high);
+    const low = number(point.low);
+    const close = number(point[valueKey]);
+    const previous = index > 0 ? number(sample[index - 1]?.[valueKey]) : null;
+    if (high != null && low != null) {
+      return previous != null ? Math.max(high - low, Math.abs(high - previous), Math.abs(low - previous)) : high - low;
+    }
+    if (close != null && previous != null) return Math.abs(close - previous);
+    return null;
+  }).filter((value) => value != null && value > 0);
+  const atr = ranges.length ? ranges.reduce((sum, value) => sum + value, 0) / ranges.length : 0;
+  const fallbackPct = {
+    options: 0.012,
+    optionArchive: 0.012,
+    replay: 0.012,
+    etf: 0.025,
+    stocks: 0.035,
+    usStocks: 0.03,
+    crypto: 0.05,
+  }[scope] || 0.03;
+  return Math.max(atr * 1.2, entryPrice * fallbackPct, Math.abs(entryPrice) * 0.002);
+}
+
+function verifierTrendState(point = {}, side = "long") {
+  const close = number(point.close ?? point.index);
+  const averages = [point.ma5, point.ma20, point.ma30, point.ma50, point.ma60, point.ma200, point.gma30, point.gma50]
+    .map((value) => number(value))
+    .filter((value) => value != null);
+  if (close == null || !averages.length) return { aligned: false, text: "추세선 대기" };
+  const above = averages.filter((value) => close >= value).length;
+  const aligned = side === "short" ? above <= Math.floor(averages.length / 2) : above >= Math.ceil(averages.length / 2);
+  return {
+    aligned,
+    text: aligned ? "추세 동행" : "추세 역행",
+  };
+}
+
+function verifierSignals(context = {}) {
+  const items = [];
+  if (context.stopHitIndex >= 0) items.push({ signal: "warning", text: "손절선 터치" });
+  else if (context.distanceToStopPct <= 1) items.push({ signal: "warning", text: "손절 근접" });
+  if (context.tp2HitIndex >= 0) items.push({ signal: "candidate", text: "2차 목표 도달" });
+  else if (context.tp1HitIndex >= 0) items.push({ signal: "buy", text: "1차 목표 도달" });
+  if (context.rMultiple >= 1) items.push({ signal: "candidate", text: `+${formatNum(context.rMultiple, 1)}R` });
+  if (context.rMultiple <= -0.7) items.push({ signal: "warning", text: `${formatNum(context.rMultiple, 1)}R` });
+  items.push({ signal: context.trend?.aligned ? "candidate" : "watch", text: context.trend?.text || "추세 확인" });
+  items.push({ signal: "watch", text: `진입 후 ${Math.max(1, context.latestIndex - context.entryIndex + 1)}봉` });
+  return items.slice(0, 5);
+}
+
+function verifierDigits(scope, value) {
+  if (scope === "stocks" || scope === "etf") return Math.abs(number(value) || 0) >= 1000 ? 0 : 2;
+  if (scope === "usStocks") return 2;
+  if (scope === "crypto") return priceDigits(value);
+  return 2;
+}
+
 function maxLast(values, size) {
   const sample = values.slice(-size).filter((value) => number(value) != null);
   return sample.length ? Math.max(...sample) : null;
@@ -6198,7 +7725,35 @@ function drawEtfChart() {
     label: "KODEX200",
     emptyTitle: "ETF 차트 자료 없음",
     emptyDetail: "KODEX200 일봉 데이터가 아직 없습니다.",
+    verifierScope: "etf",
   });
+}
+
+function stocksChartInstrument() {
+  const market = state.assetArchive?.market || {};
+  const focus = focusedStockItem("domestic");
+  const instrument = market.index_proxy || market.kospi200 || state.assetArchive?.etf;
+  return {
+    focus,
+    instrument,
+    label: instrument?.proxy_for ? `${instrument.label || "KODEX200"} 대체지표` : instrument?.label || "지수 필터",
+    extraBadges: focus ? [{ label: "선택", value: stockFocusLabel(focus) }] : [],
+  };
+}
+
+function usStocksChartInstrument() {
+  const usStocks = state.assetArchive?.us_stocks || {};
+  const assets = usStocks.assets || [];
+  const focus = focusedStockItem("us");
+  const focusAsset = Array.isArray(focus?.history) && focus.history.length ? focus : null;
+  const watchAsset = (state.watchlists.us || []).map((item) => findUsAsset(item.symbol)).find((asset) => asset?.history?.length);
+  const benchmark = assets.find((asset) => asset.symbol === "SPY") || assets.find((asset) => asset.symbol === "QQQ");
+  const instrument = focusAsset || watchAsset || benchmark || assets.find((asset) => asset?.history?.length);
+  return {
+    focus,
+    instrument,
+    label: instrument?.label || instrument?.symbol || "미장 추세",
+  };
 }
 
 function focusedStockItem(scope) {
@@ -6216,37 +7771,32 @@ function stockFocusLabel(item, fallback = "") {
 }
 
 function drawStocksChart() {
-  const market = state.assetArchive?.market || {};
-  const focus = focusedStockItem("domestic");
-  const instrument = market.index_proxy || market.kospi200 || state.assetArchive?.etf;
+  const chart = stocksChartInstrument();
   drawAssetTrendChart({
     canvasSelector: "#stocksChart",
     legendSelector: "#stocksLegend",
-    instrument,
-    label: instrument?.proxy_for ? `${instrument.label || "KODEX200"} 대체지표` : instrument?.label || "지수 필터",
+    instrument: chart.instrument,
+    label: chart.label,
     emptyTitle: "국장 종목 차트 자료 없음",
     emptyDetail: "지수 필터 일봉 데이터가 아직 없습니다.",
-    extraBadges: focus ? [{ label: "선택", value: stockFocusLabel(focus) }] : [],
+    extraBadges: chart.extraBadges,
+    verifierScope: "stocks",
   });
 }
 
 function drawUsStocksChart() {
   const usStocks = state.assetArchive?.us_stocks || {};
-  const assets = usStocks.assets || [];
-  const focus = focusedStockItem("us");
-  const focusAsset = Array.isArray(focus?.history) && focus.history.length ? focus : null;
-  const watchAsset = (state.watchlists.us || []).map((item) => findUsAsset(item.symbol)).find((asset) => asset?.history?.length);
-  const benchmark = assets.find((asset) => asset.symbol === "SPY") || assets.find((asset) => asset.symbol === "QQQ");
-  const instrument = focusAsset || watchAsset || benchmark || assets.find((asset) => asset?.history?.length);
+  const chart = usStocksChartInstrument();
   drawAssetTrendChart({
     canvasSelector: "#usStocksChart",
     legendSelector: "#usStocksLegend",
-    instrument,
-    label: instrument?.label || instrument?.symbol || "미장 추세",
+    instrument: chart.instrument,
+    label: chart.label,
     emptyTitle: "미장 차트 자료 없음",
     emptyDetail: usStocks.archive_note || "미장 핵심 추적군 일봉 데이터를 아직 가져오지 못했습니다.",
     averageSet: "us",
-    extraBadges: focus ? [{ label: "선택", value: stockFocusLabel(focus) }] : [],
+    extraBadges: chart.focus ? [{ label: "선택", value: stockFocusLabel(chart.focus) }] : [],
+    verifierScope: "usStocks",
   });
 }
 
@@ -6274,7 +7824,7 @@ function drawCryptoChart() {
   const primary = series[0] || { key: "btc" };
   drawLineChart(canvas, {
     height: 230,
-    padding: { top: 38, right: 50, bottom: 46, left: 28 },
+    padding: { top: 38, right: 56, bottom: 56, left: 28 },
     points,
     valueKey: primary.key,
     timeKey: "date",
@@ -6359,6 +7909,13 @@ function drawCryptoDetailChart(canvas, asset, assets = []) {
     ...pyramidLevels,
     ...stopLevels,
   ].filter((level) => number(level.value) != null);
+  const verifierSource = verifierSourceFromSeries("crypto", points, {
+    valueKey: "close",
+    timeKey: "date",
+    label: name,
+    intervalLabel: cryptoFrameLabel(state.cryptoFrame),
+  });
+  const verifierOverlay = verifierOverlayForScope("crypto", verifierSource);
   const markerKind = signal.className === "candidate" ? "entry" : signal.className === "warning" ? "risk" : "watch";
   const averageKey = state.cryptoFrame === "30m" ? "ma30" : "ma20";
   const averageLabel = state.cryptoFrame === "30m" ? "30이평" : state.cryptoFrame === "1w" ? "20주선" : "20선";
@@ -6385,12 +7942,12 @@ function drawCryptoDetailChart(canvas, asset, assets = []) {
   ]);
   drawLineChart(canvas, {
     height: 230,
-    padding: { top: 38, right: 50, bottom: 46, left: 28 },
+    padding: { top: 38, right: 56, bottom: 56, left: 28 },
     points,
     valueKey: "close",
     timeKey: "date",
     compactLatestLabel: true,
-    levels,
+    levels: [...levels, ...verifierOverlay.levels],
     chartBadges: [
       { label: "선택", value: name },
       { label: cryptoFrameLabel(state.cryptoFrame), value: signal.label || "관찰" },
@@ -6418,11 +7975,12 @@ function drawCryptoDetailChart(canvas, asset, assets = []) {
         kind: markerKind,
         label: signal.label,
       },
+      ...verifierOverlay.tradeMarkers,
     ],
   });
 }
 
-function drawAssetTrendChart({ canvasSelector, legendSelector, instrument, label, emptyTitle, emptyDetail, averageSet = "default", extraBadges = [] }) {
+function drawAssetTrendChart({ canvasSelector, legendSelector, instrument, label, emptyTitle, emptyDetail, averageSet = "default", extraBadges = [], verifierScope = "" }) {
   const canvas = document.querySelector(canvasSelector);
   const points = assetTrendPoints(instrument, state.selectedDate, 180);
   if (!points.length) {
@@ -6455,6 +8013,13 @@ function drawAssetTrendChart({ canvasSelector, legendSelector, instrument, label
     { label: "자료", value: `${points.length}봉` },
     ...extraBadges,
   ];
+  const verifierSource = verifierScope ? verifierSourceFromSeries(verifierScope, points, {
+    valueKey: "close",
+    timeKey: "date",
+    label: label || instrument?.label || "차트",
+    intervalLabel: "일봉",
+  }) : null;
+  const verifierOverlay = verifierScope ? verifierOverlayForScope(verifierScope, verifierSource) : { levels: [], tradeMarkers: [] };
   drawLineChart(canvas, {
     height: 260,
     padding: { top: 42, right: 50, bottom: 38, left: 28 },
@@ -6463,6 +8028,8 @@ function drawAssetTrendChart({ canvasSelector, legendSelector, instrument, label
     timeKey: "date",
     extraSeries: averages,
     chartBadges,
+    levels: verifierOverlay.levels,
+    tradeMarkers: verifierOverlay.tradeMarkers,
   });
 }
 
@@ -6476,7 +8043,11 @@ function assetTrendPoints(instrument, selectedDate, limit = 180) {
     closes.push(number(row.close));
     return {
       date: shortDate(row.date),
+      fullDate: row.date,
       close: number(row.close),
+      high: number(row.high) ?? number(row.close),
+      low: number(row.low) ?? number(row.close),
+      volume: number(row.volume),
       ma20: averageLast(closes, 20),
       ma50: averageLast(closes, 50),
       ma60: averageLast(closes, 60),
@@ -6501,7 +8072,13 @@ function cryptoDetailPoints(rows, frame = state.cryptoFrame, limit = 160) {
     const cloud = ichimokuCloudAt(source, sourceIndex);
     return {
       date: frame === "1d" || frame === "1w" ? shortDate(row.date) : `${shortDate(row.date)} ${row.time || ""}`.trim(),
+      fullDate: row.date,
+      time: row.time || "",
+      datetime: row.datetime || row.end_datetime || "",
       close,
+      high: number(row.high) ?? close,
+      low: number(row.low) ?? close,
+      volume: number(row.volume),
       ma5: averageLast(closes, 5),
       ma20: averageLast(closes, 20),
       ma30: averageLast(closes, 30),
@@ -6620,15 +8197,22 @@ function drawOptionArchiveChart(session, tradePlan) {
   }
   hideChartEmpty(canvas);
   document.querySelector("#optionArchiveLegend").innerHTML = replayLegendEntries().map(legendItem).join("");
+  const verifierSource = verifierSourceFromSeries("optionArchive", session.series, {
+    valueKey: "index",
+    timeKey: "time",
+    label: "KOSPI200",
+    intervalLabel: "5분봉",
+  });
+  const verifierOverlay = verifierOverlayForScope("optionArchive", verifierSource);
   drawLineChart(canvas, {
     height: 320,
     compactTradeLabels: true,
     points: session.series,
     valueKey: "index",
     timeKey: "time",
-    levels: chartLevelEntries(session.levels || {}),
+    levels: [...chartLevelEntries(session.levels || {}), ...verifierOverlay.levels],
     extraSeries: CHART_EXTRA_SERIES,
-    tradeMarkers: tradePlan?.events || [],
+    tradeMarkers: [...(tradePlan?.events || []), ...verifierOverlay.tradeMarkers],
   });
 }
 
@@ -7004,6 +8588,7 @@ function watchSignalItem(scope, item) {
     const indexFilter = state.assetArchive?.stocks?.index_filter || {};
     const signal = signalClass(match?.final_action || match?.trade_signal || indexFilter.signal || "watch");
     const signalScore = stockQualityScore(item, match, signal);
+    const signalTimeText = signalTimeDisplay(match?.datetime, match?.time, state.assetArchive?.stocks?.generated_at, state.assetArchive?.generated_at, match?.date);
     return {
       scope,
       kind: "국장",
@@ -7014,6 +8599,9 @@ function watchSignalItem(scope, item) {
       statusLabel: signalStatusText(signal, signalScore),
       actionText: signalActionText(signal, signalScore, scope),
       badge: match?.final_action || match?.trade_signal || indexFilter.label || "관찰",
+      signalTimeText,
+      sourceAt: match?.datetime || state.assetArchive?.stocks?.generated_at || state.assetArchive?.generated_at || "",
+      generatedAt: state.assetArchive?.stocks?.generated_at || state.assetArchive?.generated_at || "",
       value: `${signalScore}점`,
       detail: match?.reason || indexFilter.message || "국장 지수 필터 기준으로 관찰합니다.",
       jumpTab: "stocks",
@@ -7031,6 +8619,7 @@ function watchSignalItem(scope, item) {
   const selected = match?.selected || match?.latest || {};
   const signal = signalClass(summary.signal || "watch");
   const signalScore = stockQualityScore(item, match, signal);
+  const signalTimeText = signalTimeDisplay(selected.datetime, selected.time, state.assetArchive?.us_stocks?.generated_at, state.assetArchive?.generated_at, selected.date);
   return {
     scope,
     kind: "미장",
@@ -7041,6 +8630,9 @@ function watchSignalItem(scope, item) {
     statusLabel: signalStatusText(signal, signalScore),
     actionText: signalActionText(signal, signalScore, scope),
     badge: summary.label || "관찰",
+    signalTimeText,
+    sourceAt: selected.datetime || state.assetArchive?.us_stocks?.generated_at || state.assetArchive?.generated_at || "",
+    generatedAt: state.assetArchive?.us_stocks?.generated_at || state.assetArchive?.generated_at || "",
     value: `${signalScore}점`,
     detail: match ? usSignalDetail(match) : "SPY/QQQ 상대강도와 20/50/200일선 신호를 기다립니다.",
     jumpTab: "usStocks",
@@ -7193,9 +8785,16 @@ function jumpToCardTarget(card) {
     state.cryptoTab = card.dataset.jumpCrypto;
     state.cryptoFrame = "240m";
   }
+  applyStockFocusFromCollectionKey(focusKey);
   setActiveTab(target);
   if (focusKey) window.setTimeout(() => focusTargetCard(focusKey), 120);
   if (state.activeModal === "signals") closeModal();
+}
+
+function applyStockFocusFromCollectionKey(focusKey) {
+  const [scope, symbol] = String(focusKey || "").split(":");
+  if (!["domestic", "us"].includes(scope) || !symbol) return;
+  state.focusedAssets[scope] = normalizeSearchText(symbol);
 }
 
 function focusTargetCard(focusKey) {
@@ -8241,6 +9840,11 @@ function renderSettings() {
   setChecked("#saveSignalLog", state.settings.saveSignalLog);
   const assetAlertMode = document.querySelector("#assetAlertMode");
   if (assetAlertMode) assetAlertMode.value = state.settings.assetAlertMode || "all";
+  const alertModes = normalizedAlertModes();
+  document.querySelectorAll("[data-alert-scope]").forEach((select) => {
+    const scope = select.dataset.alertScope;
+    select.value = alertModes[scope] || "strong";
+  });
 }
 
 async function clearSignalLog() {
@@ -8437,6 +10041,7 @@ function maybeFireAlert(snapshot) {
   const signal = snapshot.signal || {};
   if (!["candidate", "sell", "warning", "watch"].includes(signal.type)) return;
   if (signal.alert_level === "silent") return;
+  if (!alertModeAllowsSignal(alertModeForScope("options"), signal.type)) return;
   const latest = snapshot.main?.latest || {};
   const key = `${signal.rule}:${latest.datetime || signal.time}:${latest.close || ""}`;
   if (state.lastAlertKey === key) return;
@@ -8474,6 +10079,8 @@ function maybeFireCryptoAlerts() {
   const alertKind = alertPlan.trackingAlert
     ? alertPlan.trackingRule
     : alertPlan.trackingNotice ? alertPlan.trackingRule : alertPlan.pyramidMarketTrigger ? "pyramid_market" : alertPlan.weeklyStarter ? "weekly_probe" : "exception_entry";
+  const alertType = alertPlan.trackingAlert ? "sell" : alertPlan.trackingNotice ? "warning" : "candidate";
+  if (!alertModeAllowsSignal(alertModeForScope("crypto"), alertType)) return;
   const key = `crypto:${alertPlan.key}:${alertKind}:${alertPlan.trackingTime || alertPlan.close || ""}`;
   if (state.lastCryptoAlertKey === key) return;
   state.lastCryptoAlertKey = key;
@@ -8503,7 +10110,7 @@ function maybeFireCryptoAlerts() {
     ma30_touch_alert: "CRYPTO_MA30_NOTICE",
   }[alertPlan.trackingRule] || "CRYPTO_TENKAN_NOTICE";
   fireAlert({
-    type: alertPlan.trackingAlert ? "sell" : alertPlan.trackingNotice ? "warning" : "candidate",
+    type: alertType,
     scope: "crypto",
     title: alertPlan.trackingAlert
       ? `${alertPlan.name} ${exitTitle}`
@@ -8564,11 +10171,35 @@ function maybeFireSignalInboxAlerts() {
 }
 
 function signalInboxAlertAllowed(item = {}) {
-  const mode = state.settings.assetAlertMode || "all";
+  const mode = alertModeForScope(signalScopeKey(item));
   const signal = signalClass(item.signal || "watch");
+  return alertModeAllowsSignal(mode, signal);
+}
+
+function normalizedAlertModes() {
+  return normalizeSettings(state.settings).alertModes;
+}
+
+function alertModeForScope(scope = "domestic") {
+  const modes = normalizedAlertModes();
+  const key = scope === "stocks" ? "domestic" : scope === "usStocks" ? "us" : scope;
+  return modes[key] || state.settings.assetAlertMode || "all";
+}
+
+function alertModeLabel(mode = "all") {
+  return {
+    all: "전체",
+    strong: "진입·위험",
+    risk: "위험만",
+    off: "무음",
+  }[mode] || "전체";
+}
+
+function alertModeAllowsSignal(mode = "all", signal = "watch") {
+  const normalized = signalClass(signal);
   if (mode === "off") return false;
-  if (mode === "risk") return ["warning", "sell", "avoid"].includes(signal);
-  if (mode === "strong") return ["candidate", "buy", "warning", "sell", "avoid"].includes(signal);
+  if (mode === "risk") return ["warning", "sell", "avoid"].includes(normalized);
+  if (mode === "strong") return ["candidate", "buy", "warning", "sell", "avoid"].includes(normalized);
   return true;
 }
 
@@ -8770,6 +10401,13 @@ function drawLiveChart(livePlan = buildLiveTradePlan(state.monitor)) {
   const tradeMarkers = backendMarkers.length
     ? backendMarkers
     : mergeLiveTradeMarkers(replayEvents, livePlan?.markers || [], liveSession.series);
+  const verifierSource = verifierSourceFromSeries("options", liveSession.series, {
+    valueKey: "index",
+    timeKey: "time",
+    label: "KOSPI200",
+    intervalLabel: "5분봉",
+  });
+  const verifierOverlay = verifierOverlayForScope("options", verifierSource);
   drawLineChart(canvas, {
     height: 320,
     padding: { top: 56, right: 52, bottom: 42, left: 30 },
@@ -8777,10 +10415,10 @@ function drawLiveChart(livePlan = buildLiveTradePlan(state.monitor)) {
     points: liveSession.series,
     valueKey: "index",
     timeKey: "time",
-    levels: chartLevelEntries(liveSession.levels),
+    levels: [...chartLevelEntries(liveSession.levels), ...verifierOverlay.levels],
     extraSeries: CHART_EXTRA_SERIES,
     marker: state.monitor?.signal?.type !== "neutral",
-    tradeMarkers,
+    tradeMarkers: [...tradeMarkers, ...verifierOverlay.tradeMarkers],
     chartBadges: [
       { label: "신호", value: state.monitor?.signal?.label || "대기" },
       { label: "최신", value: state.monitor?.main?.latest?.time || "-" },
@@ -8795,6 +10433,13 @@ function drawReplayChart(session, tradePlan = null) {
     drawEmptyChart(canvas, "복기 자료 없음", 360, "날짜 또는 서버 연결 상태를 확인하세요.");
     return;
   }
+  const verifierSource = verifierSourceFromSeries("replay", session.series, {
+    valueKey: "index",
+    timeKey: "time",
+    label: "KOSPI200",
+    intervalLabel: "5분봉",
+  });
+  const verifierOverlay = verifierOverlayForScope("replay", verifierSource);
   drawLineChart(document.querySelector("#replayChart"), {
     height: 360,
     padding: { top: 70, right: 58, bottom: 46, left: 30 },
@@ -8802,9 +10447,9 @@ function drawReplayChart(session, tradePlan = null) {
     points: session.series,
     valueKey: "index",
     timeKey: "time",
-    levels: chartLevelEntries(session.levels || {}),
+    levels: [...chartLevelEntries(session.levels || {}), ...verifierOverlay.levels],
     extraSeries: CHART_EXTRA_SERIES,
-    tradeMarkers: (tradePlan || buildReplayTradePlan(session)).events,
+    tradeMarkers: [...((tradePlan || buildReplayTradePlan(session)).events || []), ...verifierOverlay.tradeMarkers],
   });
 }
 

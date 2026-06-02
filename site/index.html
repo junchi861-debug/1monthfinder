@@ -18,7 +18,7 @@
     <link rel="icon" href="icons/icon.svg" type="image/svg+xml" />
     <link rel="icon" href="icons/icon-192.png" sizes="192x192" type="image/png" />
     <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
-    <link rel="stylesheet" href="styles.css?v=20260602-crypto-polish-1" />
+    <link rel="stylesheet" href="styles.css?v=20260602-collection-buy-time-1" />
   </head>
   <body>
     <main class="app-shell" aria-live="polite">
@@ -52,23 +52,30 @@
             <span class="signal-pill neutral" id="collectionBadge">모음</span>
             <span id="collectionDateText">-</span>
           </div>
-          <h1>모음</h1>
-          <p id="collectionMessage">직접 감시 중인 카드만 표시합니다.</p>
           <div class="collection-toolbar" aria-label="모음 정렬 방식">
             <button type="button" data-collection-sort="auto">오늘 할 일</button>
             <button type="button" data-collection-sort="manual">수동 순서</button>
           </div>
+          <details class="collection-manage-panel" id="collectionManagePanel">
+            <summary>
+              <span>모음 대상</span>
+              <small id="collectionManageSummary">감시 대상을 불러오는 중입니다.</small>
+            </summary>
+            <div class="collection-target-list" id="collectionTargetList"></div>
+          </details>
           <div class="today-focus-grid" id="todayFocusGrid" aria-label="오늘의 핵심 3개"></div>
           <div class="watch-card-grid collection-watch-grid" id="collectionWatchGrid"></div>
         </section>
-        <section class="log-panel algorithm-audit-panel" id="algorithmAuditPanel" aria-labelledby="algorithmAuditTitle">
-          <div class="section-title">
+        <details class="log-panel algorithm-audit-panel" id="algorithmAuditPanel" aria-labelledby="algorithmAuditTitle">
+          <summary class="section-title">
             <h2 id="algorithmAuditTitle">알고리즘 검증</h2>
             <span id="algorithmAuditStatus">대기</span>
+          </summary>
+          <div class="algorithm-audit-body">
+            <div class="price-grid audit-grid" id="algorithmAuditGrid"></div>
+            <div class="algorithm-audit-list" id="algorithmAuditList"></div>
           </div>
-          <div class="price-grid audit-grid" id="algorithmAuditGrid"></div>
-          <div class="algorithm-audit-list" id="algorithmAuditList"></div>
-        </section>
+        </details>
       </section>
 
       <div class="tab-panel" data-tab-panel="options" hidden>
@@ -81,6 +88,7 @@
 
           <h1 id="signalTitle">신호 대기</h1>
           <p id="signalMessage">KOSPI200 5분봉 데이터를 기다리고 있습니다.</p>
+          <div class="sub-tab-row count-tab-row" id="optionsStatusTabs" aria-label="옵션 신호 개수"></div>
 
           <div class="price-grid" id="priceGrid">
             <article>
@@ -110,6 +118,7 @@
           </div>
           <div class="chart-legend" id="liveLegend"></div>
           <div class="trade-strip neutral" id="liveTradePlan" aria-label="실시간 가상 매매 플랜"></div>
+          <div class="trade-verifier-panel" id="optionsVerifier"></div>
 
           <div class="action-row">
             <button class="primary-button" type="button" id="enableAlerts">알림 켜기</button>
@@ -131,6 +140,7 @@
             </div>
           </div>
           <div class="chart-legend" id="optionArchiveLegend"></div>
+          <div class="trade-verifier-panel" id="optionArchiveVerifier"></div>
           <div class="replay-list" id="optionArchiveSignals"></div>
         </section>
 
@@ -153,6 +163,7 @@
           </div>
           <h1 id="etfTitle">KODEX200 ETF</h1>
           <p id="etfMessage">KODEX200 분할매수 컨텍스트를 불러오는 중입니다.</p>
+          <div class="sub-tab-row count-tab-row" id="etfStatusTabs" aria-label="ETF 신호 개수"></div>
           <div class="price-grid" id="etfMetricGrid"></div>
           <div class="chart-frame asset-chart-frame">
             <canvas id="etfChart" height="260" aria-label="ETF 일봉 흐름 차트"></canvas>
@@ -162,6 +173,7 @@
             </div>
           </div>
           <div class="chart-legend" id="etfLegend"></div>
+          <div class="trade-verifier-panel" id="etfVerifier"></div>
           <div class="crypto-signal-list etf-signal-list" id="etfSignalList"></div>
         </section>
       </section>
@@ -174,6 +186,8 @@
           </div>
           <h1 id="stocksTitle">국장 종목</h1>
           <p id="stocksMessage">국내 주식 후보와 지수 추종 필터를 불러오는 중입니다.</p>
+          <div class="sub-tab-row asset-tab-row" id="stocksSubTabs" aria-label="국장 감시 종목 탭"></div>
+          <div class="sub-tab-row count-tab-row" id="stocksStatusTabs" aria-label="국장 신호 개수"></div>
           <div class="price-grid" id="stocksMetricGrid"></div>
           <div class="data-reliability-strip" id="stocksReliabilityStrip"></div>
           <div class="chart-frame asset-chart-frame">
@@ -184,6 +198,7 @@
             </div>
           </div>
           <div class="chart-legend" id="stocksLegend"></div>
+          <div class="trade-verifier-panel" id="stocksVerifier"></div>
           <details class="asset-manage-panel" id="domesticManagePanel">
             <summary>
               <span>국장 추가</span>
@@ -216,6 +231,8 @@
           </div>
           <h1>미장 종목</h1>
           <p id="usStocksMessage">SPY/QQQ 상대강도, 20/50/200일선, 거래량 필터를 기준으로 확장할 화면입니다.</p>
+          <div class="sub-tab-row asset-tab-row" id="usStocksSubTabs" aria-label="미장 감시 종목 탭"></div>
+          <div class="sub-tab-row count-tab-row" id="usStocksStatusTabs" aria-label="미장 신호 개수"></div>
           <div class="price-grid" id="usStocksMetricGrid"></div>
           <div class="data-reliability-strip" id="usStocksReliabilityStrip"></div>
           <div class="chart-frame asset-chart-frame">
@@ -226,6 +243,7 @@
             </div>
           </div>
           <div class="chart-legend" id="usStocksLegend"></div>
+          <div class="trade-verifier-panel" id="usStocksVerifier"></div>
           <details class="asset-manage-panel" id="usManagePanel">
             <summary>
               <span>미장 추가</span>
@@ -298,18 +316,19 @@
             </div>
           </div>
           <div class="chart-legend" id="cryptoLegend"></div>
+          <div class="trade-verifier-panel" id="cryptoVerifier"></div>
           <div class="crypto-signal-list" id="cryptoSignalList"></div>
           <div class="asset-list" id="cryptoAssetList"></div>
         </section>
       </section>
 
       <nav class="modal-nav" aria-label="메인 탭">
-        <button type="button" data-tab-target="collection">모음</button>
-        <button type="button" data-tab-target="options">옵션</button>
-        <button type="button" data-tab-target="etf">ETF</button>
-        <button type="button" data-tab-target="stocks">국장</button>
-        <button type="button" data-tab-target="usStocks">미장</button>
-        <button type="button" data-tab-target="crypto">코인</button>
+        <button type="button" data-tab-target="collection"><span class="tab-label">모음</span><span class="tab-count neutral" data-tab-count="collection">0</span></button>
+        <button type="button" data-tab-target="options"><span class="tab-label">옵션</span><span class="tab-count neutral" data-tab-count="options">0</span></button>
+        <button type="button" data-tab-target="etf"><span class="tab-label">ETF</span><span class="tab-count neutral" data-tab-count="etf">0</span></button>
+        <button type="button" data-tab-target="stocks"><span class="tab-label">국장</span><span class="tab-count neutral" data-tab-count="stocks">0</span></button>
+        <button type="button" data-tab-target="usStocks"><span class="tab-label">미장</span><span class="tab-count neutral" data-tab-count="usStocks">0</span></button>
+        <button type="button" data-tab-target="crypto"><span class="tab-label">코인</span><span class="tab-count neutral" data-tab-count="crypto">0</span></button>
       </nav>
     </main>
 
@@ -366,6 +385,7 @@
               <button class="soft-button" type="button" id="replayNext">다음</button>
               <button class="soft-button" type="button" id="replayEnd">끝</button>
             </div>
+            <div class="trade-verifier-panel" id="replayVerifier"></div>
             <div class="trade-stats" id="replayTradeStats" aria-label="복기 매매 검증 요약"></div>
             <p class="sheet-copy" id="replayText">날짜를 선택하면 해당 일의 공식선과 신호를 표시합니다.</p>
             <div class="replay-list" id="replaySignals"></div>
@@ -441,8 +461,8 @@
               </label>
               <label class="setting-row select-setting">
                 <span>
-                  <strong>자산 알림 강도</strong>
-                  <small>ETF·국장·미장 알림을 10분 중복 방지 기준으로 보냅니다.</small>
+                  <strong>기본 자산 알림</strong>
+                  <small>새 탭별 설정이 없을 때 ETF·국장·미장에 적용합니다.</small>
                 </span>
                 <select id="assetAlertMode">
                   <option value="all">전체 신호</option>
@@ -451,6 +471,59 @@
                   <option value="off">끄기</option>
                 </select>
               </label>
+              <div class="setting-row alert-scope-setting">
+                <span>
+                  <strong>탭별 알림 강도</strong>
+                  <small>각 탭별로 중복 억제 후 보낼 신호 범위를 정합니다.</small>
+                </span>
+                <div class="alert-mode-grid" id="alertModeGrid">
+                  <label>
+                    <span>옵션</span>
+                    <select data-alert-scope="options">
+                      <option value="all">전체</option>
+                      <option value="strong">진입·위험</option>
+                      <option value="risk">위험만</option>
+                      <option value="off">무음</option>
+                    </select>
+                  </label>
+                  <label>
+                    <span>ETF</span>
+                    <select data-alert-scope="etf">
+                      <option value="all">전체</option>
+                      <option value="strong">진입·위험</option>
+                      <option value="risk">위험만</option>
+                      <option value="off">무음</option>
+                    </select>
+                  </label>
+                  <label>
+                    <span>국장</span>
+                    <select data-alert-scope="domestic">
+                      <option value="all">전체</option>
+                      <option value="strong">진입·위험</option>
+                      <option value="risk">위험만</option>
+                      <option value="off">무음</option>
+                    </select>
+                  </label>
+                  <label>
+                    <span>미장</span>
+                    <select data-alert-scope="us">
+                      <option value="all">전체</option>
+                      <option value="strong">진입·위험</option>
+                      <option value="risk">위험만</option>
+                      <option value="off">무음</option>
+                    </select>
+                  </label>
+                  <label>
+                    <span>코인</span>
+                    <select data-alert-scope="crypto">
+                      <option value="all">전체</option>
+                      <option value="strong">진입·위험</option>
+                      <option value="risk">위험만</option>
+                      <option value="off">무음</option>
+                    </select>
+                  </label>
+                </div>
+              </div>
             </div>
             <p class="sheet-copy" id="alertStatus">알림 상태를 확인하는 중입니다.</p>
             <button class="primary-button wide" type="button" id="clearSignalLog">신호 기록 비우기</button>
@@ -471,6 +544,6 @@
       </section>
     </div>
 
-    <script src="script.js?v=20260602-crypto-polish-1"></script>
+    <script src="script.js?v=20260602-collection-buy-time-1"></script>
   </body>
 </html>
