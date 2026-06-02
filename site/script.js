@@ -2070,6 +2070,11 @@ function normalizeBackendSignalLogEntry(entry = {}) {
     message: entry.message || "",
     time: entry.time || "-",
     close: entry.close,
+    rule: entry.rule || entry.action || "",
+    trade_decision: entry.trade_decision || entry.tradeDecision || "",
+    metrics: entry.metrics || {},
+    outcome: entry.outcome || null,
+    confidence: entry.confidence || null,
     trade: entry.trade || null,
     sourceAt: entry.sourceAt || entry.datetime || "",
     createdAt: entry.createdAt || new Date().toISOString(),
@@ -2136,6 +2141,9 @@ function signalLogEntry(signal, candle, tradePlan = null) {
     message: signal.message || "",
     time: signal.time || candle.time || "-",
     close,
+    rule,
+    trade_decision: signal.trade_decision || signal.tradeDecision || "",
+    metrics: signal.metrics || {},
     trade: tradePlan?.status ? {
       status: tradePlan.status,
       entry: tradePlan.entry,
@@ -2231,6 +2239,7 @@ function signalLogTimestamp(item = {}) {
 
 function renderSignalLog() {
   const allLog = signalLogForDisplayDate();
+  renderSignalPerformance(allLog);
   renderOptionsStatusTabs(allLog);
   const visibleLog = allLog.filter((item) => itemMatchesPanelFilter(item, "options"));
   setText("#logCount", `${visibleLog.length}개`);
@@ -2247,9 +2256,68 @@ function renderSignalLog() {
     .join("");
 }
 
+function renderSignalPerformance(logItems = []) {
+  const root = document.querySelector("#signalPerformanceGrid");
+  if (!root) return;
+  const summary = signalPerformanceSummaryForDisplay(logItems);
+  const rules = Array.isArray(summary.rules) ? summary.rules.filter((item) => item.ready_count || item.sample_count) : [];
+  if (!rules.length) {
+    root.hidden = true;
+    root.innerHTML = "";
+    return;
+  }
+  root.hidden = false;
+  root.innerHTML = rules.slice(0, 4).map((rule) => {
+    const confidence = rule.confidence?.score;
+    const successRate = number(rule.success_15m_rate);
+    const avgReturn = number(rule.avg_15m_cost_adjusted_return_pct);
+    return metricCard({
+      label: rule.rule || "rule",
+      value: confidence == null ? "-" : `${formatNum(confidence, 0)}%`,
+      text: `${successRate == null ? "-" : `${formatNum(successRate * 100, 0)}%`} · 15m ${avgReturn == null ? "-" : formatSignedPercent(avgReturn)}`,
+    });
+  }).join("");
+}
+
+function signalPerformanceSummaryForDisplay(logItems = []) {
+  const backend = state.monitor?.main?.signal_performance || state.monitor?.signal_log?.performance;
+  if (Array.isArray(backend?.rules) && backend.rules.length) return backend;
+  const grouped = new Map();
+  logItems.forEach((item) => {
+    const rule = item.rule || item.action || "unknown";
+    if (!grouped.has(rule)) grouped.set(rule, []);
+    grouped.get(rule).push(item);
+  });
+  const rules = [...grouped.entries()].map(([rule, items]) => {
+    const ready = items.filter((item) => item.outcome?.status === "ready");
+    const successes = ready.filter((item) => item.outcome?.success_15m === true);
+    const returns = ready
+      .map((item) => number(item.outcome?.horizons?.["15m"]?.cost_adjusted_return_pct ?? item.outcome?.horizons?.["15m"]?.return_pct))
+      .filter((value) => value != null);
+    const posterior = (successes.length + 3) / Math.max(1, ready.length + 6);
+    return {
+      rule,
+      sample_count: items.length,
+      ready_count: ready.length,
+      success_15m_rate: ready.length ? successes.length / ready.length : null,
+      avg_15m_cost_adjusted_return_pct: returns.length ? returns.reduce((sum, value) => sum + value, 0) / returns.length : null,
+      confidence: { score: Math.round(posterior * Math.min(1, Math.max(0.55, ready.length / 20)) * 100) },
+    };
+  });
+  rules.sort((a, b) => number(b.confidence?.score) - number(a.confidence?.score) || b.ready_count - a.ready_count);
+  return { rules };
+}
+
 function optionLogCard(item = {}) {
   const signal = signalClass(item.type || "watch");
-  const score = commonSignalScore({ signal });
+  const score = commonSignalScore({ signal, confidence: item.confidence });
+  const outcome = item.outcome || {};
+  const outcome15m = outcome.horizons?.["15m"]?.return_pct;
+  const adjusted15m = outcome.horizons?.["15m"]?.cost_adjusted_return_pct;
+  const outcomeText = outcome.status === "ready"
+    ? `15m ${formatSignedPercent(adjusted15m ?? outcome15m)} · 유리 ${formatNum(outcome.max_favorable_points, 2)}p · 불리 ${formatNum(outcome.max_adverse_points, 2)}p`
+    : "성과 대기";
+  const confidenceText = item.confidence?.score == null ? "" : `신뢰 ${formatNum(item.confidence.score, 0)}%`;
   const tp1GainText = item.trade?.tp1Gain != null ? `(+${formatNum(item.trade.tp1Gain, 2)})` : "";
   const runnerText = item.trade?.runnerTargetText || item.trade?.tp2Text || "";
   const tradeText = item.trade
@@ -2260,7 +2328,7 @@ function optionLogCard(item = {}) {
     signal,
     signalScore: score,
     badge: item.title || "신호",
-    detail: tradeText || item.message || item.title,
+    detail: [tradeText || item.message || item.title, outcomeText, confidenceText].filter(Boolean).join(" · "),
     actionText: optionLogActionText(item, signal),
   });
   const items = [
@@ -2269,6 +2337,10 @@ function optionLogCard(item = {}) {
     { label: "진입", value: formatNum(item.trade?.entry, 2), text: item.trade?.status || "-" },
     { label: "손절", value: item.trade?.stopText || formatNum(item.trade?.stop, 2), text: "계획" },
   ];
+  items.push({ label: "15m", value: (adjusted15m ?? outcome15m) == null ? "-" : formatSignedPercent(adjusted15m ?? outcome15m), text: outcome.status || "pending" });
+  if (confidenceText) {
+    items.push({ label: "conf", value: `${formatNum(item.confidence.score, 0)}%`, text: `${item.confidence.ready_count || 0}/${item.confidence.sample_count || 0}` });
+  }
   return `
     <article class="crypto-signal-card option-log-card ${escapeAttr(signal)}">
       <header>
@@ -3655,7 +3727,7 @@ function signalActionText(signal, score = null, scope = "") {
 
 function commonSignalScore(item = {}, options = {}) {
   const signal = signalClass(item.signal || item.className || item.type || item.summary?.signal || "watch");
-  const explicit = number(item.signalScore ?? item.qualityScore ?? item.score ?? item.summary?.score);
+  const explicit = number(item.signalScore ?? item.qualityScore ?? item.confidence?.score ?? item.score ?? item.summary?.score);
   let score = explicit == null ? signalBaseScore(signal) : normalizeScore(explicit, options.scoreMax);
   const momentum = normalizedMomentum(item.momentum ?? item.ret_21d ?? item.change_pct ?? item.summary?.ret_21d ?? item.summary?.relative_63d);
   if (momentum != null) score += clampNumber(momentum * 85, -12, 12);
@@ -11134,6 +11206,12 @@ function formatSigned(value, digits = 2) {
   if (parsed == null) return "-";
   const sign = parsed > 0 ? "+" : "";
   return `${sign}${formatNum(parsed, digits)}`;
+}
+
+function formatSignedPercent(value, digits = 2) {
+  const parsed = number(value);
+  if (parsed == null) return "-";
+  return `${formatSigned(parsed, digits)}%`;
 }
 
 function formatWon(value) {

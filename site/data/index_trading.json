@@ -10,6 +10,36 @@
     "execution": "5분봉",
     "fibonacci_lookback": "최근 3거래일 고점/저점"
   },
+  "market_regimes": {
+    "trend_up": {
+      "label": "추세 상승",
+      "fib_618_lower_wick_ratio_delta": -0.04,
+      "index_reset_lower_wick_ratio_delta": -0.03,
+      "index_reset_near_tolerance_multiplier": 1.2,
+      "confidence_bonus": 4
+    },
+    "range": {
+      "label": "횡보",
+      "fib_618_lower_wick_ratio_delta": 0,
+      "index_reset_lower_wick_ratio_delta": 0,
+      "index_reset_near_tolerance_multiplier": 1,
+      "confidence_bonus": 0
+    },
+    "volatile": {
+      "label": "고변동",
+      "fib_618_lower_wick_ratio_delta": 0.08,
+      "index_reset_lower_wick_ratio_delta": 0.06,
+      "index_reset_near_tolerance_multiplier": 0.85,
+      "confidence_bonus": -6
+    },
+    "trend_down": {
+      "label": "하락 추세",
+      "fib_618_lower_wick_ratio_delta": 0.1,
+      "index_reset_lower_wick_ratio_delta": 0.08,
+      "index_reset_near_tolerance_multiplier": 0.75,
+      "confidence_bonus": -8
+    }
+  },
   "formulas": [
     {
       "key": "gma_30",
@@ -194,8 +224,8 @@
           "status": "draft",
           "label": "원하는 자리 밑꼬리",
           "target_line": "reset_mid_618_100",
-          "near_tolerance": "TODO",
-          "lower_wick_ratio_threshold": "TODO",
+          "near_tolerance": 0.2,
+          "lower_wick_ratio_threshold": 0.3,
           "confirmation": "low_5m pierces_or_touches target_line AND close_5m reclaims target_line",
           "effect": "entry_confidence_up",
           "description": "거의 원하는 자리에서 밑꼬리가 나오면 리셋 중심 콜 재시작 후보의 신뢰도를 높인다."

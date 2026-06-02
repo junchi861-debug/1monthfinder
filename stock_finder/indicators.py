@@ -30,11 +30,21 @@ def rsi(close: pd.Series, window: int = 14) -> float:
     delta = close.diff()
     gains = delta.clip(lower=0)
     losses = -delta.clip(upper=0)
-    avg_gain = gains.rolling(window).mean()
-    avg_loss = losses.rolling(window).mean()
-    rs = avg_gain / avg_loss.replace(0, np.nan)
-    value = 100 - (100 / (1 + rs))
-    return float(value.iloc[-1]) if not value.dropna().empty else np.nan
+    if len(close) <= window:
+        return np.nan
+
+    avg_gain = gains.ewm(alpha=1 / window, adjust=False, min_periods=window).mean()
+    avg_loss = losses.ewm(alpha=1 / window, adjust=False, min_periods=window).mean()
+    latest_gain = float(avg_gain.iloc[-1])
+    latest_loss = float(avg_loss.iloc[-1])
+    if np.isnan(latest_gain) or np.isnan(latest_loss):
+        return np.nan
+    if latest_loss == 0:
+        return 50.0 if latest_gain == 0 else 100.0
+    if latest_gain == 0:
+        return 0.0
+    rs = latest_gain / latest_loss
+    return float(100 - (100 / (1 + rs)))
 
 
 def average_traded_value(close: pd.Series, volume: pd.Series, window: int = 21) -> float:

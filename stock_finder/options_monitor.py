@@ -17,6 +17,8 @@ from typing import Any
 
 KST = timezone(timedelta(hours=9), "KST")
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+INDEX_TRADING_CONFIG_PATH = PROJECT_ROOT / "config" / "algorithms" / "index_trading.json"
+WEEKLY_OPTIONS_CONFIG_PATH = PROJECT_ROOT / "config" / "algorithms" / "weekly_options.json"
 YAHOO_CHART_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
 NAVER_INDEX_TIME_URL = "https://finance.naver.com/sise/sise_index_time.naver"
 NAVER_ITEM_TIME_URL = "https://finance.naver.com/item/sise_time.nhn"
@@ -29,6 +31,7 @@ SIGNAL_LOG_LOCK_TIMEOUT_SECONDS = 2.0
 SIGNAL_LOG_LOCK = threading.Lock()
 SIGNAL_LOG_WRITE_LOCK = threading.Lock()
 _SNAPSHOT_CACHE: dict[str, Any] = {"created_at": 0.0, "payload": None}
+_ALGORITHM_SETTINGS_CACHE: dict[str, Any] | None = None
 CODEX_EXPERIMENTAL_PROFIT_EXTENSION_TAG = "codex_experimental_profit_extension"
 TRADE_COLORS = {
     "entry": "#2f7f83",
@@ -72,6 +75,179 @@ SECONDARY_INSTRUMENT = MonitorInstrument(
 )
 
 
+def _algorithm_settings() -> dict[str, Any]:
+    global _ALGORITHM_SETTINGS_CACHE
+    if _ALGORITHM_SETTINGS_CACHE is not None:
+        return _ALGORITHM_SETTINGS_CACHE
+
+    settings: dict[str, Any] = {
+        "fib_618_lower_wick_ratio": 0.35,
+        "index_reset_near_tolerance": 0.2,
+        "index_reset_lower_wick_ratio": 0.30,
+        "default_entry_premium": 1.6,
+        "default_contracts": 3,
+        "reset_entry_premium": 1.6,
+        "reset_contracts": 2,
+        "tenkan_entry_premium": 2.3,
+        "tenkan_contracts": 2,
+        "index_execution_cost_points": 0.15,
+        "option_spread_pct": 0.04,
+        "option_slippage_pct": 0.015,
+        "confidence_prior_success": 0.5,
+        "confidence_prior_strength": 6,
+        "min_samples_for_full_confidence": 20,
+        "market_regimes": {
+            "trend_up": {
+                "fib_618_lower_wick_ratio_delta": -0.04,
+                "index_reset_lower_wick_ratio_delta": -0.03,
+                "index_reset_near_tolerance_multiplier": 1.2,
+                "confidence_bonus": 4,
+            },
+            "range": {
+                "fib_618_lower_wick_ratio_delta": 0,
+                "index_reset_lower_wick_ratio_delta": 0,
+                "index_reset_near_tolerance_multiplier": 1.0,
+                "confidence_bonus": 0,
+            },
+            "volatile": {
+                "fib_618_lower_wick_ratio_delta": 0.08,
+                "index_reset_lower_wick_ratio_delta": 0.06,
+                "index_reset_near_tolerance_multiplier": 0.85,
+                "confidence_bonus": -6,
+            },
+            "trend_down": {
+                "fib_618_lower_wick_ratio_delta": 0.10,
+                "index_reset_lower_wick_ratio_delta": 0.08,
+                "index_reset_near_tolerance_multiplier": 0.75,
+                "confidence_bonus": -8,
+            },
+        },
+    }
+
+    index_config = _read_json_object(INDEX_TRADING_CONFIG_PATH)
+    wick = _nested(
+        index_config,
+        "fibonacci",
+        "reset_on_break",
+        "call_retry_prepare",
+        "wick_confirmation",
+    )
+    if isinstance(wick, dict):
+        settings["index_reset_near_tolerance"] = _settings_number(
+            wick.get("near_tolerance"),
+            settings["index_reset_near_tolerance"],
+        )
+        settings["index_reset_lower_wick_ratio"] = _settings_number(
+            wick.get("lower_wick_ratio_threshold"),
+            settings["index_reset_lower_wick_ratio"],
+        )
+
+    weekly_config = _read_json_object(WEEKLY_OPTIONS_CONFIG_PATH)
+    entry = weekly_config.get("entry") if isinstance(weekly_config, dict) else {}
+    if isinstance(entry, dict):
+        settings["default_contracts"] = _settings_int(entry.get("initial_contracts"), settings["default_contracts"])
+        strike = entry.get("strike_selection")
+        if isinstance(strike, dict):
+            settings["default_entry_premium"] = _settings_number(strike.get("target_premium"), settings["default_entry_premium"])
+        tenkan = entry.get("tenkan_kijun_continuation_entry")
+        if isinstance(tenkan, dict):
+            settings["tenkan_entry_premium"] = _settings_number(
+                tenkan.get("preferred_entry_premium"),
+                settings["tenkan_entry_premium"],
+            )
+            settings["tenkan_contracts"] = _settings_int(tenkan.get("contracts"), settings["tenkan_contracts"])
+
+    reset_prepare = _nested(index_config, "fibonacci", "reset_on_break", "call_retry_prepare")
+    if isinstance(reset_prepare, dict):
+        premiums = reset_prepare.get("target_premium_range")
+        if isinstance(premiums, list) and premiums:
+            numeric = [_settings_number(value, float("nan")) for value in premiums]
+            numeric = [value for value in numeric if math.isfinite(value)]
+            if numeric:
+                settings["reset_entry_premium"] = sum(numeric) / len(numeric)
+        contracts = reset_prepare.get("contracts_range")
+        if isinstance(contracts, list) and contracts:
+            numeric_contracts = [_settings_int(value, 0) for value in contracts]
+            numeric_contracts = [value for value in numeric_contracts if value > 0]
+            if numeric_contracts:
+                settings["reset_contracts"] = min(numeric_contracts)
+
+    market_regimes = index_config.get("market_regimes") if isinstance(index_config, dict) else {}
+    if isinstance(market_regimes, dict):
+        settings["market_regimes"] = _merge_market_regimes(settings["market_regimes"], market_regimes)
+
+    execution_quality = weekly_config.get("execution_quality") if isinstance(weekly_config, dict) else {}
+    if isinstance(execution_quality, dict):
+        settings["index_execution_cost_points"] = _settings_number(
+            execution_quality.get("index_execution_cost_points"),
+            settings["index_execution_cost_points"],
+        )
+        settings["option_spread_pct"] = _settings_number(
+            execution_quality.get("option_spread_pct"),
+            settings["option_spread_pct"],
+        )
+        settings["option_slippage_pct"] = _settings_number(
+            execution_quality.get("option_slippage_pct"),
+            settings["option_slippage_pct"],
+        )
+
+    confidence = weekly_config.get("confidence") if isinstance(weekly_config, dict) else {}
+    if isinstance(confidence, dict):
+        settings["confidence_prior_success"] = _settings_number(
+            confidence.get("prior_success_rate"),
+            settings["confidence_prior_success"],
+        )
+        settings["confidence_prior_strength"] = _settings_number(
+            confidence.get("prior_strength"),
+            settings["confidence_prior_strength"],
+        )
+        settings["min_samples_for_full_confidence"] = _settings_int(
+            confidence.get("min_samples_for_full_confidence"),
+            settings["min_samples_for_full_confidence"],
+        )
+
+    _ALGORITHM_SETTINGS_CACHE = settings
+    return settings
+
+
+def _merge_market_regimes(defaults: dict[str, Any], overrides: dict[str, Any]) -> dict[str, Any]:
+    merged = {key: dict(value) for key, value in defaults.items() if isinstance(value, dict)}
+    for key, value in overrides.items():
+        if not isinstance(value, dict):
+            continue
+        base = merged.get(str(key), {})
+        merged[str(key)] = {**base, **value}
+    return merged
+
+
+def _read_json_object(path: Path) -> dict[str, Any]:
+    try:
+        with path.open("r", encoding="utf-8") as file:
+            data = json.load(file)
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _nested(data: dict[str, Any], *keys: str) -> Any:
+    current: Any = data
+    for key in keys:
+        if not isinstance(current, dict):
+            return None
+        current = current.get(key)
+    return current
+
+
+def _settings_number(value: Any, default: float) -> float:
+    number = _num(value)
+    return number if number is not None else default
+
+
+def _settings_int(value: Any, default: int) -> int:
+    number = _num(value)
+    return max(1, int(number)) if number is not None else default
+
+
 def build_options_monitor_snapshot(use_cache: bool = True) -> dict[str, Any]:
     """Build a read-only intraday monitoring snapshot for the options screen."""
 
@@ -98,7 +274,13 @@ def build_options_monitor_snapshot(use_cache: bool = True) -> dict[str, Any]:
                     generated_at,
                 )
             )
-    main["recent_signals"] = _persist_signal_entries(main.get("recent_signals") or [], generated_at)
+    main_session_candles = _latest_session_candles(main.get("candles") or [])
+    main["recent_signals"] = _persist_signal_entries(
+        _attach_signal_outcomes(main.get("recent_signals") or [], main_session_candles, generated_at),
+        generated_at,
+        main_session_candles,
+    )
+    main["signal_performance"] = _signal_performance_summary(main["recent_signals"])
     main["signal_log_source"] = "backend"
     payload = {
         "ok": bool(main.get("ok")),
@@ -116,6 +298,7 @@ def build_options_monitor_snapshot(use_cache: bool = True) -> dict[str, Any]:
         "signal_log": {
             "source": "backend",
             "entries": main["recent_signals"],
+            "performance": main["signal_performance"],
             "path": str(SIGNAL_LOG_PATH),
         },
         "signal": main.get("signal", _empty_signal("neutral", "데이터 대기", "분봉 데이터를 기다리고 있습니다.")),
@@ -374,18 +557,26 @@ def _fetch_yahoo_candles(symbol: str, range_value: str = "5d", interval: str = "
     return candles
 
 
-def _persist_signal_entries(entries: list[dict[str, Any]], generated_at: datetime) -> list[dict[str, Any]]:
+def _persist_signal_entries(
+    entries: list[dict[str, Any]],
+    generated_at: datetime,
+    session_candles: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
     if not entries:
         archive = _read_signal_log()
-        return sorted(
+        ordered = sorted(
             archive.get("entries") or [],
             key=lambda item: item.get("sourceAt") or item.get("createdAt") or "",
             reverse=True,
         )
+        ordered = _attach_signal_outcomes(ordered, session_candles or [], generated_at)
+        return _attach_signal_confidence(ordered, _signal_performance_summary(ordered))
 
     locked = SIGNAL_LOG_LOCK.acquire(timeout=SIGNAL_LOG_LOCK_TIMEOUT_SECONDS)
     if not locked:
-        return [_normalize_signal_log_entry(entry, generated_at) for entry in entries][-80:]
+        normalized = [_normalize_signal_log_entry(entry, generated_at) for entry in entries][-80:]
+        normalized = _attach_signal_outcomes(normalized, session_candles or [], generated_at)
+        return _attach_signal_confidence(normalized, _signal_performance_summary(normalized))
     try:
         archive = _read_signal_log()
         merged: dict[str, dict[str, Any]] = {}
@@ -407,7 +598,11 @@ def _persist_signal_entries(entries: list[dict[str, Any]], generated_at: datetim
             key=lambda item: item.get("sourceAt") or item.get("createdAt") or "",
             reverse=True,
         )
+        ordered = _attach_signal_outcomes(ordered, session_candles or [], generated_at)
+        performance = _signal_performance_summary(ordered)
+        ordered = _attach_signal_confidence(ordered, performance)
         archive["entries"] = ordered
+        archive["performance"] = performance
         archive["updated_at"] = _iso(generated_at)
         _write_signal_log_async(archive)
         return ordered
@@ -431,6 +626,197 @@ def _normalize_signal_log_entry(entry: dict[str, Any], generated_at: datetime) -
         "sourceAt": entry.get("sourceAt") or entry.get("datetime") or "",
         "createdAt": entry.get("createdAt") or _iso(generated_at),
         "source": entry.get("source") or "backend_signal",
+    }
+
+
+def _attach_signal_outcomes(
+    entries: list[dict[str, Any]],
+    candles: list[dict[str, Any]],
+    generated_at: datetime,
+) -> list[dict[str, Any]]:
+    if not entries or not candles:
+        return entries
+
+    candle_by_time = {str(candle.get("datetime")): index for index, candle in enumerate(candles) if candle.get("datetime")}
+    latest_index = len(candles) - 1
+    cost_model = _signal_execution_cost_model()
+    updated = []
+    for entry in entries:
+        source_at = str(entry.get("sourceAt") or entry.get("datetime") or "")
+        candle_index = candle_by_time.get(source_at)
+        if candle_index is None:
+            updated.append(entry)
+            continue
+
+        entry_close = _num(entry.get("close")) or _num(candles[candle_index].get("close"))
+        if entry_close is None:
+            updated.append(entry)
+            continue
+
+        lookahead = candles[candle_index + 1 :]
+        highs = [_num(candle.get("high")) for candle in lookahead]
+        lows = [_num(candle.get("low")) for candle in lookahead]
+        highs = [value for value in highs if value is not None]
+        lows = [value for value in lows if value is not None]
+        horizons: dict[str, dict[str, Any]] = {}
+        for label, offset in (("5m", 1), ("15m", 3), ("30m", 6)):
+            if candle_index + offset <= latest_index:
+                close = _num(candles[candle_index + offset].get("close"))
+                if close is not None:
+                    raw_return = (close / entry_close - 1) * 100
+                    adjusted_return = ((close - entry_close - cost_model["index_points"]) / entry_close) * 100
+                    horizons[label] = {
+                        "close": round(close, 4),
+                        "return_pct": round(raw_return, 3),
+                        "cost_adjusted_return_pct": round(adjusted_return, 3),
+                    }
+
+        outcome = {
+            "status": "ready" if horizons else "pending",
+            "evaluated_at": _iso(generated_at),
+            "bars_elapsed": max(0, latest_index - candle_index),
+            "entry_index": round(entry_close, 4),
+            "latest_index": round(float(candles[-1]["close"]), 4),
+            "return_pct_latest": round((float(candles[-1]["close"]) / entry_close - 1) * 100, 3),
+            "max_favorable_points": round(max(highs) - entry_close, 4) if highs else 0,
+            "max_adverse_points": round(entry_close - min(lows), 4) if lows else 0,
+            "cost_model": cost_model,
+            "horizons": horizons,
+        }
+        if _entry_is_call_candidate(entry) and "15m" in horizons:
+            outcome["success_15m"] = horizons["15m"]["cost_adjusted_return_pct"] > 0
+        updated.append({**entry, "outcome": outcome})
+    return updated
+
+
+def _signal_execution_cost_model() -> dict[str, float]:
+    settings = _algorithm_settings()
+    index_points = _settings_number(settings.get("index_execution_cost_points"), 0.15)
+    spread_pct = _settings_number(settings.get("option_spread_pct"), 0.04)
+    slippage_pct = _settings_number(settings.get("option_slippage_pct"), 0.015)
+    return {
+        "index_points": round(index_points, 4),
+        "option_spread_pct": round(spread_pct, 4),
+        "option_slippage_pct": round(slippage_pct, 4),
+        "option_total_cost_pct": round(spread_pct + slippage_pct, 4),
+    }
+
+
+def _entry_is_call_candidate(entry: dict[str, Any]) -> bool:
+    decision = str(entry.get("trade_decision") or "")
+    rule = str(entry.get("rule") or entry.get("action") or "")
+    trade = entry.get("trade") if isinstance(entry.get("trade"), dict) else {}
+    return (
+        decision in {"entry", "test"}
+        or "ENTRY" in str(trade.get("status") or "").upper()
+        or "FIB_618" in rule
+        or "INDEX_RESET" in rule
+        or "TENKAN_PULLBACK" in rule
+    )
+
+
+def _signal_performance_summary(entries: list[dict[str, Any]]) -> dict[str, Any]:
+    settings = _algorithm_settings()
+    prior_rate = _settings_number(settings.get("confidence_prior_success"), 0.5)
+    prior_strength = _settings_number(settings.get("confidence_prior_strength"), 6)
+    min_samples = _settings_int(settings.get("min_samples_for_full_confidence"), 20)
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for entry in entries:
+        rule = str(entry.get("rule") or entry.get("action") or "unknown")
+        grouped.setdefault(rule, []).append(entry)
+
+    rules: list[dict[str, Any]] = []
+    ready_total = 0
+    success_total = 0
+    for rule, rule_entries in grouped.items():
+        ready = [entry for entry in rule_entries if (entry.get("outcome") or {}).get("status") == "ready"]
+        successes = [
+            entry
+            for entry in ready
+            if (entry.get("outcome") or {}).get("success_15m") is True
+        ]
+        returns_15m = [
+            _num(((entry.get("outcome") or {}).get("horizons") or {}).get("15m", {}).get("cost_adjusted_return_pct"))
+            for entry in ready
+        ]
+        returns_15m = [value for value in returns_15m if value is not None]
+        mfe = [_num((entry.get("outcome") or {}).get("max_favorable_points")) for entry in ready]
+        mae = [_num((entry.get("outcome") or {}).get("max_adverse_points")) for entry in ready]
+        mfe = [value for value in mfe if value is not None]
+        mae = [value for value in mae if value is not None]
+        confidence = _bayesian_confidence(len(successes), len(ready), prior_rate, prior_strength, min_samples)
+        ready_total += len(ready)
+        success_total += len(successes)
+        rules.append(
+            {
+                "rule": rule,
+                "sample_count": len(rule_entries),
+                "ready_count": len(ready),
+                "success_15m_count": len(successes),
+                "success_15m_rate": round(len(successes) / len(ready), 4) if ready else None,
+                "avg_15m_cost_adjusted_return_pct": round(sum(returns_15m) / len(returns_15m), 3) if returns_15m else None,
+                "avg_mfe_points": round(sum(mfe) / len(mfe), 3) if mfe else None,
+                "avg_mae_points": round(sum(mae) / len(mae), 3) if mae else None,
+                "confidence": confidence,
+            }
+        )
+
+    rules.sort(key=lambda item: (item["confidence"]["score"], item["ready_count"], item["sample_count"]), reverse=True)
+    return {
+        "schema_version": 1,
+        "generated_at": _iso(datetime.now(KST)),
+        "rule_count": len(rules),
+        "ready_count": ready_total,
+        "success_15m_count": success_total,
+        "success_15m_rate": round(success_total / ready_total, 4) if ready_total else None,
+        "rules": rules[:12],
+    }
+
+
+def _attach_signal_confidence(entries: list[dict[str, Any]], performance: dict[str, Any]) -> list[dict[str, Any]]:
+    rules = {
+        str(item.get("rule")): item
+        for item in performance.get("rules", [])
+        if isinstance(item, dict) and item.get("rule")
+    }
+    updated = []
+    for entry in entries:
+        rule = str(entry.get("rule") or entry.get("action") or "")
+        rule_performance = rules.get(rule, {})
+        confidence = dict(rule_performance.get("confidence") or {})
+        if confidence:
+            metrics = entry.get("metrics") if isinstance(entry.get("metrics"), dict) else {}
+            regime = metrics.get("market_regime") if isinstance(metrics.get("market_regime"), dict) else {}
+            bonus = _num(regime.get("confidence_bonus")) if regime else None
+            if bonus is not None and confidence.get("score") is not None:
+                confidence["score"] = round(max(0.0, min(100.0, float(confidence["score"]) + bonus)), 1)
+                confidence["regime_bonus"] = bonus
+            confidence["rule"] = rule
+            confidence["sample_count"] = rule_performance.get("sample_count", 0)
+            confidence["ready_count"] = rule_performance.get("ready_count", 0)
+        updated.append({**entry, "confidence": confidence or entry.get("confidence")})
+    return updated
+
+
+def _bayesian_confidence(
+    successes: int,
+    trials: int,
+    prior_rate: float,
+    prior_strength: float,
+    min_samples: int,
+) -> dict[str, Any]:
+    prior_successes = prior_rate * prior_strength
+    posterior = (successes + prior_successes) / max(1.0, trials + prior_strength)
+    sample_weight = min(1.0, trials / max(1, min_samples))
+    score = 100 * (posterior * (0.55 + 0.45 * sample_weight))
+    return {
+        "score": round(max(0.0, min(100.0, score)), 1),
+        "posterior_success_rate": round(posterior, 4),
+        "sample_weight": round(sample_weight, 4),
+        "successes": int(successes),
+        "trials": int(trials),
+        "prior_success_rate": round(prior_rate, 4),
+        "prior_strength": round(prior_strength, 2),
     }
 
 
@@ -1241,6 +1627,9 @@ def _recent_signal_entries(
                 "message": signal.get("message") or "",
                 "time": signal.get("time") or candle.get("time") or "-",
                 "close": signal.get("index_value") or candle.get("close"),
+                "rule": rule,
+                "trade_decision": signal.get("trade_decision"),
+                "metrics": signal.get("metrics") or {},
                 "trade": _log_trade_from_signal(signal),
                 "sourceAt": source_at,
                 "createdAt": _iso(generated_at),
@@ -1259,6 +1648,8 @@ def _recent_signal_entries(
                 "message": marker.get("detail") or "",
                 "time": marker.get("time") or "-",
                 "close": marker.get("index_value"),
+                "rule": marker.get("kind"),
+                "trade_decision": marker.get("kind"),
                 "trade": marker.get("trade"),
                 "sourceAt": marker.get("datetime") or "",
                 "createdAt": _iso(generated_at),
@@ -1420,6 +1811,7 @@ def _option_premium_plan(signal: dict[str, Any]) -> dict[str, Any]:
 
 
 def _premium_profile(signal: dict[str, Any]) -> dict[str, Any]:
+    settings = _algorithm_settings()
     metrics = signal.get("metrics") or {}
     action = str(signal.get("action") or signal.get("rule") or "")
     if signal.get("trade_decision") == "test":
@@ -1435,10 +1827,29 @@ def _premium_profile(signal: dict[str, Any]) -> dict[str, Any]:
             "tp2": max(explicit_tp1, explicit_entry * 1.37),
         }
     if "INDEX_RESET" in action or "RESET_MID" in action:
-        return {"entry": 1.6, "contracts": 2, "stop_multiplier": 0.7, "tp1_multiplier": 1.35, "tp2_multiplier": 1.55}
+        return {
+            "entry": float(settings["reset_entry_premium"]),
+            "contracts": int(settings["reset_contracts"]),
+            "stop_multiplier": 0.7,
+            "tp1_multiplier": 1.35,
+            "tp2_multiplier": 1.55,
+        }
     if "TENKAN_PULLBACK" in action or "KIJUN_SUPPORT" in action:
-        return {"entry": 2.3, "contracts": 2, "stop_multiplier": 0.68, "tp1": 2.6, "tp2": max(2.6, 2.3 * 1.37)}
-    return {"entry": 1.6, "contracts": 3, "stop_multiplier": 0.7, "tp1_multiplier": 1.3, "tp2_multiplier": 1.45}
+        entry = float(settings["tenkan_entry_premium"])
+        return {
+            "entry": entry,
+            "contracts": int(settings["tenkan_contracts"]),
+            "stop_multiplier": 0.68,
+            "tp1": max(2.6, entry * 1.13),
+            "tp2": max(2.6, entry * 1.37),
+        }
+    return {
+        "entry": float(settings["default_entry_premium"]),
+        "contracts": int(settings["default_contracts"]),
+        "stop_multiplier": 0.7,
+        "tp1_multiplier": 1.3,
+        "tp2_multiplier": 1.45,
+    }
 
 
 def _update_active_trade(active: dict[str, Any], point: dict[str, Any], point_index: int) -> dict[str, Any] | None:
@@ -1890,6 +2301,8 @@ def _evaluate_signal(candles: list[dict[str, Any]], levels: dict[str, float], ge
     fib_105 = float(levels["fib_105"])
     trend = _trend_context(candles)
     call_filter_pass = _call_entry_filter_pass(close, trend)
+    settings = _algorithm_settings()
+    market_regime = _market_regime_for_candles(candles, trend)
 
     latest_time = _parse_iso(latest["datetime"])
     age_minutes = max(0, int((generated_at - latest_time).total_seconds() // 60))
@@ -1916,6 +2329,7 @@ def _evaluate_signal(candles: list[dict[str, Any]], levels: dict[str, float], ge
         age_minutes,
         trend,
         call_filter_pass,
+        market_regime,
     )
     if index_reset:
         return index_reset
@@ -1964,7 +2378,13 @@ def _evaluate_signal(candles: list[dict[str, Any]], levels: dict[str, float], ge
     if late_session:
         return late_session
 
-    if low <= fib_618 <= close and close >= open_ and lower_wick_ratio >= 0.35:
+    fib_618_wick_threshold = _regime_adjusted_threshold(
+        settings,
+        "fib_618_lower_wick_ratio",
+        market_regime,
+        "fib_618_lower_wick_ratio_delta",
+    )
+    if low <= fib_618 <= close and close >= open_ and lower_wick_ratio >= fib_618_wick_threshold:
         if not call_filter_pass:
             return {
                 "type": "watch",
@@ -1975,7 +2395,17 @@ def _evaluate_signal(candles: list[dict[str, Any]], levels: dict[str, float], ge
                 "rule": "FIB_618_TEST",
                 "time": latest["time"],
                 "trade_decision": "test",
-                "metrics": _signal_metrics(close, lower_wick_ratio, age_minutes, trend, call_filter_pass),
+                "metrics": _signal_metrics(
+                    close,
+                    lower_wick_ratio,
+                    age_minutes,
+                    trend,
+                    call_filter_pass,
+                    {
+                        "lower_wick_ratio_threshold": fib_618_wick_threshold,
+                        "market_regime": market_regime,
+                    },
+                ),
             }
         return {
             "type": "candidate",
@@ -1986,7 +2416,17 @@ def _evaluate_signal(candles: list[dict[str, Any]], levels: dict[str, float], ge
             "rule": "FIB_618_LOWER_WICK_RECLAIM",
             "time": latest["time"],
             "trade_decision": "entry",
-            "metrics": _signal_metrics(close, lower_wick_ratio, age_minutes, trend, call_filter_pass),
+            "metrics": _signal_metrics(
+                close,
+                lower_wick_ratio,
+                age_minutes,
+                trend,
+                call_filter_pass,
+                {
+                    "lower_wick_ratio_threshold": fib_618_wick_threshold,
+                    "market_regime": market_regime,
+                },
+            ),
         }
 
     tenkan_pullback = _tenkan_pullback_continuation_signal(
@@ -2056,6 +2496,73 @@ def _evaluate_signal(candles: list[dict[str, Any]], levels: dict[str, float], ge
     }
 
 
+def _market_regime_for_candles(candles: list[dict[str, Any]], trend: dict[str, Any]) -> dict[str, Any]:
+    session = _latest_session_candles(candles)
+    closes = [_num(candle.get("close")) for candle in session[-18:]]
+    closes = [value for value in closes if value is not None]
+    ranges = []
+    for candle in session[-18:]:
+        high = _num(candle.get("high"))
+        low = _num(candle.get("low"))
+        if high is not None and low is not None:
+            ranges.append(max(high - low, 0))
+    recent_return = (closes[-1] / closes[0] - 1) if len(closes) >= 2 and closes[0] else 0.0
+    recent_range = sum(ranges[-6:]) / len(ranges[-6:]) if ranges[-6:] else 0.0
+    baseline_range = sum(ranges) / len(ranges) if ranges else recent_range
+    range_ratio = recent_range / baseline_range if baseline_range else 1.0
+    close = closes[-1] if closes else None
+    gma_30 = _level(trend, "gma_30")
+    tenkan = _level(trend, "tenkan")
+    kijun = _level(trend, "kijun")
+
+    if range_ratio >= 1.45 or abs(recent_return) >= 0.006:
+        key = "volatile"
+        label = "volatile"
+    elif close is not None and gma_30 is not None and tenkan is not None and close >= gma_30 and close >= tenkan and recent_return >= 0:
+        key = "trend_up"
+        label = "trend up"
+    elif close is not None and gma_30 is not None and kijun is not None and close < gma_30 and close < kijun and recent_return < 0:
+        key = "trend_down"
+        label = "trend down"
+    else:
+        key = "range"
+        label = "range"
+
+    settings = _algorithm_settings()
+    config = (settings.get("market_regimes") or {}).get(key, {})
+    return {
+        "key": key,
+        "label": label,
+        "recent_return_pct": round(recent_return * 100, 3),
+        "range_ratio": round(range_ratio, 3),
+        "confidence_bonus": _settings_number(config.get("confidence_bonus") if isinstance(config, dict) else None, 0),
+    }
+
+
+def _regime_adjusted_threshold(
+    settings: dict[str, Any],
+    base_key: str,
+    market_regime: dict[str, Any],
+    delta_key: str,
+) -> float:
+    base = _settings_number(settings.get(base_key), 0)
+    key = str(market_regime.get("key") or "range")
+    config = (settings.get("market_regimes") or {}).get(key, {})
+    delta = _settings_number(config.get(delta_key) if isinstance(config, dict) else None, 0)
+    return round(max(0.0, base + delta), 4)
+
+
+def _regime_adjusted_tolerance(settings: dict[str, Any], base_key: str, market_regime: dict[str, Any]) -> float:
+    base = _settings_number(settings.get(base_key), 0)
+    key = str(market_regime.get("key") or "range")
+    config = (settings.get("market_regimes") or {}).get(key, {})
+    multiplier = _settings_number(
+        config.get("index_reset_near_tolerance_multiplier") if isinstance(config, dict) else None,
+        1.0,
+    )
+    return round(max(0.0, base * multiplier), 4)
+
+
 def _index_reset_signal(
     latest: dict[str, Any],
     levels: dict[str, float],
@@ -2067,6 +2574,7 @@ def _index_reset_signal(
     age_minutes: int,
     trend: dict[str, Any],
     call_filter_pass: bool,
+    market_regime: dict[str, Any],
 ) -> dict[str, Any] | None:
     reset_mid = _level(levels, "reset_mid_618_100")
     reset_100 = _level(levels, "reset_fib_100")
@@ -2075,9 +2583,17 @@ def _index_reset_signal(
     if reset_mid is None or reset_100 is None or reset_618 is None or fib_105 is None:
         return None
 
-    touched_reset_mid = low <= reset_mid <= close
+    settings = _algorithm_settings()
+    near_tolerance = _regime_adjusted_tolerance(settings, "index_reset_near_tolerance", market_regime)
+    wick_threshold = _regime_adjusted_threshold(
+        settings,
+        "index_reset_lower_wick_ratio",
+        market_regime,
+        "index_reset_lower_wick_ratio_delta",
+    )
+    touched_reset_mid = low <= reset_mid + near_tolerance and close >= reset_mid - near_tolerance
     broke_core_zone = low <= fib_105 or close <= fib_105
-    bullish_reclaim = close >= open_ and lower_wick_ratio >= 0.30
+    bullish_reclaim = close >= open_ and lower_wick_ratio >= wick_threshold
     if not broke_core_zone or not touched_reset_mid or not bullish_reclaim:
         return None
 
@@ -2100,6 +2616,9 @@ def _index_reset_signal(
                 "index_reset_mid": reset_mid,
                 "index_reset_100": reset_100,
                 "index_reset_active": True,
+                "near_tolerance": near_tolerance,
+                "lower_wick_ratio_threshold": wick_threshold,
+                "market_regime": market_regime,
             },
         ),
     }

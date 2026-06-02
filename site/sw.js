@@ -1,19 +1,28 @@
-const PWA_VERSION = "20260602-collection-buy-time-1";
+try {
+  importScripts("./app-meta.js");
+} catch (error) {
+  self.OneMonthFinderMeta = null;
+}
+
+const META = self.OneMonthFinderMeta || {};
+const PWA_VERSION = META.version || "20260603-algorithm-next";
 const APP_CACHE = `1monthfinder-app-${PWA_VERSION}`;
-const APP_SHELL = [
-  "./",
-  "./index.html",
-  "./styles.css?v=20260602-collection-buy-time-1",
-  "./script.js?v=20260602-collection-buy-time-1",
-  "./manifest.webmanifest",
-  "./icons/icon.svg",
-  "./icons/icon-192.png",
-  "./icons/icon-512.png",
-  "./icons/icon-maskable-512.png",
-  "./icons/apple-touch-icon.png",
-  "./data/weekly_options.json",
-  "./data/public_weekly_replay.json",
-];
+const APP_SHELL =
+  META.appShell || [
+    "./",
+    "./index.html",
+    `./app-meta.js?v=${PWA_VERSION}`,
+    `./styles.css?v=${PWA_VERSION}`,
+    `./script.js?v=${PWA_VERSION}`,
+    "./manifest.webmanifest",
+    "./icons/icon.svg",
+    "./icons/icon-192.png",
+    "./icons/icon-512.png",
+    "./icons/icon-maskable-512.png",
+    "./icons/apple-touch-icon.png",
+    "./data/weekly_options.json",
+    "./data/public_weekly_replay.json",
+  ];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(

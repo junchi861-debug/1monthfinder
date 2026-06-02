@@ -377,6 +377,12 @@
       "period_algorithm_overrides": {
         "1d:pulse": 58,
         "1d:issue": 58
+      },
+      "regime_adjustments": {
+        "trend_up": -2,
+        "range": 0,
+        "volatile": 4,
+        "trend_down": 6
       }
     },
     "watch_score": {
@@ -384,6 +390,12 @@
       "period_algorithm_overrides": {
         "1d:pulse": 48,
         "1d:issue": 48
+      },
+      "regime_adjustments": {
+        "trend_up": -1,
+        "range": 0,
+        "volatile": 3,
+        "trend_down": 4
       }
     },
     "signal_score": {
@@ -391,6 +403,12 @@
       "period_algorithm_overrides": {
         "1d:pulse": 55,
         "1d:issue": 55
+      },
+      "regime_adjustments": {
+        "trend_up": -1,
+        "range": 0,
+        "volatile": 3,
+        "trend_down": 5
       }
     }
   },
@@ -427,7 +445,13 @@
     "min_trades": 20,
     "min_win_rate": 0.48,
     "min_average_return": -0.005,
-    "max_drawdown_floor": -0.45
+    "max_drawdown_floor": -0.45,
+    "max_positions": 5,
+    "embargo_days": 1,
+    "trading_costs": {
+      "slippage_bps": 5,
+      "spread_bps": 8
+    }
   },
   "validated_filters": [
     "유동성: 거래대금과 거래량이 충분한 종목만 우선 분석",

@@ -12,6 +12,19 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
+## 유지보수 검증
+
+로직이나 화면 파일을 바꾼 뒤에는 외부 시세 API를 호출하지 않는 기본 검증을 먼저 실행합니다.
+
+```powershell
+.\.venv\Scripts\python.exe -m unittest discover -s tests
+node --check site\app-meta.js
+node --check site\script.js
+node --check site\sw.js
+```
+
+PWA 캐시 버전과 앱 셸 파일 목록은 `site/app-meta.js`에서 관리합니다.
+
 ## 티커 준비
 
 `config/watchlist.csv`에 분석할 티커를 넣습니다.

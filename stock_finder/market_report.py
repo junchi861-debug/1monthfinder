@@ -370,7 +370,7 @@ def _features_at(history: pd.DataFrame, position: int) -> dict[str, object]:
     volume_surge = float(volume_5d / volume_60d) if volume_60d and not pd.isna(volume_60d) else np.nan
     high_proximity = float(close.iloc[-1] / high_252) if high_252 and not pd.isna(high_252) else np.nan
 
-    return {
+    features = {
         "last_close": round(float(close.iloc[-1]), 4),
         "ret_1d": _round(ret_1d, 4),
         "ret_5d": _round(ret_5d, 4),
@@ -393,6 +393,8 @@ def _features_at(history: pd.DataFrame, position: int) -> dict[str, object]:
         "above_ma60": bool(close.iloc[-1] > ma60) if not pd.isna(ma60) else False,
         "above_ma120": bool(close.iloc[-1] > ma120) if not pd.isna(ma120) else False,
     }
+    features["market_regime"] = _market_regime_for_features(features)
+    return features
 
 
 def _period_score(period_key: str, features: dict[str, object], algorithm_key: str = "balanced") -> dict[str, object]:
@@ -417,6 +419,22 @@ def _period_score(period_key: str, features: dict[str, object], algorithm_key: s
         "issue_score": round(float(components["attention"]), 4),
         "trend_score": round(float(components["trend"]), 4),
     }
+
+
+def _market_regime_for_features(features: dict[str, object]) -> str:
+    vol_21d = _number(features.get("vol_21d"), default=np.nan)
+    ret_63d = _number(features.get("ret_63d"), default=np.nan)
+    drawdown_63d = _number(features.get("max_drawdown_63d"), default=np.nan)
+    above_ma20 = bool(features.get("above_ma20"))
+    above_ma60 = bool(features.get("above_ma60"))
+
+    if (math.isfinite(vol_21d) and vol_21d >= 0.75) or (math.isfinite(drawdown_63d) and drawdown_63d <= -0.25):
+        return "volatile"
+    if above_ma20 and above_ma60 and (not math.isfinite(ret_63d) or ret_63d >= 0.04):
+        return "trend_up"
+    if not above_ma60 and math.isfinite(ret_63d) and ret_63d <= -0.04:
+        return "trend_down"
+    return "range"
 
 
 def _score_component(config: object, features: dict[str, object]) -> float:
@@ -455,9 +473,10 @@ def _algorithm_score_weights(period_key: str, algorithm_key: str) -> dict[str, f
 
 def _action_for_row(row: dict[str, object], period_key: str, algorithm_key: str) -> str:
     score = _number(row.get("score"))
-    if score >= _candidate_threshold(period_key, algorithm_key):
+    regime = str(row.get("market_regime") or "range")
+    if score >= _candidate_threshold(period_key, algorithm_key, regime):
         return "candidate"
-    if score >= _watch_threshold(period_key, algorithm_key):
+    if score >= _watch_threshold(period_key, algorithm_key, regime):
         return "watch"
     return "avoid"
 
@@ -482,17 +501,17 @@ def _reason_for_row(row: dict[str, object], period_key: str, algorithm_key: str)
     return "관찰 대상입니다."
 
 
-def _candidate_threshold(period_key: str, algorithm_key: str) -> float:
-    return _configured_threshold("candidate_score", period_key, algorithm_key, 70)
+def _candidate_threshold(period_key: str, algorithm_key: str, regime_key: str | None = None) -> float:
+    return _configured_threshold("candidate_score", period_key, algorithm_key, 70, regime_key)
 
 
-def _watch_threshold(period_key: str, algorithm_key: str) -> float:
-    return _configured_threshold("watch_score", period_key, algorithm_key, 55)
+def _watch_threshold(period_key: str, algorithm_key: str, regime_key: str | None = None) -> float:
+    return _configured_threshold("watch_score", period_key, algorithm_key, 55, regime_key)
 
 
-def _signal_threshold(period_key: str, algorithm_key: str) -> float:
-    configured = _configured_threshold("signal_score", period_key, algorithm_key, None)
-    return configured if configured is not None else _candidate_threshold(period_key, algorithm_key)
+def _signal_threshold(period_key: str, algorithm_key: str, regime_key: str | None = None) -> float:
+    configured = _configured_threshold("signal_score", period_key, algorithm_key, None, regime_key)
+    return configured if configured is not None else _candidate_threshold(period_key, algorithm_key, regime_key)
 
 
 def _target_candidate_count(period_key: str, algorithm_key: str) -> int | None:
@@ -522,26 +541,36 @@ def _configured_threshold(
     period_key: str,
     algorithm_key: str,
     fallback: float | None,
+    regime_key: str | None = None,
 ) -> float | None:
     config = STRATEGY_CONFIG.get("thresholds", {}).get(group, {})
     if not isinstance(config, dict):
         return fallback
 
+    threshold: float | None = None
     period_algorithm = config.get("period_algorithm_overrides", {})
     if isinstance(period_algorithm, dict) and f"{period_key}:{algorithm_key}" in period_algorithm:
-        return _number(period_algorithm[f"{period_key}:{algorithm_key}"])
+        threshold = _number(period_algorithm[f"{period_key}:{algorithm_key}"])
 
     algorithm_overrides = config.get("algorithm_overrides", {})
-    if isinstance(algorithm_overrides, dict) and algorithm_key in algorithm_overrides:
-        return _number(algorithm_overrides[algorithm_key])
+    if threshold is None and isinstance(algorithm_overrides, dict) and algorithm_key in algorithm_overrides:
+        threshold = _number(algorithm_overrides[algorithm_key])
 
     period_overrides = config.get("period_overrides", {})
-    if isinstance(period_overrides, dict) and period_key in period_overrides:
-        return _number(period_overrides[period_key])
+    if threshold is None and isinstance(period_overrides, dict) and period_key in period_overrides:
+        threshold = _number(period_overrides[period_key])
 
-    if "default" in config and config["default"] is not None:
-        return _number(config["default"])
-    return fallback
+    if threshold is None and "default" in config and config["default"] is not None:
+        threshold = _number(config["default"])
+    if threshold is None:
+        threshold = fallback
+    if threshold is None:
+        return None
+
+    adjustments = config.get("regime_adjustments", {})
+    if regime_key and isinstance(adjustments, dict) and regime_key in adjustments:
+        threshold += _number(adjustments[regime_key])
+    return threshold
 
 
 def _promote_target_candidates(
@@ -589,45 +618,56 @@ def _backtest_period(
     holding_days = int(config["holding_days"])
     min_lookback = int(config["min_lookback"])
     step = int(config["step"])
+    embargo_days = _backtest_embargo_days()
+    cost_model = _backtest_cost_model(transaction_cost)
     trades: list[dict[str, object]] = []
 
     for symbol, history in histories.items():
         base = selected_by_symbol.get(symbol)
-        if base is None or len(history) <= min_lookback + holding_days:
+        if base is None or len(history) <= min_lookback + embargo_days + holding_days:
             continue
-        for position in range(min_lookback, len(history) - holding_days, step):
-            features = _features_at(history, position)
+        for position in range(min_lookback + embargo_days, len(history) - holding_days, step):
+            feature_position = position - embargo_days
+            features = _features_at(history, feature_position)
             scored = _period_score(period_key, features, algorithm_key)
-            if scored["score"] < _signal_threshold(period_key, algorithm_key):
+            if scored["score"] < _signal_threshold(period_key, algorithm_key, str(features.get("market_regime") or "range")):
                 continue
             entry = float(history["close"].iloc[position])
             exit_price = float(history["close"].iloc[position + holding_days])
             gross = exit_price / entry - 1
-            net = gross - transaction_cost
+            net = gross - float(cost_model["total_cost"])
             trades.append(
                 {
+                    "as_of": _date_string(history.index[feature_position]),
                     "date": _date_string(history.index[position]),
                     "exit_date": _date_string(history.index[position + holding_days]),
                     "symbol": symbol,
                     "name": base["name"],
                     "score": scored["score"],
+                    "market_regime": features.get("market_regime"),
                     "gross_return": round(gross, 4),
                     "net_return": round(net, 4),
                 }
             )
 
     if not trades:
-        return _empty_backtest(transaction_cost)
+        return _empty_backtest(cost_model, embargo_days=embargo_days)
 
     frame = pd.DataFrame(trades)
-    top_frame = frame.sort_values(["date", "score"], ascending=[True, False]).groupby("date").head(5)
-    daily = top_frame.groupby("date")["net_return"].mean().reset_index()
-    equity = _equity_curve(daily)
+    max_positions = _backtest_max_positions()
+    selected_trades = _select_portfolio_trades(frame, max_positions, embargo_days)
+    top_frame = pd.DataFrame(selected_trades)
+    if top_frame.empty:
+        return _empty_backtest(cost_model, signal_count=int(len(frame)), max_positions=max_positions, embargo_days=embargo_days)
+
+    equity = _portfolio_equity_curve(top_frame, max_positions)
     returns = top_frame["net_return"].astype(float)
+    regime_counts = top_frame["market_regime"].fillna("unknown").astype(str).value_counts().to_dict()
     metrics = {
         "trade_count": int(len(top_frame)),
         "signal_count": int(len(frame)),
-        "sample_days": int(daily["date"].nunique()),
+        "sample_days": int(top_frame["date"].nunique()),
+        "exit_days": int(top_frame["exit_date"].nunique()),
         "win_rate": round(float((returns > 0).mean()), 4),
         "average_return": round(float(returns.mean()), 4),
         "median_return": round(float(returns.median()), 4),
@@ -635,7 +675,14 @@ def _backtest_period(
         "worst_return": round(float(returns.min()), 4),
         "cumulative_return": round(float(equity[-1]["equity"] - 1), 4) if equity else 0,
         "max_drawdown": round(float(_equity_max_drawdown([point["equity"] for point in equity])), 4),
-        "transaction_cost": transaction_cost,
+        "transaction_cost": cost_model["transaction_cost"],
+        "slippage_cost": cost_model["slippage_cost"],
+        "spread_cost": cost_model["spread_cost"],
+        "total_cost": cost_model["total_cost"],
+        "portfolio_model": "slot_limited_exit_marked",
+        "max_positions": max_positions,
+        "embargo_days": embargo_days,
+        "regime_counts": regime_counts,
     }
 
     best = top_frame.sort_values("net_return", ascending=False).head(5).to_dict("records")
@@ -650,11 +697,110 @@ def _backtest_period(
     }
 
 
-def _empty_backtest(transaction_cost: float) -> dict[str, object]:
+def _backtest_max_positions() -> int:
+    validation_config = STRATEGY_CONFIG.get("validation", {})
+    configured = _number(validation_config.get("max_positions"), 5)
+    return max(1, int(configured))
+
+
+def _backtest_embargo_days() -> int:
+    validation_config = STRATEGY_CONFIG.get("validation", {})
+    configured = _number(validation_config.get("embargo_days"), 0)
+    return max(0, int(configured))
+
+
+def _backtest_cost_model(transaction_cost: float) -> dict[str, float]:
+    validation_config = STRATEGY_CONFIG.get("validation", {})
+    cost_config = validation_config.get("trading_costs", {}) if isinstance(validation_config, dict) else {}
+    if not isinstance(cost_config, dict):
+        cost_config = {}
+    slippage_cost = _number(cost_config.get("slippage_bps"), 0) / 10000
+    spread_cost = _number(cost_config.get("spread_bps"), 0) / 10000
+    base_cost = _number(transaction_cost)
+    return {
+        "transaction_cost": round(base_cost, 6),
+        "slippage_cost": round(slippage_cost, 6),
+        "spread_cost": round(spread_cost, 6),
+        "total_cost": round(base_cost + slippage_cost + spread_cost, 6),
+    }
+
+
+def _select_portfolio_trades(frame: pd.DataFrame, max_positions: int, embargo_days: int = 0) -> list[dict[str, object]]:
+    if frame.empty:
+        return []
+
+    selected: list[dict[str, object]] = []
+    open_positions: list[dict[str, object]] = []
+    ordered = frame.sort_values(["date", "score"], ascending=[True, False])
+
+    for trade_date, group in ordered.groupby("date", sort=True):
+        current_date = str(trade_date)
+        current_timestamp = pd.Timestamp(current_date)
+        open_positions = [
+            trade
+            for trade in open_positions
+            if pd.Timestamp(str(trade.get("exit_date"))) + pd.Timedelta(days=max(0, int(embargo_days))) > current_timestamp
+        ]
+        held_symbols = {str(trade.get("symbol")) for trade in open_positions}
+        slots = max(0, max_positions - len(open_positions))
+        if slots <= 0:
+            continue
+
+        entry_rank = 0
+        for row in group.sort_values("score", ascending=False).to_dict("records"):
+            symbol = str(row.get("symbol"))
+            if symbol in held_symbols:
+                continue
+            entry_rank += 1
+            row["entry_rank"] = entry_rank
+            selected.append(row)
+            open_positions.append(row)
+            held_symbols.add(symbol)
+            slots -= 1
+            if slots <= 0:
+                break
+
+    return selected
+
+
+def _portfolio_equity_curve(trades: pd.DataFrame, max_positions: int) -> list[dict[str, object]]:
+    if trades.empty:
+        return []
+
+    equity = 1.0
+    rows = []
+    allocation = 1 / max(1, max_positions)
+    for exit_date, group in trades.sort_values("exit_date").groupby("exit_date", sort=True):
+        slot_return = float(group["net_return"].astype(float).sum()) * allocation
+        equity *= 1 + slot_return
+        rows.append(
+            {
+                "date": str(exit_date),
+                "equity": round(equity, 4),
+                "return": round(slot_return, 4),
+                "closed_trades": int(len(group)),
+            }
+        )
+    return rows
+
+
+def _empty_backtest(
+    cost_model: dict[str, float] | float,
+    signal_count: int = 0,
+    max_positions: int | None = None,
+    embargo_days: int | None = None,
+) -> dict[str, object]:
+    if isinstance(cost_model, dict):
+        costs = cost_model
+    else:
+        costs = _backtest_cost_model(float(cost_model))
+    max_positions = max_positions or _backtest_max_positions()
+    embargo_days = _backtest_embargo_days() if embargo_days is None else max(0, int(embargo_days))
     metrics = {
         "trade_count": 0,
-        "signal_count": 0,
+        "signal_count": signal_count,
         "sample_days": 0,
+        "exit_days": 0,
         "win_rate": None,
         "average_return": None,
         "median_return": None,
@@ -662,7 +808,14 @@ def _empty_backtest(transaction_cost: float) -> dict[str, object]:
         "worst_return": None,
         "cumulative_return": None,
         "max_drawdown": None,
-        "transaction_cost": transaction_cost,
+        "transaction_cost": costs["transaction_cost"],
+        "slippage_cost": costs["slippage_cost"],
+        "spread_cost": costs["spread_cost"],
+        "total_cost": costs["total_cost"],
+        "portfolio_model": "slot_limited_exit_marked",
+        "max_positions": max_positions,
+        "embargo_days": embargo_days,
+        "regime_counts": {},
     }
     return {"metrics": metrics, "equity_curve": [], "best_trades": [], "worst_trades": [], "validation": _strategy_validation({"metrics": metrics})}
 

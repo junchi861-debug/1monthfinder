@@ -6,6 +6,7 @@ server.*.log
 reports/*.csv
 site/data/*.csv
 site/data/*.json
+site/data/tmp_*
 !site/data/market_report.json
 !site/data/chart_config.json
 !site/data/strategy_config.json

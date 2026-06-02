@@ -2426,6 +2426,11 @@ canvas {
   gap: 0.34rem;
 }
 
+.signal-performance-grid {
+  margin-bottom: 0.42rem;
+  grid-template-columns: repeat(auto-fit, minmax(7.2rem, 1fr));
+}
+
 .crypto-signal-grid article {
   display: grid;
   min-width: 0;

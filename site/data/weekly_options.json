@@ -138,6 +138,18 @@
     },
     "rationale": "당일 수익금이 이미 담보되었으므로 그 수익을 안전마진으로 삼고, 수익극대화 물량인 1계약만으로 추가 기회를 본다."
   },
+  "execution_quality": {
+    "index_execution_cost_points": 0.15,
+    "option_spread_pct": 0.04,
+    "option_slippage_pct": 0.015,
+    "description": "신호 사후평가에는 지수 체결 슬리피지와 옵션 bid-ask/체결오차를 보수적으로 반영한다."
+  },
+  "confidence": {
+    "prior_success_rate": 0.5,
+    "prior_strength": 6,
+    "min_samples_for_full_confidence": 20,
+    "description": "룰별 표본 수가 적을 때는 Bayesian smoothing으로 confidence 과신을 줄인다."
+  },
   "entry": {
     "initial_contracts": 3,
     "entry_source": "index_trading.new_entry_zone",
@@ -296,9 +308,13 @@
           {
             "key": "friday_next_cycle",
             "label": "금요일",
-            "dte": "TODO",
+            "dte": null,
             "example_weekday": "FRIDAY",
-            "range_point_offset": "TODO",
+            "range_point_offset": null,
+            "pending_inputs": [
+              "dte",
+              "range_point_offset"
+            ],
             "target_premium_range": [
               2.5,
               3
