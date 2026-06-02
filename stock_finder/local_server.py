@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import functools
+import gzip
 import json
 import logging
 import threading
@@ -11,7 +12,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from stock_finder.asset_archive import build_asset_archive_payload
+from stock_finder.asset_archive import build_asset_archive_payload, build_asset_archive_section_payload
 from stock_finder.options_archive import build_options_replay_payload
 from stock_finder.options_monitor import (
     KST,
@@ -80,6 +81,9 @@ class StockFinderRequestHandler(SimpleHTTPRequestHandler):
         if parsed.path == "/api/asset-archive":
             self._send_asset_archive(parsed.query)
             return
+        if parsed.path.startswith("/api/assets/"):
+            self._send_asset_section(parsed.path.rsplit("/", 1)[-1], parsed.query)
+            return
         super().do_GET()
 
     def do_DELETE(self) -> None:
@@ -91,9 +95,18 @@ class StockFinderRequestHandler(SimpleHTTPRequestHandler):
 
     def _send_json(self, payload: dict, status: int = 200) -> None:
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        accepts_gzip = "gzip" in (self.headers.get("Accept-Encoding") or "").lower()
+        if accepts_gzip and len(body) > 1024:
+            body = gzip.compress(body)
+            encoding = "gzip"
+        else:
+            encoding = ""
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Cache-Control", "no-store")
+        if encoding:
+            self.send_header("Content-Encoding", encoding)
+            self.send_header("Vary", "Accept-Encoding")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -105,8 +118,18 @@ class StockFinderRequestHandler(SimpleHTTPRequestHandler):
                 "service": "1MonthFinder options backend",
                 "generated_at": datetime.now(KST).isoformat(),
                 "host": self.headers.get("Host", ""),
-                "endpoints": ["/api/options-monitor", "/api/options-replay", "/api/options-signals", "/api/asset-archive"],
+                "endpoints": [
+                    "/api/options-monitor",
+                    "/api/options-replay",
+                    "/api/options-signals",
+                    "/api/asset-archive",
+                    "/api/assets/crypto",
+                    "/api/assets/etf",
+                    "/api/assets/stocks",
+                    "/api/assets/us-stocks",
+                ],
                 "env_mode": "server",
+                "code_version": "signal-ko-1",
             }
         )
 
@@ -180,8 +203,10 @@ class StockFinderRequestHandler(SimpleHTTPRequestHandler):
     def _send_asset_archive(self, query: str) -> None:
         params = parse_qs(query)
         date = (params.get("date") or [None])[0]
+        sections = _asset_sections_from_params(params)
         try:
-            payload = build_asset_archive_payload(date=date)
+            payload = build_asset_archive_section_payload(date=date, sections=sections) if sections else build_asset_archive_payload(date=date)
+            _normalise_asset_payload(payload)
             status = 200 if payload.get("ok") else 502
         except Exception as exc:
             LOGGER.exception("asset archive payload failed")
@@ -189,6 +214,58 @@ class StockFinderRequestHandler(SimpleHTTPRequestHandler):
             payload = {"ok": False, "error": str(exc)}
 
         self._send_json(payload, status)
+
+    def _send_asset_section(self, section: str, query: str) -> None:
+        params = parse_qs(query)
+        date = (params.get("date") or [None])[0]
+        section_key = section.strip().lower().replace("-", "_")
+        try:
+            payload = build_asset_archive_section_payload(date=date, sections=[section_key])
+            _normalise_asset_payload(payload)
+            status = 200 if payload.get("ok") else 502
+        except Exception as exc:
+            LOGGER.exception("asset section payload failed")
+            status = 500
+            payload = {"ok": False, "error": str(exc), "sections": [section_key]}
+
+        self._send_json(payload, status)
+
+
+def _asset_sections_from_params(params: dict[str, list[str]]) -> list[str]:
+    raw_values = [value for value in params.get("sections", []) + params.get("section", []) if value]
+    sections: list[str] = []
+    for value in raw_values:
+        sections.extend(part.strip() for part in value.split(",") if part.strip())
+    return sections
+
+
+def _normalise_asset_payload(payload: dict) -> None:
+    crypto = payload.get("crypto") if isinstance(payload, dict) else None
+    if not isinstance(crypto, dict):
+        return
+    candidates = crypto.get("candidate_universe")
+    if not isinstance(candidates, list):
+        return
+    crypto["candidate_universe"] = sorted(candidates, key=_crypto_candidate_sort_key)
+
+
+def _crypto_candidate_sort_key(item: dict) -> tuple[int, float, str]:
+    def int_or_default(value: object, default: int) -> int:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return default
+
+    def float_or_default(value: object, default: float) -> float:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+
+    sort_rank = int_or_default(item.get("sort_rank"), 3)
+    score = float_or_default(item.get("candidate_score") or item.get("score"), 0.0)
+    key = str(item.get("key") or item.get("label") or "")
+    return (sort_rank, -score, key.lower())
 
 
 def _refresh_loop(args: argparse.Namespace) -> None:

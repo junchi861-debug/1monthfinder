@@ -17,8 +17,10 @@ CACHE_SECONDS = 10 * 60
 INTRADAY_CACHE_SECONDS = 5 * 60
 US_STOCK_CACHE_SECONDS = 15 * 60
 MIN_INDEX_HISTORY_DAYS = 20
-CRYPTO_INTRADAY_DAYS = RETENTION_DAYS + 30
-CRYPTO_INTRADAY_RANGE = "60d"
+HISTORY_FETCH_WORKERS = 6
+CRYPTO_INTRADAY_FETCH_WORKERS = 6
+CRYPTO_INTRADAY_DAYS = 30
+CRYPTO_INTRADAY_RANGE = "30d"
 CRYPTO_INTRADAY_INTERVAL = "30m"
 CRYPTO_SYMBOL_KEYS = ("btc", "eth", "xrp", "xlm")
 CRYPTO_EXCEPTION_SYMBOL_KEYS = ("id", "pokt", "inj", "doge", "trx", "sol")
@@ -136,6 +138,7 @@ def build_asset_archive_payload(date: str | None = None) -> dict[str, Any]:
     crypto_assets = [_crypto_asset_payload(key, selected_date, histories, crypto_intraday) for key in CRYPTO_SYMBOL_KEYS]
     crypto_exception_assets = [_crypto_asset_payload(key, selected_date, histories, crypto_intraday) for key in CRYPTO_EXCEPTION_SYMBOL_KEYS]
     crypto_cash_assets = [_crypto_asset_payload(key, selected_date, histories, {}) for key in CRYPTO_CASH_SYMBOL_KEYS]
+    crypto_universe = [*crypto_assets, *crypto_exception_assets]
     market_report = _read_market_report()
     index_proxy = _index_proxy(kospi200, etf)
 
@@ -172,6 +175,8 @@ def build_asset_archive_payload(date: str | None = None) -> dict[str, Any]:
             "exception_assets": crypto_exception_assets,
             "cash_assets": crypto_cash_assets,
             "summary": _crypto_summary(crypto_assets),
+            "candidate_universe": _crypto_candidate_universe(crypto_universe),
+            "calculation": _crypto_calculation_summary(crypto_universe),
             "allocation_policy": {
                 "approved_scope_symbols": [HISTORY_SYMBOLS[key][0] for key in CRYPTO_SYMBOL_KEYS],
                 "major_cap_pct": 70,
@@ -209,18 +214,144 @@ def build_asset_archive_payload(date: str | None = None) -> dict[str, Any]:
     }
 
 
+def build_asset_archive_section_payload(date: str | None = None, sections: list[str] | tuple[str, ...] | set[str] | None = None) -> dict[str, Any]:
+    selected_date = _normalize_date(date)
+    requested_sections = _normalize_sections(sections)
+    all_sections = {"options", "etf", "stocks", "us_stocks", "crypto", "market"}
+    if requested_sections == all_sections:
+        payload = build_asset_archive_payload(date=selected_date)
+        payload["sections"] = sorted(requested_sections)
+        return payload
+
+    needs_histories = bool(requested_sections & {"etf", "stocks", "crypto", "market"})
+    histories = _cached_histories() if needs_histories else {}
+    kospi200 = _instrument_payload("kospi200", selected_date, histories) if needs_histories else {}
+    etf = _instrument_payload("etf", selected_date, histories) if needs_histories else {}
+    index_proxy = _index_proxy(kospi200, etf) if needs_histories else {}
+    payload: dict[str, Any] = {
+        "ok": True,
+        "generated_at": _iso_now(),
+        "selected_date": selected_date,
+        "sections": sorted(requested_sections),
+        "policy": {
+            "detail_days": RETENTION_DAYS,
+            "summary_days": SUMMARY_RETENTION_DAYS,
+            "detail_label": "recent detail archive",
+            "summary_label": "recent summary archive",
+        },
+    }
+
+    if "options" in requested_sections:
+        options = build_options_replay_payload(date=selected_date, refresh=False)
+        payload["options"] = {
+            "date_range": options.get("date_range") or {},
+            "retention_days": options.get("retention_days", RETENTION_DAYS),
+            "summary_retention_days": options.get("summary_retention_days", SUMMARY_RETENTION_DAYS),
+            "sessions": options.get("sessions") or [],
+        }
+
+    if "etf" in requested_sections:
+        payload["etf"] = {
+            **etf,
+            "index_filter": _index_filter(index_proxy),
+            "allocation_model": {
+                "first_tranche_pct": 30,
+                "second_tranche_pct": 30,
+                "third_tranche_pct": 20,
+                "emergency_cash_pct": 20,
+            },
+        }
+
+    if "stocks" in requested_sections:
+        payload["stocks"] = _stocks_payload(_read_market_report(), index_proxy)
+
+    if "us_stocks" in requested_sections:
+        payload["us_stocks"] = _us_stocks_payload(selected_date, _cached_us_stock_histories())
+
+    if "crypto" in requested_sections:
+        crypto_intraday = _cached_crypto_intraday()
+        crypto_assets = [_crypto_asset_payload(key, selected_date, histories, crypto_intraday) for key in CRYPTO_SYMBOL_KEYS]
+        crypto_exception_assets = [_crypto_asset_payload(key, selected_date, histories, crypto_intraday) for key in CRYPTO_EXCEPTION_SYMBOL_KEYS]
+        crypto_cash_assets = [_crypto_asset_payload(key, selected_date, histories, {}) for key in CRYPTO_CASH_SYMBOL_KEYS]
+        crypto_universe = [*crypto_assets, *crypto_exception_assets]
+        payload["crypto"] = {
+            "assets": crypto_assets,
+            "exception_assets": crypto_exception_assets,
+            "cash_assets": crypto_cash_assets,
+            "summary": _crypto_summary(crypto_assets),
+            "candidate_universe": _crypto_candidate_universe(crypto_universe),
+            "calculation": _crypto_calculation_summary(crypto_universe),
+            "allocation_policy": {
+                "approved_scope_symbols": [HISTORY_SYMBOLS[key][0] for key in CRYPTO_SYMBOL_KEYS],
+                "major_cap_pct": 70,
+                "alt_cap_pct": 30,
+                "exception_pool_cap_pct": 5,
+                "exception_symbol_cap_pct": 2.5,
+                "exception_entry_slot_pct": 65,
+                "exception_weekly_probe_pct": 1,
+                "exception_weekly_stop_pct": 30,
+                "exception_pool_approval_range_pct": [6, 7, 8, 9, 10],
+                "exception_pool_absolute_max_pct": 15,
+                "intraday_box_bars": 80,
+                "forced_reduce_drawdown_pct": {"major": 15, "alt": 20, "exception": 25},
+                "forced_reduce_hard_multiplier": 1.1,
+                "reentry_bounce_pct": {"major": 5, "alt": 7, "exception": 10},
+                "cash_like_symbols": ["USDT"],
+                "scout_pct": 5,
+                "reduced_pct": 15,
+                "starter_pct": 30,
+                "starter_plus_10_pct": 40,
+                "starter_plus_20_pct": 50,
+                "base_pct": 65,
+                "base_plus_17_pct": 82,
+                "full_pct": 100,
+                "base_rebuild_market_slot_pct": 15,
+                "base_rebuild_limit_discount_pct": [2, 7],
+                "exception_pool_auto_step_pct": 1,
+            },
+            "archive_note": "Crypto payload is split by tab so the app can load the active view first.",
+        }
+
+    if "market" in requested_sections:
+        payload["market"] = {
+            "kospi200": kospi200,
+            "index_proxy": index_proxy,
+        }
+
+    return payload
+
+
+def _normalize_sections(sections: list[str] | tuple[str, ...] | set[str] | None) -> set[str]:
+    allowed = {"options", "etf", "stocks", "us_stocks", "crypto", "market"}
+    if sections is None:
+        return set(allowed)
+    normalized = {str(section or "").strip().lower().replace("-", "_") for section in sections}
+    normalized.discard("")
+    if not normalized or "all" in normalized:
+        return set(allowed)
+    return {section for section in normalized if section in allowed}
+
+
 def _cached_histories() -> dict[str, dict[str, Any]]:
     now = time.time()
     if _HISTORY_CACHE["histories"] and now - float(_HISTORY_CACHE["created_at"]) < CACHE_SECONDS:
         return _HISTORY_CACHE["histories"]
 
     histories: dict[str, dict[str, Any]] = {}
-    for key, (label, symbol) in HISTORY_SYMBOLS.items():
+
+    def fetch(item: tuple[str, tuple[str, str]]) -> tuple[str, dict[str, Any]]:
+        key, (label, symbol) = item
         try:
             candles = fetch_symbol_candles(symbol, range_value="1y", interval="1d")
-            histories[key] = {"ok": True, "label": label, "symbol": symbol, "candles": candles[-SUMMARY_RETENTION_DAYS:]}
+            return key, {"ok": True, "label": label, "symbol": symbol, "candles": candles[-SUMMARY_RETENTION_DAYS:]}
         except Exception as exc:
-            histories[key] = {"ok": False, "label": label, "symbol": symbol, "error": str(exc), "candles": []}
+            return key, {"ok": False, "label": label, "symbol": symbol, "error": str(exc), "candles": []}
+
+    with ThreadPoolExecutor(max_workers=HISTORY_FETCH_WORKERS) as executor:
+        futures = [executor.submit(fetch, item) for item in HISTORY_SYMBOLS.items()]
+        for future in as_completed(futures):
+            key, payload = future.result()
+            histories[key] = payload
 
     _HISTORY_CACHE["created_at"] = now
     _HISTORY_CACHE["histories"] = histories
@@ -234,12 +365,13 @@ def _cached_crypto_intraday() -> dict[str, dict[str, Any]]:
 
     cutoff = (datetime.now(KST).date() - timedelta(days=CRYPTO_INTRADAY_DAYS)).isoformat()
     histories: dict[str, dict[str, Any]] = {}
-    for key in (*CRYPTO_SYMBOL_KEYS, *CRYPTO_EXCEPTION_SYMBOL_KEYS):
+
+    def fetch(key: str) -> tuple[str, dict[str, Any]]:
         label, symbol = HISTORY_SYMBOLS[key]
         try:
             candles = fetch_symbol_candles(symbol, range_value=CRYPTO_INTRADAY_RANGE, interval=CRYPTO_INTRADAY_INTERVAL)
             candles = [candle for candle in candles if str(candle.get("date") or "") >= cutoff]
-            histories[key] = {
+            return key, {
                 "ok": True,
                 "label": label,
                 "symbol": symbol,
@@ -249,7 +381,7 @@ def _cached_crypto_intraday() -> dict[str, dict[str, Any]]:
                 "candles": candles,
             }
         except Exception as exc:
-            histories[key] = {
+            return key, {
                 "ok": False,
                 "label": label,
                 "symbol": symbol,
@@ -259,6 +391,12 @@ def _cached_crypto_intraday() -> dict[str, dict[str, Any]]:
                 "error": str(exc),
                 "candles": [],
             }
+
+    with ThreadPoolExecutor(max_workers=CRYPTO_INTRADAY_FETCH_WORKERS) as executor:
+        futures = [executor.submit(fetch, key) for key in (*CRYPTO_SYMBOL_KEYS, *CRYPTO_EXCEPTION_SYMBOL_KEYS)]
+        for future in as_completed(futures):
+            key, payload = future.result()
+            histories[key] = payload
 
     _INTRADAY_CACHE["created_at"] = now
     _INTRADAY_CACHE["histories"] = histories
@@ -345,7 +483,139 @@ def _crypto_asset_payload(
         },
     }
     asset["intraday"] = _instrument_intraday_payload(key, selected_date, intraday_histories)
+    asset["signal_plan"] = _crypto_backend_signal_plan(asset)
     return asset
+
+
+def _crypto_backend_signal_plan(asset: dict[str, Any]) -> dict[str, Any]:
+    key = str((asset.get("profile") or {}).get("key") or asset.get("label") or asset.get("symbol") or "").lower()
+    profile = asset.get("profile") or {}
+    summary = asset.get("summary") or {}
+    selected = asset.get("selected") or asset.get("latest") or {}
+    intraday = asset.get("intraday") or {}
+    signal_at = selected.get("datetime") or selected.get("date") or ""
+    if not asset.get("ok") or not selected:
+        return _crypto_error_signal_plan(key, "DATA_MISSING", "원천 일봉 데이터가 없어 후보 계산을 중단했습니다.", signal_at)
+    if not intraday.get("ok") or not (intraday.get("history") or []):
+        return _crypto_error_signal_plan(key, "INTRADAY_MISSING", "30분 데이터가 없어 후보 계산을 중단했습니다.", signal_at)
+
+    score = _bounded_score(summary.get("score"), 50.0)
+    ret_21 = _float_or_none(summary.get("ret_21d"))
+    ret_63 = _float_or_none(summary.get("ret_63d"))
+    intraday_selected = intraday.get("selected") or intraday.get("latest") or {}
+    intraday_change = _float_or_none(intraday_selected.get("change_pct"))
+    candidate_score = score
+    if ret_21 is not None and ret_21 > 0:
+        candidate_score += min(10.0, ret_21 * 100)
+    if ret_63 is not None and ret_63 > 0:
+        candidate_score += min(8.0, ret_63 * 60)
+    if intraday_change is not None:
+        candidate_score += max(-8.0, min(8.0, intraday_change * 0.7))
+    if str(profile.get("asset_type") or "") == "exception":
+        candidate_score -= 6.0
+    candidate_score = _bounded_score(candidate_score, 50.0)
+
+    if candidate_score >= 74:
+        signal = "candidate"
+        label = "매수 후보"
+        sort_rank = 0
+        action = "감시 추가 후 30분 지지와 리스크 기준을 확인합니다."
+    elif candidate_score >= 55:
+        signal = "watch"
+        label = "관찰"
+        sort_rank = 1
+        action = "차트 조건이 더 붙을 때까지 관찰합니다."
+    else:
+        signal = "warning"
+        label = "보수 관찰"
+        sort_rank = 2
+        action = "추세 회복 전까지 신규 감시 추가를 보류합니다."
+
+    reason = summary.get("message") or "일봉/30분 데이터 기반 후보 점수입니다."
+    return {
+        "ok": True,
+        "source": "backend",
+        "fallback": False,
+        "calculation_status": "complete",
+        "key": key,
+        "signal": signal,
+        "className": signal,
+        "label": label,
+        "score": round(score, 1),
+        "candidate_score": round(candidate_score, 1),
+        "sort_rank": sort_rank,
+        "reason": reason,
+        "message": reason,
+        "action": action,
+        "signal_at": signal_at,
+        "generated_at": _iso_now(),
+    }
+
+
+def _crypto_error_signal_plan(key: str, code: str, message: str, signal_at: str = "") -> dict[str, Any]:
+    return {
+        "ok": False,
+        "source": "backend",
+        "fallback": False,
+        "calculation_status": "error",
+        "error_code": code,
+        "key": key,
+        "signal": "warning",
+        "className": "warning",
+        "label": "계산 오류",
+        "score": 0,
+        "candidate_score": 0,
+        "sort_rank": 3,
+        "reason": message,
+        "message": message,
+        "action": "원천 데이터를 확인하기 전까지 후보 판단을 사용하지 않습니다.",
+        "signal_at": signal_at,
+        "generated_at": _iso_now(),
+    }
+
+
+def _crypto_candidate_universe(assets: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    def sort_rank(value: Any) -> int:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return 3
+
+    candidates: list[dict[str, Any]] = []
+    for asset in assets:
+        plan = asset.get("signal_plan") or {}
+        key = str(plan.get("key") or (asset.get("profile") or {}).get("key") or asset.get("label") or "").lower()
+        if not key:
+            continue
+        candidates.append(
+            {
+                "key": key,
+                "label": asset.get("label") or key.upper(),
+                "name": (asset.get("profile") or {}).get("name") or asset.get("label") or key.upper(),
+                "signal": plan.get("signal") or "warning",
+                "className": plan.get("className") or plan.get("signal") or "warning",
+                "candidate_score": plan.get("candidate_score") or 0,
+                "sort_rank": plan.get("sort_rank", 3),
+                "reason": plan.get("reason") or plan.get("message") or "",
+                "action": plan.get("action") or "",
+                "calculation_status": plan.get("calculation_status") or "error",
+            }
+        )
+    return sorted(candidates, key=lambda item: (sort_rank(item.get("sort_rank")), -float(item.get("candidate_score") or 0), str(item.get("key") or "")))
+
+
+def _crypto_calculation_summary(assets: list[dict[str, Any]]) -> dict[str, Any]:
+    plans = [asset.get("signal_plan") or {} for asset in assets]
+    error_count = len([plan for plan in plans if plan.get("calculation_status") != "complete"])
+    return {
+        "source": "backend",
+        "fallback": False,
+        "status": "error" if error_count else "complete",
+        "total": len(plans),
+        "complete_count": len(plans) - error_count,
+        "error_count": error_count,
+        "generated_at": _iso_now(),
+    }
 
 
 def _instrument_intraday_payload(key: str, selected_date: str | None, histories: dict[str, dict[str, Any]]) -> dict[str, Any]:
@@ -733,6 +1003,22 @@ def _read_market_report() -> dict[str, Any]:
 def _average(values: list[float]) -> float | None:
     sample = [value for value in values if value is not None]
     return sum(sample) / len(sample) if sample else None
+
+
+def _float_or_none(value: Any) -> float | None:
+    try:
+        if value is None:
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _bounded_score(value: Any, default: float = 0.0) -> float:
+    parsed = _float_or_none(value)
+    if parsed is None:
+        parsed = default
+    return max(0.0, min(100.0, parsed))
 
 
 def _return(values: list[float], window: int) -> float | None:

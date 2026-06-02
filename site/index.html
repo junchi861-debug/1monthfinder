@@ -18,17 +18,12 @@
     <link rel="icon" href="icons/icon.svg" type="image/svg+xml" />
     <link rel="icon" href="icons/icon-192.png" sizes="192x192" type="image/png" />
     <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
-    <link rel="stylesheet" href="styles.css?v=20260601-workbox-1" />
+    <link rel="stylesheet" href="styles.css?v=20260602-crypto-polish-1" />
   </head>
   <body>
     <main class="app-shell" aria-live="polite">
       <header class="top-bar">
-        <div>
-          <strong>1MonthFinder</strong>
-          <span id="topStatusText">데이터 대기</span>
-        </div>
         <div class="top-actions">
-          <small class="app-updated-at" aria-label="앱 업데이트 시각">2026-05-31</small>
           <button class="bell-button" type="button" id="signalInboxButton" data-open-modal="signals" aria-label="신호 알림">
             <span aria-hidden="true">&#128276;</span>
             <span class="bell-count" id="signalInboxCount" hidden>0</span>
@@ -63,7 +58,16 @@
             <button type="button" data-collection-sort="auto">오늘 할 일</button>
             <button type="button" data-collection-sort="manual">수동 순서</button>
           </div>
+          <div class="today-focus-grid" id="todayFocusGrid" aria-label="오늘의 핵심 3개"></div>
           <div class="watch-card-grid collection-watch-grid" id="collectionWatchGrid"></div>
+        </section>
+        <section class="log-panel algorithm-audit-panel" id="algorithmAuditPanel" aria-labelledby="algorithmAuditTitle">
+          <div class="section-title">
+            <h2 id="algorithmAuditTitle">알고리즘 검증</h2>
+            <span id="algorithmAuditStatus">대기</span>
+          </div>
+          <div class="price-grid audit-grid" id="algorithmAuditGrid"></div>
+          <div class="algorithm-audit-list" id="algorithmAuditList"></div>
         </section>
       </section>
 
@@ -171,6 +175,7 @@
           <h1 id="stocksTitle">국장 종목</h1>
           <p id="stocksMessage">국내 주식 후보와 지수 추종 필터를 불러오는 중입니다.</p>
           <div class="price-grid" id="stocksMetricGrid"></div>
+          <div class="data-reliability-strip" id="stocksReliabilityStrip"></div>
           <div class="chart-frame asset-chart-frame">
             <canvas id="stocksChart" height="260" aria-label="국장 종목 지수 필터 차트"></canvas>
             <div class="chart-empty" id="stocksChartEmpty" hidden>
@@ -212,6 +217,7 @@
           <h1>미장 종목</h1>
           <p id="usStocksMessage">SPY/QQQ 상대강도, 20/50/200일선, 거래량 필터를 기준으로 확장할 화면입니다.</p>
           <div class="price-grid" id="usStocksMetricGrid"></div>
+          <div class="data-reliability-strip" id="usStocksReliabilityStrip"></div>
           <div class="chart-frame asset-chart-frame">
             <canvas id="usStocksChart" height="260" aria-label="미장 종목 추세 차트"></canvas>
             <div class="chart-empty" id="usStocksChartEmpty" hidden>
@@ -281,7 +287,9 @@
               </section>
             </div>
           </details>
+          <div class="data-reliability-strip" id="cryptoReliabilityStrip"></div>
           <div class="price-grid" id="cryptoMetricGrid"></div>
+          <div class="crypto-detail-focus" id="cryptoDetailFocus" hidden></div>
           <div class="chart-frame asset-chart-frame">
             <canvas id="cryptoChart" height="260" aria-label="메이저 코인 비교 차트"></canvas>
             <div class="chart-empty" id="cryptoChartEmpty" hidden>
@@ -328,6 +336,7 @@
               <button class="soft-button" type="button" id="markSignalsRead">전체 확인 완료</button>
             </div>
             <p class="sheet-copy" id="signalInboxSummary">현재 화면의 신호를 모으는 중입니다.</p>
+            <div class="signal-inbox-buckets" id="signalInboxBuckets"></div>
             <div class="signal-inbox-list" id="signalInboxList"></div>
           </div>
 
@@ -345,7 +354,7 @@
               <canvas id="replayChart" height="360" aria-label="선택 날짜 복기 차트"></canvas>
               <div class="chart-empty" id="replayChartEmpty" hidden>
                 <strong>복기 자료 없음</strong>
-                <span>날짜 또는 백엔드 연결 상태를 확인하세요.</span>
+                <span>날짜 또는 서버 연결 상태를 확인하세요.</span>
               </div>
             </div>
             <div class="chart-legend" id="replayLegend"></div>
@@ -365,7 +374,7 @@
           <div class="modal-panel" data-modal-panel="settings" hidden>
             <div class="backend-settings">
               <label class="text-field">
-                <span>백엔드 주소</span>
+                <span>서버 주소</span>
                 <input id="apiBaseUrl" type="url" inputmode="url" placeholder="비워두면 현재 주소의 /api 사용" />
               </label>
               <div class="backend-actions">
@@ -373,10 +382,10 @@
                 <button class="soft-button" type="button" id="saveApiBaseUrl">주소 저장</button>
                 <button class="soft-button" type="button" id="resetApiBaseUrl">현재 주소</button>
               </div>
-              <p class="sheet-copy" id="backendStatus">백엔드 연결 상태를 확인하는 중입니다.</p>
+              <p class="sheet-copy" id="backendStatus">서버 연결 상태를 확인하는 중입니다.</p>
               <div class="android-backend-box">
-                <strong>안드로이드 백엔드</strong>
-                <small>Termux에서 설치 명령을 실행하면 이 폰이 옵션 감시 백엔드가 됩니다.</small>
+                <strong>안드로이드 서버</strong>
+                <small>Termux에서 설치 명령을 실행하면 이 폰이 옵션 감시 서버가 됩니다.</small>
                 <label class="text-field">
                   <span>설치 명령</span>
                   <textarea id="androidInstallCommand" rows="4" readonly></textarea>
@@ -391,7 +400,7 @@
               </div>
               <div class="backend-env-box">
                 <strong>향후 API 크레덴셜</strong>
-                <small>현재는 키가 필요 없습니다. 나중에 키움 API를 붙일 때 이 값을 로컬 백엔드에 전달하도록 확장합니다.</small>
+                <small>현재는 키가 필요 없습니다. 나중에 키움 API를 붙일 때 이 값을 로컬 서버에 전달하도록 확장합니다.</small>
                 <label class="text-field">
                   <span>환경 변수 초안</span>
                   <textarea id="backendEnvDraft" rows="7" spellcheck="false"></textarea>
@@ -462,6 +471,6 @@
       </section>
     </div>
 
-    <script src="script.js?v=20260601-workbox-1"></script>
+    <script src="script.js?v=20260602-crypto-polish-1"></script>
   </body>
 </html>

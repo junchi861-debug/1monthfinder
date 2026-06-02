@@ -6,7 +6,24 @@ const SETTINGS_KEY = "1monthfinder.options.settings";
 const WATCHLIST_KEY = "1monthfinder.watchlists";
 const COLLECTION_ORDER_KEY = "1monthfinder.collection.order";
 const COLLECTION_SORT_KEY = "1monthfinder.collection.sortMode";
+const API_CACHE_KEY = "1monthfinder.api.lastGood";
 const SIGNAL_ALERT_THROTTLE_MS = 10 * 60000;
+const API_TIMEOUT_MS = 12000;
+const MONITOR_TIMEOUT_MS = 10000;
+const ASSET_ARCHIVE_TIMEOUT_MS = 45000;
+const API_RETRY_DELAY_MS = 650;
+const ASSET_ARCHIVE_RETRY_COUNT = 2;
+const API_CACHE_MAX_AGE_MS = 30 * 60000;
+const ASSET_ARCHIVE_CACHE_MAX_AGE_MS = 60 * 60000;
+const API_CACHE_RECORD_MAX_CHARS = 1500000;
+const ASSET_ARCHIVE_SECTIONS = ["options", "etf", "stocks", "us_stocks", "crypto", "market"];
+const MANAGE_FILTERS = ["all", "strong", "watch", "risk"];
+const API_FEED_LABELS = {
+  "options-monitor": "옵션",
+  "asset-archive": "자산",
+  "options-replay": "복기",
+  "options-signals": "신호함",
+};
 const ANDROID_BACKEND_LOCAL_URL = "http://127.0.0.1:8000";
 const ANDROID_STOP_BACKEND_COMMAND = [
   "python - \"${PORT:-8000}\" <<'PY'",
@@ -368,6 +385,11 @@ const state = {
   signalInboxFilter: "all",
   signalInboxAlertedKeys: new Set(),
   signalInboxAlertThrottle: new Map(),
+  dataFeeds: {},
+  apiCache: loadApiCache(),
+  assetSectionsLoaded: new Set(),
+  assetSectionRequests: new Map(),
+  emptyAssetSectionRetries: new Map(),
   lastAssetArchiveRefreshAt: 0,
   audioContext: null,
   serviceWorkerRegistration: null,
@@ -376,6 +398,8 @@ const state = {
   watchlists: loadWatchlists(),
   collectionOrder: loadCollectionOrder(),
   collectionSortMode: loadCollectionSortMode(),
+  manageFilters: { domestic: "all", us: "all", crypto: "all" },
+  focusedAssets: { domestic: "", us: "" },
   searchCursor: { domestic: -1, us: -1 },
   wakeLock: null,
   chartResizeObserver: null,
@@ -544,6 +568,47 @@ function saveCollectionSortMode() {
   localStorage.setItem(COLLECTION_SORT_KEY, mode);
 }
 
+function loadApiCache() {
+  try {
+    const value = JSON.parse(localStorage.getItem(API_CACHE_KEY) || "{}");
+    if (!value || typeof value !== "object") return {};
+    return Object.fromEntries(
+      Object.entries(value).filter(([key, record]) => record?.payload && record.persist !== false && shouldPersistApiCache(key, record.payload)),
+    );
+  } catch (error) {
+    return {};
+  }
+}
+
+function saveApiCache() {
+  try {
+    const entries = Object.entries(state.apiCache || {})
+      .filter(
+        ([key, value]) =>
+          value?.payload &&
+          value.persist !== false &&
+          shouldPersistApiCache(key, value.payload) &&
+          Date.now() - Number(value.savedAt || 0) < API_CACHE_MAX_AGE_MS * 8,
+      )
+      .slice(-12);
+    localStorage.setItem(API_CACHE_KEY, JSON.stringify(Object.fromEntries(entries)));
+  } catch (error) {
+    try {
+      localStorage.removeItem(API_CACHE_KEY);
+    } catch (_) {}
+  }
+}
+
+function shouldPersistApiCache(key, payload) {
+  const text = String(key || "");
+  if (text.includes("/api/asset-archive") || text.includes("asset-archive")) return false;
+  try {
+    return JSON.stringify(payload).length <= API_CACHE_RECORD_MAX_CHARS;
+  } catch (error) {
+    return false;
+  }
+}
+
 function normalizeApiBaseUrl(value) {
   const text = String(value || "").trim().replace(/\/+$/, "");
   if (!text) return "";
@@ -568,6 +633,170 @@ function apiUrl(path, baseOverride = currentApiBaseUrl()) {
 
 function apiBaseLabel(base = currentApiBaseUrl()) {
   return base || "현재 주소";
+}
+
+function apiFeedKey(path = "") {
+  const text = String(path || "");
+  if (text.includes("/api/options-monitor")) return "options-monitor";
+  if (isAssetArchivePath(text)) return "asset-archive";
+  if (text.includes("/api/options-replay")) return "options-replay";
+  if (text.includes("/api/options-signals")) return "options-signals";
+  return text.replace(/^.*\/api\//, "").split(/[?#]/)[0] || "data";
+}
+
+function isAssetArchivePath(path = "") {
+  const text = String(path || "");
+  return text.includes("/api/asset-archive") || text.includes("/api/assets/");
+}
+
+function apiCacheKey(path = "") {
+  const text = String(path || "");
+  return text.startsWith("/api/") ? text : apiUrl(text);
+}
+
+async function fetchJsonWithTimeout(path, options = {}) {
+  const url = apiUrl(path);
+  const timeoutMs = Number(options.timeoutMs) || API_TIMEOUT_MS;
+  const cacheKey = options.cacheKey || apiCacheKey(path);
+  const startedAt = Date.now();
+  const retryCount = Math.max(0, Number(options.retryCount) || 0);
+  const retryDelayMs = Math.max(0, Number(options.retryDelayMs) || API_RETRY_DELAY_MS);
+  let lastError = null;
+  for (let attempt = 0; attempt <= retryCount; attempt += 1) {
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetch(url, { cache: "no-store", signal: controller.signal });
+      if (!response.ok) throw new Error(`${url} 로드 실패 (${response.status})`);
+      const payload = await response.json();
+      const record = { payload, savedAt: Date.now(), url, persist: shouldPersistApiCache(cacheKey, payload) };
+      state.apiCache[cacheKey] = record;
+      saveApiCache();
+      return {
+        ok: true,
+        payload,
+        source: "live",
+        url,
+        elapsedMs: Date.now() - startedAt,
+        receivedAt: Date.now(),
+        attempts: attempt + 1,
+      };
+    } catch (error) {
+      lastError = error;
+    } finally {
+      window.clearTimeout(timer);
+    }
+    if (attempt < retryCount) {
+      await delay(retryDelayMs * (attempt + 1));
+    }
+  }
+  const cached = state.apiCache?.[cacheKey];
+  const cacheAge = cached ? Date.now() - Number(cached.savedAt || 0) : Infinity;
+  if (cached?.payload && cacheAge <= (Number(options.cacheMaxAgeMs) || API_CACHE_MAX_AGE_MS)) {
+    return {
+      ok: true,
+      payload: cached.payload,
+      source: "cache",
+      stale: true,
+      url,
+      elapsedMs: Date.now() - startedAt,
+      receivedAt: Date.now(),
+      cacheAgeMs: cacheAge,
+      attempts: retryCount + 1,
+      error: lastError?.name === "AbortError" ? "timeout" : String(lastError?.message || lastError),
+    };
+  }
+  return {
+    ok: false,
+    payload: null,
+    source: "error",
+    url,
+    elapsedMs: Date.now() - startedAt,
+    receivedAt: Date.now(),
+    attempts: retryCount + 1,
+    error: lastError?.name === "AbortError" ? "timeout" : String(lastError?.message || lastError),
+  };
+}
+
+function delay(ms = 0) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+function recordDataFeed(path, result = {}) {
+  const key = apiFeedKey(path);
+  state.dataFeeds[key] = {
+    key,
+    label: API_FEED_LABELS[key] || key,
+    ok: Boolean(result.ok),
+    source: result.source || (result.ok ? "live" : "error"),
+    stale: Boolean(result.stale),
+    url: result.url || apiUrl(path),
+    elapsedMs: result.elapsedMs,
+    receivedAt: result.receivedAt || Date.now(),
+    cacheAgeMs: result.cacheAgeMs,
+    attempts: result.attempts || 1,
+    error: result.error || "",
+    generatedAt: result.payload?.generated_at || result.payload?.selected_date || "",
+  };
+  renderDataHealthStrip();
+  renderAppUpdatedAt();
+}
+
+function renderDataHealthStrip() {
+  const root = document.querySelector("#dataHealthStrip");
+  if (!root) return;
+  const keys = ["options-monitor", "asset-archive", "options-replay", "options-signals"];
+  root.innerHTML = keys.map((key) => dataFeedPill(state.dataFeeds[key] || { key, label: API_FEED_LABELS[key] || key })).join("");
+}
+
+function dataFeedPill(feed = {}) {
+  const info = dataFeedStateInfo(feed);
+  const age = feed.receivedAt ? relativeAgeText(feed.receivedAt) : "-";
+  return `
+    <article class="data-feed-pill ${escapeAttr(info.className)}">
+      <span>${escapeHtml(feed.label || feed.key || "데이터")}</span>
+      <strong>${escapeHtml(info.status)}</strong>
+      <small>${escapeHtml(age)}${escapeHtml(info.detail)}</small>
+    </article>
+  `;
+}
+
+function dataFeedStateInfo(feed = {}) {
+  const source = feed.source || "pending";
+  const attempts = Number(feed.attempts || 1);
+  const retry = attempts > 1 ? ` · 재시도 ${attempts}` : "";
+  const error = feed.error ? ` · ${feed.error === "timeout" ? "시간초과" : "연결실패"}` : "";
+  if (feed.ok && source === "live") return { className: feed.stale ? "watch" : "candidate", status: "실제", detail: retry };
+  if (feed.ok && source === "cache") return { className: "warning", status: "오류", detail: retry || " · 캐시 fallback" };
+  if (source === "pending") return { className: "neutral", status: "대기", detail: retry };
+  return { className: "warning", status: "오류", detail: error || retry };
+}
+
+function relativeAgeText(timestamp) {
+  const diff = Math.max(0, Date.now() - Number(timestamp || 0));
+  if (diff < 1500) return "방금";
+  if (diff < 60000) return `${Math.round(diff / 1000)}초 전`;
+  if (diff < 3600000) return `${Math.round(diff / 60000)}분 전`;
+  return `${Math.round(diff / 3600000)}시간 전`;
+}
+
+function renderAppUpdatedAt() {
+  const node = document.querySelector("#appUpdatedAt");
+  if (!node) return;
+  const generatedAt = [
+    state.monitor?.generated_at,
+    state.assetArchive?.generated_at,
+    ...Object.values(state.dataFeeds || {}).map((feed) => feed.generatedAt),
+  ].filter(Boolean).sort().at(-1);
+  node.textContent = compactDateTime(generatedAt) || shortDate(kstDateString());
+}
+
+function compactDateTime(value) {
+  const text = String(value || "");
+  const match = text.match(/^(\d{4})-(\d{2})-(\d{2})(?:T|\s)(\d{2}):(\d{2})/);
+  if (match) return `${match[2]}-${match[3]} ${match[4]}:${match[5]}`;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return shortDate(text);
+  return "";
 }
 
 function loadSignalLog() {
@@ -609,17 +838,19 @@ async function init() {
   state.dashboardMode = requestedDate && requestedDate < kstDateString() ? "replay" : "live";
   state.selectedDate = state.dashboardMode === "replay" ? requestedDate : kstDateString();
   state.activeReplayDate = state.selectedDate === kstDateString() ? null : state.selectedDate;
+  resetAssetSectionsLoaded();
+  const initialAssetSections = assetSectionsForTab(state.activeTab);
 
   const [weeklyOptions, replayPayload, publicReplay, signalLogPayload, assetArchive] = await Promise.all([
     loadOptionalJson("data/weekly_options.json"),
     loadOptionalJson("/api/options-replay"),
     loadOptionalJson("data/public_weekly_replay.json"),
     loadOptionalJson("/api/options-signals"),
-    loadOptionalJson(`/api/asset-archive?date=${encodeURIComponent(state.selectedDate)}`),
+    loadOptionalJson(assetArchiveRequestPath(state.selectedDate, initialAssetSections)),
   ]);
 
   state.weeklyOptions = weeklyOptions || fallbackWeeklyOptions;
-  state.assetArchive = assetArchive || fallbackAssetArchive();
+  state.assetArchive = mergeAssetArchivePayload(fallbackAssetArchive(), assetArchive);
   state.lastAssetArchiveRefreshAt = assetArchive ? Date.now() : 0;
   state.replay = normalizeReplayPayload(replayPayload) || publicReplay || state.weeklyOptions.signal_replay || {};
   if (!state.activeReplayDate) state.activeReplayDate = activeReplaySession()?.date || state.replay.active_session_id || null;
@@ -632,6 +863,7 @@ async function init() {
   await loadMonitor(true);
   startPolling();
   openStartupPanelFromUrl();
+  warmAssetArchiveSections();
 }
 
 function openStartupPanelFromUrl() {
@@ -659,6 +891,7 @@ async function setActiveTab(tab, options = {}) {
   renderNavigation();
   renderAssetTabs();
   scheduleChartRedraw();
+  ensureAssetSectionsForTab(next).catch(() => {});
 }
 
 function setCryptoTab(tab) {
@@ -715,18 +948,133 @@ function defaultReplayDate() {
   return candidates[0] || offsetDate(today, -1);
 }
 
+function normalizeAssetSections(sections = ASSET_ARCHIVE_SECTIONS) {
+  const list = Array.isArray(sections) ? sections : String(sections || "").split(",");
+  const normalized = list
+    .map((section) => String(section || "").trim().toLowerCase().replace(/-/g, "_"))
+    .filter((section) => ASSET_ARCHIVE_SECTIONS.includes(section));
+  return [...new Set(normalized.length ? normalized : ASSET_ARCHIVE_SECTIONS)];
+}
+
+function assetSectionsForTab(tab = state.activeTab) {
+  if (tab === "crypto") return ["crypto"];
+  if (tab === "stocks") return ["stocks", "market"];
+  if (tab === "usStocks") return ["us_stocks"];
+  if (tab === "etf") return ["etf", "market"];
+  if (tab === "options") return ["options", "etf", "market"];
+  return ASSET_ARCHIVE_SECTIONS;
+}
+
+function assetArchiveRequestPath(date = state.selectedDate, sections = ASSET_ARCHIVE_SECTIONS) {
+  const normalized = normalizeAssetSections(sections);
+  const query = `date=${encodeURIComponent(date || "")}`;
+  if (normalized.length === 1) {
+    return `/api/assets/${normalized[0].replace(/_/g, "-")}?${query}`;
+  }
+  return `/api/asset-archive?${query}&sections=${encodeURIComponent(normalized.join(","))}`;
+}
+
+function mergeAssetArchivePayload(current, payload) {
+  if (!payload) return current || fallbackAssetArchive();
+  const base = current || fallbackAssetArchive();
+  const merged = {
+    ...base,
+    ok: payload.ok ?? base.ok,
+    generated_at: payload.generated_at || base.generated_at,
+    selected_date: payload.selected_date || base.selected_date,
+    policy: payload.policy || base.policy,
+  };
+  ASSET_ARCHIVE_SECTIONS.forEach((section) => {
+    if (payload[section] != null) merged[section] = payload[section];
+  });
+  markAssetSectionsLoaded(payload);
+  return merged;
+}
+
+function markAssetSectionsLoaded(payload = {}) {
+  const sections = Array.isArray(payload.sections)
+    ? payload.sections
+    : ASSET_ARCHIVE_SECTIONS.filter((section) => payload[section] != null);
+  sections.forEach((section) => {
+    const normalized = normalizeAssetSections([section])[0];
+    if (normalized) state.assetSectionsLoaded.add(normalized);
+  });
+}
+
+function resetAssetSectionsLoaded() {
+  state.assetSectionsLoaded = new Set();
+  state.emptyAssetSectionRetries = new Map();
+}
+
+function assetArchiveHasSections(sections = []) {
+  return normalizeAssetSections(sections).every((section) => state.assetSectionsLoaded.has(section));
+}
+
+async function ensureAssetSectionsForTab(tab = state.activeTab, options = {}) {
+  const sections = assetSectionsForTab(tab);
+  if (assetArchiveHasSections(sections)) return state.assetArchive;
+  return refreshAssetArchive(state.selectedDate, sections, { render: true, ...options });
+}
+
+function warmAssetArchiveSections() {
+  const missing = ASSET_ARCHIVE_SECTIONS.filter((section) => !state.assetSectionsLoaded.has(section));
+  if (!missing.length) return;
+  window.setTimeout(async () => {
+    for (const section of missing) {
+      if (!state.assetSectionsLoaded.has(section)) {
+        await refreshAssetArchive(state.selectedDate, [section], { render: false });
+      }
+    }
+    renderAssetTabs();
+  }, 500);
+}
+
+function retryEmptyAssetSection(section, hasData) {
+  const normalized = normalizeAssetSections([section])[0];
+  if (!normalized || hasData) return;
+  const key = `${state.selectedDate || ""}:${normalized}`;
+  const count = Number(state.emptyAssetSectionRetries.get(key) || 0);
+  if (count >= 2) return;
+  state.emptyAssetSectionRetries.set(key, count + 1);
+  window.setTimeout(() => {
+    refreshAssetArchive(state.selectedDate, [normalized], { render: state.activeTab === tabForAssetSection(normalized) }).catch(() => {});
+  }, 900 + count * 1500);
+}
+
+function assetSectionDataState(section, hasData, feed = state.dataFeeds?.["asset-archive"] || {}) {
+  const normalized = normalizeAssetSections([section])[0] || section;
+  const key = `${state.selectedDate || ""}:${normalized}`;
+  const retryCount = Number(state.emptyAssetSectionRetries.get(key) || 0);
+  const source = feed.source || "pending";
+  if (hasData) {
+    if (source === "cache") return { value: "캐시 오류", signal: "warning" };
+    if (source === "live") return { value: "실제", signal: "candidate" };
+    return { value: "확인됨", signal: "watch" };
+  }
+  if (retryCount > 0 && retryCount < 2) return { value: `재요청 ${retryCount}/2`, signal: "watch" };
+  if (retryCount >= 2) return { value: "데이터 없음", signal: "warning" };
+  if (source === "cache") return { value: "캐시 확인", signal: "watch" };
+  if (source === "error") return { value: feed.error === "timeout" ? "시간초과" : "연결실패", signal: "warning" };
+  return { value: "대기", signal: "neutral" };
+}
+
+function tabForAssetSection(section) {
+  return { crypto: "crypto", stocks: "stocks", us_stocks: "usStocks", etf: "etf" }[section] || state.activeTab;
+}
+
 async function setSelectedDate(date) {
   const next = clampDate(date || kstDateString());
   const requestSeq = state.dateLoadSeq + 1;
   state.dateLoadSeq = requestSeq;
   state.selectedDate = next;
+  resetAssetSectionsLoaded();
   const loadingStartedAt = performance.now();
   setDateLoading(true, next);
   try {
     const replayRequest = isLiveDate(next)
       ? Promise.resolve(null)
       : loadOptionalJson(`/api/options-replay?date=${encodeURIComponent(next || "")}`);
-    const assetRequest = loadOptionalJson(`/api/asset-archive?date=${encodeURIComponent(next || "")}`);
+    const assetRequest = loadOptionalJson(assetArchiveRequestPath(next, assetSectionsForTab(state.activeTab)));
     const [replayPayload, assetPayload] = await Promise.all([replayRequest, assetRequest]);
     if (requestSeq !== state.dateLoadSeq) return;
     if (isLiveDate(next)) {
@@ -744,11 +1092,12 @@ async function setSelectedDate(date) {
       }
     }
     if (assetPayload) {
-      state.assetArchive = assetPayload;
+      state.assetArchive = mergeAssetArchivePayload(fallbackAssetArchive(), assetPayload);
       state.lastAssetArchiveRefreshAt = Date.now();
     }
     renderStaticPanels();
     renderMonitor();
+    warmAssetArchiveSections();
   } finally {
     if (requestSeq === state.dateLoadSeq) {
       const remaining = 300 - (performance.now() - loadingStartedAt);
@@ -766,10 +1115,28 @@ function moveSelectedDate(deltaDays) {
   setSelectedDate(next);
 }
 
-async function refreshAssetArchive(date = state.selectedDate) {
-  const payload = await loadOptionalJson(`/api/asset-archive?date=${encodeURIComponent(date || "")}`);
+async function refreshAssetArchive(date = state.selectedDate, sections = assetSectionsForTab(state.activeTab), options = {}) {
+  const normalizedSections = normalizeAssetSections(sections);
+  const requestKey = `${date || ""}:${normalizedSections.join(",")}`;
+  if (state.assetSectionRequests.has(requestKey)) return state.assetSectionRequests.get(requestKey);
+  const request = loadOptionalJson(assetArchiveRequestPath(date, normalizedSections))
+    .then((payload) => {
+      if (payload) {
+        state.assetArchive = mergeAssetArchivePayload(state.assetArchive || fallbackAssetArchive(), payload);
+        state.lastAssetArchiveRefreshAt = Date.now();
+        if (options.render) renderAssetTabs();
+      }
+      return payload;
+    })
+    .finally(() => state.assetSectionRequests.delete(requestKey));
+  state.assetSectionRequests.set(requestKey, request);
+  return request;
+}
+
+async function refreshFullAssetArchive(date = state.selectedDate) {
+  const payload = await loadOptionalJson(assetArchiveRequestPath(date, ASSET_ARCHIVE_SECTIONS));
   if (payload) {
-    state.assetArchive = payload;
+    state.assetArchive = mergeAssetArchivePayload(state.assetArchive || fallbackAssetArchive(), payload);
     state.lastAssetArchiveRefreshAt = Date.now();
   }
 }
@@ -787,14 +1154,18 @@ function setDateLoading(loading, target = state.selectedDate) {
 }
 
 async function loadOptionalJson(path) {
-  const url = apiUrl(path);
-  try {
-    const response = await fetch(url, { cache: "no-store" });
-    if (!response.ok) throw new Error(`${url} 로드 실패`);
-    return response.json();
-  } catch (error) {
-    return null;
-  }
+  const result = await fetchJsonWithTimeout(path, {
+    timeoutMs: isAssetArchivePath(path) ? ASSET_ARCHIVE_TIMEOUT_MS : API_TIMEOUT_MS,
+    retryCount: isAssetArchivePath(path) ? ASSET_ARCHIVE_RETRY_COUNT : 0,
+    retryDelayMs: API_RETRY_DELAY_MS,
+    cacheMaxAgeMs: isAssetArchivePath(path)
+      ? ASSET_ARCHIVE_CACHE_MAX_AGE_MS
+      : path.includes("/api/options-replay")
+        ? API_CACHE_MAX_AGE_MS * 8
+        : API_CACHE_MAX_AGE_MS,
+  });
+  recordDataFeed(path, result);
+  return result.payload;
 }
 
 function normalizeReplayPayload(payload) {
@@ -843,12 +1214,32 @@ function bindControls() {
     }
     const cryptoAddButton = event.target.closest("[data-crypto-add]");
     if (cryptoAddButton) {
-      addCryptoWatch(cryptoAddButton.dataset.cryptoAdd);
+      cryptoAddButton.disabled = true;
+      cryptoAddButton.textContent = "추가중";
+      if (!addCryptoWatch(cryptoAddButton.dataset.cryptoAdd)) {
+        cryptoAddButton.disabled = false;
+        cryptoAddButton.textContent = "+ 추가";
+      }
       return;
     }
     const cryptoRemoveButton = event.target.closest("[data-crypto-remove]");
     if (cryptoRemoveButton) {
       removeCryptoWatch(cryptoRemoveButton.dataset.cryptoRemove);
+      return;
+    }
+    const manageFilterButton = event.target.closest("[data-manage-filter]");
+    if (manageFilterButton) {
+      setManageFilter(manageFilterButton.dataset.manageScope, manageFilterButton.dataset.manageFilter);
+      return;
+    }
+    const cryptoFocusCard = event.target.closest("[data-crypto-focus]");
+    if (cryptoFocusCard && !event.target.closest("button, summary, .crypto-card-details")) {
+      setCryptoTab(cryptoFocusCard.dataset.cryptoFocus);
+      return;
+    }
+    const stockFocusCard = event.target.closest("[data-stock-focus-symbol]");
+    if (stockFocusCard && !event.target.closest("button, input, summary, .crypto-card-details")) {
+      setStockFocus(stockFocusCard.dataset.stockFocusScope, stockFocusCard.dataset.stockFocusSymbol);
       return;
     }
     const button = event.target.closest("[data-chart-action]");
@@ -1008,31 +1399,68 @@ async function loadMonitor(manual = false) {
     else renderTopStatus();
   }
   try {
-    const response = await fetch(apiUrl("/api/options-monitor"), { cache: "no-store" });
-    const snapshot = await response.json();
+    const result = await fetchJsonWithTimeout("/api/options-monitor", {
+      timeoutMs: MONITOR_TIMEOUT_MS,
+      cacheMaxAgeMs: API_CACHE_MAX_AGE_MS,
+    });
+    recordDataFeed("/api/options-monitor", result);
+    if (!result.payload) throw new Error(result.error || "옵션 감시 API 응답 없음");
+    const snapshot = result.source === "cache"
+      ? {
+        ...result.payload,
+        ok: false,
+        cached: true,
+        signal: {
+          ...(result.payload.signal || result.payload.main?.signal || {}),
+          type: "avoid",
+          label: "캐시",
+          title: "최근 정상 데이터",
+          message: `실시간 옵션 API가 응답하지 않아 ${relativeAgeText(Date.now() - (result.cacheAgeMs || 0))} 데이터를 임시 표시합니다.`,
+          rule: "LOCAL_API_CACHE_ERROR",
+          reliability: "error",
+          label: "캐시 오류",
+          title: "실시간 API 오류",
+          message: `실시간 옵션 API가 응답하지 않아 ${relativeAgeText(Date.now() - (result.cacheAgeMs || 0))} 캐시 데이터는 오류 신호로만 표시합니다.`,
+          metrics: { ...((result.payload.signal || {}).metrics || {}), age_minutes: Math.round((result.cacheAgeMs || 0) / 60000) },
+        },
+      }
+      : result.payload;
     state.monitor = snapshot;
     renderMonitor();
     maybeBackfillSignalLog(snapshot);
-    maybeRecordSignal(snapshot);
-    maybeFireAlert(snapshot);
-    await maybeRefreshLiveAssetArchive();
-    maybeFireCryptoAlerts();
-    maybeFireSignalInboxAlerts();
+    if (!snapshot.cached) {
+      maybeRecordSignal(snapshot);
+      maybeFireAlert(snapshot);
+      await maybeRefreshLiveAssetArchive();
+      maybeFireCryptoAlerts();
+      maybeFireSignalInboxAlerts();
+    }
   } catch (error) {
     state.monitor = {
       ok: false,
       signal: {
-        type: "warning",
+        type: "avoid",
         label: "연결 실패",
         title: "로컬 서버 연결 실패",
         message: "옵션 감시 API를 읽지 못했습니다. 서버 실행 상태를 확인하세요.",
         rule: "LOCAL_API_FAILED",
+        reliability: "error",
+        label: "연결 오류",
+        title: "로컬 서버 연결 실패",
+        message: "옵션 감시 API를 읽지 못했습니다. 서버 실행 상태를 확인하기 전까지 신호를 사용하지 않습니다.",
         time: "-",
         metrics: {},
       },
       main: { candles: [], latest: null, levels: {} },
       secondary: { latest: null },
     };
+    recordDataFeed("/api/options-monitor", {
+      ok: false,
+      source: "error",
+      elapsedMs: 0,
+      receivedAt: Date.now(),
+      error: String(error?.message || error),
+    });
     renderMonitor();
   }
 }
@@ -1056,7 +1484,7 @@ function renderMonitor() {
   const age = number(signal.metrics?.age_minutes);
 
   if (board) {
-    board.className = signalBoardClass(signalType);
+    board.className = `${signalBoardClass(signalType)} option-live-board`;
   }
   setText("#signalBadge", signal.label || "대기");
   document.querySelector("#signalBadge").className = `signal-pill ${signalType}`;
@@ -1064,10 +1492,17 @@ function renderMonitor() {
   setText("#signalMessage", signal.message || "KOSPI200 5분봉 데이터를 기다리고 있습니다.");
   setText("#latestCandleTime", `최신봉 ${latest.time || "-"}`);
   setText("#delayText", Number.isFinite(age) ? `지연 ${age}분` : "지연 -");
+  const livePlan = buildLiveTradePlan(snapshot);
+  renderBoardDecision("#signalBoard", {
+    scope: "options",
+    signal: signalType,
+    signalScore: commonSignalScore({ signal: signalType, score: signal.score, momentum: signal.metrics?.momentum }),
+    detail: signal.message || livePlan.status || "KOSPI200 5분봉 신호 대기",
+    actionText: optionActionText(signal, livePlan),
+  });
   renderTopStatus();
   renderPriceGrid(latest, secondaryLatest, levels);
   renderLiveLegend(levels);
-  const livePlan = buildLiveTradePlan(snapshot);
   renderOptionSignalCard(snapshot, livePlan);
   renderLiveTradePlan(livePlan);
   drawLiveChart(livePlan);
@@ -1174,7 +1609,6 @@ function renderOptionSignalCard(snapshot = state.monitor || {}, livePlan = null)
     actionText: optionActionText(signal, livePlan, score),
   });
   const items = [
-    { label: "점수", value: `${score}점`, text: decision.status },
     { label: "KOSPI200", value: formatNum(latest.close, 2), text: latest.time || "-" },
     { label: "KODEX200", value: formatNum(secondaryLatest.close, 0), text: "보조" },
     { label: "61.8%", value: formatNum(levels.fib_618, 2), text: "기준" },
@@ -1210,11 +1644,20 @@ function optionDecisionCard({ className = "watch", title = "신호", badge = "�
         <span class="signal-pill ${escapeAttr(normalized)}">${escapeHtml(badge)}</span>
         ${scoreBadgeHtml(score, normalized)}
       </header>
-      <p class="crypto-card-summary">${escapeHtml(summary || "신호 조건을 확인합니다.")}</p>
-      ${decisionStackHtml(decision)}
-      <div class="crypto-signal-grid">
-        ${cryptoSignalGridItems(items)}
-      </div>
+      <details class="crypto-card-details">
+        <summary>상세 조건 보기</summary>
+        <div class="crypto-detail-section">
+          <strong>핵심 판단</strong>
+          <p class="crypto-card-summary">${escapeHtml(summary || "신호 조건을 확인합니다.")}</p>
+          ${decisionDetailHtml(decision)}
+        </div>
+        <div class="crypto-detail-section">
+          <strong>지표</strong>
+          <div class="crypto-signal-grid">
+            ${cryptoSignalGridItems(items)}
+          </div>
+        </div>
+      </details>
     </article>
   `;
 }
@@ -1240,6 +1683,21 @@ function renderLiveLegend(levels) {
 
 function legendItem(item) {
   return `<span style="color:${escapeAttr(item.color)}"><i></i>${escapeHtml(item.label)}</span>`;
+}
+
+function renderCryptoLegend(entries = []) {
+  const root = document.querySelector("#cryptoLegend");
+  if (!root) return;
+  const items = Array.isArray(entries) ? entries.filter((item) => item?.label) : [];
+  const visible = items.slice(0, 4);
+  const hidden = items.slice(4);
+  root.classList.toggle("is-collapsible", hidden.length > 0);
+  root.innerHTML = [
+    ...visible.map(legendItem),
+    hidden.length
+      ? `<details class="legend-more"><summary>+${hidden.length}</summary><div>${hidden.map(legendItem).join("")}</div></details>`
+      : "",
+  ].join("");
 }
 
 function chartLevelEntries(levels = {}) {
@@ -1502,6 +1960,8 @@ function renderSignalLog() {
     return;
   }
   root.innerHTML = visibleLog
+    .slice()
+    .sort((a, b) => signalPriorityRank(a) - signalPriorityRank(b) || signalLogTimestamp(b) - signalLogTimestamp(a))
     .map(optionLogCard)
     .join("");
 }
@@ -1535,11 +1995,20 @@ function optionLogCard(item = {}) {
         <span class="signal-pill ${escapeAttr(signal)}">${escapeHtml(item.title || "신호")}</span>
         ${scoreBadgeHtml(score, signal)}
       </header>
-      <p class="crypto-card-summary">${escapeHtml(tradeText || "당일 옵션 신호입니다.")}</p>
-      ${decisionStackHtml(decision)}
-      <div class="crypto-signal-grid">
-        ${cryptoSignalGridItems(items)}
-      </div>
+      <details class="crypto-card-details">
+        <summary>상세 조건 보기</summary>
+        <div class="crypto-detail-section">
+          <strong>핵심 판단</strong>
+          <p class="crypto-card-summary">${escapeHtml(tradeText || "당일 옵션 신호입니다.")}</p>
+          ${decisionDetailHtml(decision)}
+        </div>
+        <div class="crypto-detail-section">
+          <strong>지표</strong>
+          <div class="crypto-signal-grid">
+            ${cryptoSignalGridItems(items)}
+          </div>
+        </div>
+      </details>
     </article>
   `;
 }
@@ -1769,8 +2238,10 @@ function renderDateToolbar() {
 function renderAssetTabs() {
   renderNavigation();
   renderDateToolbar();
+  renderDataHealthStrip();
   renderTopStatus();
   renderCollectionPanel();
+  renderAlgorithmAuditPanel();
   renderOptionsPanel();
   renderEtfPanel();
   renderStocksPanel();
@@ -1795,7 +2266,15 @@ function renderCollectionPanel() {
   setText("#collectionMessage", items.length
     ? `직접 감시 중인 카드만 표시합니다. 오늘 할 일 ${actionCount}개 · ${state.collectionSortMode === "auto" ? "자동 정렬" : "수동 순서"}`
     : "국장·미장·코인 화면에서 감시 항목을 추가하면 이곳에 카드로 표시됩니다.");
+  renderBoardDecision("#collectionBoard", {
+    scope: "collection",
+    signal: urgentCount ? "watch" : "neutral",
+    signalScore: items.length ? Math.round(items.reduce((sum, item) => sum + commonSignalScore(item), 0) / items.length) : 0,
+    detail: items.length ? `처리 필요 ${actionCount}개 · 감시 ${items.length}개` : "감시 항목을 먼저 추가하세요.",
+    actionText: actionCount ? "작업함과 각 카드의 다음 행동 확인" : "후보 화면에서 감시 추가",
+  });
   renderCollectionSortControls();
+  renderTodayFocusGrid(items);
   const root = document.querySelector("#collectionWatchGrid");
   if (!root) return;
   root.innerHTML = items.length
@@ -1810,6 +2289,159 @@ function renderCollectionPanel() {
       jumpTab: "stocks",
       emptyActions: true,
     });
+}
+
+function renderTodayFocusGrid(items = []) {
+  const root = document.querySelector("#todayFocusGrid");
+  if (!root) return;
+  const topItems = autoSortedCollectionItems(items).slice(0, 3);
+  root.innerHTML = topItems.length
+    ? topItems.map(todayFocusCard).join("")
+    : `<article class="today-focus-card neutral"><span>오늘 핵심</span><strong>대기</strong><small>감시 항목을 추가하면 우선순위 3개가 표시됩니다.</small></article>`;
+}
+
+function todayFocusCard(item = {}) {
+  const signal = signalClass(item.signal || "watch");
+  const decision = signalDecisionSummary(item);
+  const cryptoAttr = item.jumpCrypto ? ` data-jump-crypto="${escapeAttr(item.jumpCrypto)}"` : "";
+  const focusAttr = item.focusKey ? ` data-jump-focus="${escapeAttr(item.focusKey)}"` : "";
+  return `
+    <article class="today-focus-card ${escapeAttr(signal)}" role="button" tabindex="0" data-jump-tab="${escapeAttr(item.jumpTab || "")}"${cryptoAttr}${focusAttr}>
+      <span>${escapeHtml(item.kind || "핵심")} · ${escapeHtml(item.badge || decision.status)}</span>
+      <strong>${escapeHtml(item.title || "-")}</strong>
+      <small>${escapeHtml(decision.action)}</small>
+    </article>
+  `;
+}
+
+function renderAlgorithmAuditPanel() {
+  const root = document.querySelector("#algorithmAuditPanel");
+  if (!root) return;
+  const auditItems = algorithmAuditItems();
+  const averageScore = auditItems.length
+    ? Math.round(auditItems.reduce((sum, item) => sum + item.score, 0) / auditItems.length)
+    : 0;
+  const weakCount = auditItems.filter((item) => item.signal === "warning" || item.score < 50).length;
+  const liveFeeds = Object.values(state.dataFeeds || {}).filter((feed) => feed.ok && feed.source === "live").length;
+  setText("#algorithmAuditStatus", auditItems.length ? `${averageScore}점 · 점검 ${weakCount}개` : "대기");
+  const grid = document.querySelector("#algorithmAuditGrid");
+  if (grid) {
+    grid.innerHTML = [
+      { label: "검증점수", value: `${averageScore || "-"}점`, text: weakCount ? `개선 ${weakCount}개` : "정상" },
+      { label: "실제 API", value: `${liveFeeds}개`, text: "실시간 응답" },
+      { label: "캐시/오류", value: `${Object.values(state.dataFeeds || {}).filter((feed) => feed.source === "cache" || !feed.ok).length}개`, text: "상태 표시" },
+      { label: "감시카드", value: `${collectionWatchItems().length}개`, text: state.collectionSortMode === "auto" ? "자동 정렬" : "수동 정렬" },
+    ].map(metricCard).join("");
+  }
+  const list = document.querySelector("#algorithmAuditList");
+  if (list) {
+    list.innerHTML = auditItems.map(algorithmAuditCard).join("");
+  }
+}
+
+function algorithmAuditItems() {
+  const archive = state.assetArchive || fallbackAssetArchive();
+  const replaySessions = Array.isArray(state.replay?.sessions) ? state.replay.sessions.slice(0, 12) : [];
+  const optionStats = replaySessions.map((session) => buildReplayTradePlan(session).stats || {});
+  const optionEntries = optionStats.reduce((sum, stats) => sum + (Number(stats.entries) || 0), 0);
+  const optionStops = optionStats.reduce((sum, stats) => sum + (Number(stats.stops) || 0), 0);
+  const optionNet = optionStats.reduce((sum, stats) => sum + (Number(stats.netProfit) || 0), 0);
+  const optionScore = clampScore(58 + Math.min(optionEntries, 20) * 1.3 + Math.max(-18, Math.min(18, optionNet * 0.25)) - optionStops * 2.5);
+
+  const stocks = archive.stocks || {};
+  const shortTerm = stocks.short_term || {};
+  const swing = stocks.swing || {};
+  const stockCount = (shortTerm.top || []).length + (swing.top || []).length;
+  const stockBacktest = shortTerm.backtest || {};
+  const stockWinRate = number(stockBacktest.win_rate ?? stockBacktest.winRate ?? stockBacktest.avg_win_rate);
+  const stockScore = clampScore(50 + stockCount * 5 + (stockWinRate != null ? (stockWinRate > 1 ? stockWinRate : stockWinRate * 100) * 0.22 : 0));
+
+  const crypto = archive.crypto || {};
+  const cryptoPlans = [
+    ...cryptoVisibleAssets(crypto.assets || []).map((asset) => cryptoPlanForAsset(asset, crypto)),
+    ...cryptoVisibleAssets(crypto.exception_assets || []).map((asset) => cryptoPlanForAsset(asset, crypto)),
+  ];
+  const cryptoScores = cryptoPlans.map(cryptoQualityScore);
+  const cryptoScore = cryptoScores.length
+    ? Math.round(cryptoScores.reduce((sum, score) => sum + score, 0) / cryptoScores.length)
+    : 0;
+  const cryptoRisk = cryptoPlans.filter((plan) => ["warning", "sell", "avoid"].includes(signalClass(plan.className))).length;
+
+  const feedItems = Object.values(state.dataFeeds || {});
+  const feedScore = clampScore(30 + feedItems.filter((feed) => feed.ok && feed.source === "live").length * 18 - feedItems.filter((feed) => !feed.ok).length * 16 - feedItems.filter((feed) => feed.source === "cache").length * 7);
+  const proof = signalProofSummary();
+
+  return [
+    {
+      title: "데이터 수신",
+      signal: feedScore >= 70 ? "candidate" : feedScore >= 50 ? "watch" : "warning",
+      score: feedScore,
+      status: feedItems.length ? "출처 추적" : "수신 대기",
+      reason: feedItems.length ? `${feedItems.filter((feed) => feed.source === "live").length}개 실제 · ${feedItems.filter((feed) => feed.source === "cache").length}개 캐시` : "아직 API 응답 없음",
+      action: feedScore >= 50 ? "상단 데이터 상태만 확인" : "서버 실행/포트 확인",
+    },
+    {
+      title: "옵션 알고리즘",
+      signal: optionScore >= 70 ? "candidate" : optionScore >= 50 ? "watch" : "warning",
+      score: optionScore,
+      status: `${replaySessions.length}일 표본`,
+      reason: `진입 ${optionEntries}회 · 손절 ${optionStops}회 · 순손익 ${formatNum(optionNet, 2)}`,
+      action: optionStops ? "손절 구간 재점검" : "실시간 신호 유지",
+    },
+    {
+      title: "신호 성과 로그",
+      signal: proof.score >= 70 ? "candidate" : proof.score >= 50 ? "watch" : "warning",
+      score: proof.score,
+      status: `${proof.count}개 기록`,
+      reason: proof.reason,
+      action: proof.action,
+    },
+    {
+      title: "국장 알고리즘",
+      signal: stockScore >= 70 ? "candidate" : stockScore >= 50 ? "watch" : "warning",
+      score: stockScore,
+      status: `${stockCount}개 후보`,
+      reason: `1일 ${formatNum(shortTerm.candidate_count, 0)} · 1달 ${formatNum(swing.candidate_count, 0)} · 지수 ${stocks.index_filter?.label || "대기"}`,
+      action: stockCount ? "후보 카드에서 차트 확인" : "거래대금/지수 필터 대기",
+    },
+    {
+      title: "코인 알고리즘",
+      signal: cryptoScore >= 70 ? "candidate" : cryptoRisk ? "warning" : "watch",
+      score: cryptoScore,
+      status: `${cryptoPlans.length}개 감시`,
+      reason: `평균 ${cryptoScore || "-"}점 · 위험 ${cryptoRisk}개 · 좋은 신호순 후보 정렬`,
+      action: cryptoRisk ? "비중/손절 먼저 확인" : "차트 기준선 확인",
+    },
+  ];
+}
+
+function signalProofSummary() {
+  const entries = Array.isArray(state.signalLog) ? state.signalLog : [];
+  const dated = entries.filter((item) => signalLogDate(item));
+  const recent = dated.slice(0, 30);
+  const actionable = recent.filter((item) => ["entry", "buy", "candidate", "risk", "stop", "take_profit", "watch"].includes(signalClass(item.type || item.signal || item.kind)));
+  const backendCount = recent.filter((item) => String(item.source || "").includes("backend")).length;
+  const score = clampScore(42 + Math.min(recent.length, 20) * 2 + Math.min(backendCount, 10) * 2);
+  return {
+    count: recent.length,
+    score,
+    reason: recent.length ? `최근 ${recent.length}개 · 서버 계산 ${backendCount}개 · 실행형 ${actionable.length}개` : "아직 누적 신호가 적습니다.",
+    action: recent.length >= 10 ? "1/3/7일 결과율 추적 준비" : "신호를 더 누적해 검증 표본 확보",
+  };
+}
+
+function algorithmAuditCard(item = {}) {
+  const signal = signalClass(item.signal || "watch");
+  return `
+    <article class="algorithm-audit-card ${escapeAttr(signal)}">
+      <div>
+        <strong>${escapeHtml(item.title || "검증")}</strong>
+        <small>${escapeHtml(item.status || "대기")} · ${escapeHtml(item.reason || "조건 확인")}</small>
+        <small class="next-action">${escapeHtml(item.action || "재점검")}</small>
+      </div>
+      ${scoreBadgeHtml(item.score || 0, signal)}
+    </article>
+  `;
 }
 
 function signalNeedsAttention(item = {}) {
@@ -2051,7 +2683,7 @@ function collectionCard(item, options = {}) {
         <strong>${escapeHtml(item.title || "-")}</strong>
         <small>${escapeHtml(item.value || "-")}</small>
       </div>
-      ${decisionStackHtml(decision)}
+      ${decisionDetailHtml(decision)}
       ${foldedDecisionDetails(item.detail, decision)}
       <div class="collection-card-metrics">
         ${metrics.map((metric) => `<span><b>${escapeHtml(metric.label)}</b>${escapeHtml(metric.value || "-")}</span>`).join("")}
@@ -2065,18 +2697,32 @@ function collectionCard(item, options = {}) {
 function collectionCardMetrics(item = {}) {
   const decision = signalDecisionSummary(item);
   if (Array.isArray(item.metrics) && item.metrics.length) {
-    const hasScoreMetric = item.metrics.some((metric) => metric?.label === "점수" || metric?.label === "공통");
-    return [
-      ...(hasScoreMetric ? [] : [{ label: "점수", value: `${decision.score}점` }]),
-      ...item.metrics,
-    ].slice(0, 4);
+    const metrics = compactDetailMetrics(item.metrics, 4);
+    if (metrics.length) return metrics;
   }
   return [
-    { label: "점수", value: `${decision.score}점` },
     { label: "값", value: item.value || "-" },
-    { label: "신호", value: item.badge || "-" },
+    { label: "분류", value: item.kind || "-" },
     { label: "다음", value: decision.action },
-  ];
+  ].slice(0, 4);
+}
+
+function isDuplicateDetailMetric(metric = {}) {
+  const label = String(metric.label || "").toLowerCase();
+  return label.includes("점수") || label.includes("score") || label.includes("공통") || label === "신호";
+}
+
+function compactDetailMetrics(items = [], limit = 4) {
+  const seen = new Set();
+  return (Array.isArray(items) ? items : [])
+    .filter((item) => item && !isDuplicateDetailMetric(item))
+    .filter((item) => {
+      const key = String(item.label || "").trim();
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .slice(0, limit);
 }
 
 function decisionStackHtml(decision = {}) {
@@ -2093,6 +2739,21 @@ function decisionStackHtml(decision = {}) {
       <div>
         <span>다음</span>
         <strong>${escapeHtml(decision.action || "새 신호 대기")}</strong>
+      </div>
+    </div>
+  `;
+}
+
+function decisionDetailHtml(decision = {}) {
+  return `
+    <div class="decision-stack decision-detail-stack">
+      <div>
+        <span>근거</span>
+        <strong>${escapeHtml(decision.reason || "조건 확인 중")}</strong>
+      </div>
+      <div>
+        <span>다음</span>
+        <strong>${escapeHtml(decision.action || "다음 신호 대기")}</strong>
       </div>
     </div>
   `;
@@ -2123,6 +2784,84 @@ function signalDecisionSummary(item = {}) {
   const reason = compactSignalText(item.reason || item.detail || item.message || item.badge || status, 68);
   const action = item.actionText || signalActionText(signal, score, item.scope);
   return { signal, score, status, reason, action };
+}
+
+function signalPriorityRank(item = {}) {
+  const signal = signalClass(item.signal || item.className || item.type || item.final_action || item.trade_signal || "watch");
+  const score = commonSignalScore(item);
+  const title = `${item.title || ""} ${item.message || ""} ${item.trade?.status || ""}`.toLowerCase();
+  if (["sell", "avoid"].includes(signal) || title.includes("청산") || title.includes("손절") || title.includes("stop")) return 0;
+  if (signal === "warning" || score <= 44) return 1;
+  if (["candidate", "buy"].includes(signal) || score >= 72) return 2;
+  if (signal === "watch" || score >= 55) return 3;
+  return 4;
+}
+
+function signalSortLabel(item = {}) {
+  return String(item.title || item.name || item.label || item.symbol || item.key || "").toLowerCase();
+}
+
+function signalPrioritySort(a = {}, b = {}) {
+  const rankDiff = signalPriorityRank(a) - signalPriorityRank(b);
+  if (rankDiff) return rankDiff;
+  const scoreDiff = commonSignalScore(b) - commonSignalScore(a);
+  if (scoreDiff) return scoreDiff;
+  return signalSortLabel(a).localeCompare(signalSortLabel(b));
+}
+
+function signalOpportunityRank(item = {}) {
+  const backendRank = number(item.sortRank ?? item.sort_rank);
+  if (backendRank != null && backendRank >= 0) return backendRank;
+  const signal = signalClass(item.signal || item.className || item.type || "watch");
+  const score = commonSignalScore(item);
+  if (["warning", "sell", "avoid"].includes(signal) || score <= 44) return 2;
+  if (["candidate", "buy"].includes(signal) || score >= 72) return 0;
+  if (signal === "watch" || score >= 55) return 1;
+  return 4;
+}
+
+function signalOpportunitySort(a = {}, b = {}) {
+  const rankDiff = signalOpportunityRank(a) - signalOpportunityRank(b);
+  if (rankDiff) return rankDiff;
+  const scoreDiff = commonSignalScore(b) - commonSignalScore(a);
+  if (scoreDiff) return scoreDiff;
+  return signalSortLabel(a).localeCompare(signalSortLabel(b));
+}
+
+function sortBySignalPriority(items = []) {
+  return [...items].sort(signalPrioritySort);
+}
+
+function renderBoardDecision(boardSelector, item = {}) {
+  const board = document.querySelector(boardSelector);
+  if (!board) return;
+  let root = board.querySelector(".board-decision-strip");
+  if (!root) {
+    root = document.createElement("div");
+    root.className = "board-decision-strip";
+    const anchor = board.querySelector(".price-grid, .sub-tab-row, .chart-frame");
+    board.insertBefore(root, anchor || board.firstChild?.nextSibling || null);
+  }
+  const decision = signalDecisionSummary(item);
+  root.innerHTML = `
+    <article>
+      <span>현재</span>
+      <strong>${escapeHtml(decision.status)}</strong>
+    </article>
+    <article>
+      <span>근거</span>
+      <strong>${escapeHtml(decision.reason)}</strong>
+    </article>
+    <article>
+      <span>다음</span>
+      <strong>${escapeHtml(decision.action)}</strong>
+    </article>
+  `;
+}
+
+function clearBoardDecision(boardSelector) {
+  const root = document.querySelector(`${boardSelector} .board-decision-strip`);
+  if (root) root.remove();
 }
 
 function signalStatusText(signal, score = null) {
@@ -2231,11 +2970,35 @@ function renderSignalInbox() {
   setText("#signalInboxSummary", items.length
     ? `${state.selectedDate} 오늘 신호 ${items.length}개 · 처리 필요 ${pendingCount}개 · 확인 완료 ${doneCount}개 · 평균 ${avgScore}점 · ${signalInboxFilterLabel(state.signalInboxFilter)} ${filteredItems.length}개`
     : `${state.selectedDate} 기준 처리할 오늘 신호가 없습니다.`);
+  renderSignalInboxBuckets(items);
   const root = document.querySelector("#signalInboxList");
   if (!root) return;
   root.innerHTML = filteredItems.length
     ? filteredItems.map(signalInboxItemHtml).join("")
     : `<article class="empty-log">선택한 필터에 표시할 신호가 없습니다.</article>`;
+}
+
+function renderSignalInboxBuckets(items = []) {
+  const root = document.querySelector("#signalInboxBuckets");
+  if (!root) return;
+  const buckets = ["action", "risk", "weak", "watch"].map((key) => {
+    const bucketItems = items.filter((item) => signalInboxWorkBucket(item).key === key);
+    const unread = bucketItems.filter(signalInboxNeedsAction).length;
+    return { key, items: bucketItems, unread };
+  });
+  root.innerHTML = buckets
+    .map((bucket) => {
+      const label = signalInboxFilterLabel(bucket.key);
+      const active = state.signalInboxFilter === bucket.key ? " active" : "";
+      return `
+        <button type="button" class="signal-bucket ${escapeAttr(bucket.key)}${active}" data-signal-filter="${escapeAttr(bucket.key)}">
+          <span>${escapeHtml(label)}</span>
+          <strong>${bucket.items.length}</strong>
+          <small>${bucket.unread ? `${bucket.unread}개 미확인` : "정리됨"}</small>
+        </button>
+      `;
+    })
+    .join("");
 }
 
 function signalInboxItems() {
@@ -2589,6 +3352,13 @@ function renderEtfPanel() {
   setText("#etfDateText", `${state.selectedDate} · ${live ? "실시간" : "요약"}`);
   setText("#etfMessage", summary.message || "KODEX200 ETF 분할매수 컨텍스트를 확인합니다.");
   const etfScore = commonSignalScore({ signal, score: summary.score });
+  renderBoardDecision("#etfBoard", {
+    scope: "etf",
+    signal,
+    signalScore: etfScore,
+    detail: summary.message || "KODEX200 30분/일봉 기준 확인",
+    actionText: signalActionText(signal, etfScore, "etf"),
+  });
   document.querySelector("#etfMetricGrid").innerHTML = [
     { label: "KODEX200", value: formatNum(selected.close, 0), text: selected.date || selected.time || "-" },
     { label: "공통점수", value: `${etfScore}점`, text: signalStatusText(signal, etfScore) },
@@ -2638,6 +3408,7 @@ function renderEtfSignalCard({ signal = "watch", score = 0, summary = {}, select
 
 function renderStocksPanel() {
   const stocks = state.assetArchive?.stocks || {};
+  retryEmptyAssetSection("stocks", Boolean((stocks.short_term?.top || []).length || (stocks.swing?.top || []).length || stocks.index_filter?.label));
   const indexFilter = stocks.index_filter || {};
   const signal = signalClass(indexFilter.signal || "neutral");
   const board = document.querySelector("#stocksBoard");
@@ -2655,17 +3426,26 @@ function renderStocksPanel() {
   const candidateItems = stockManageCandidateItems("domestic");
   const stats = stockManageStats(activeItems, candidateItems);
   const panelScore = stats.avgScore || commonSignalScore({ signal, score: indexFilter.score });
+  renderBoardDecision("#stocksBoard", {
+    scope: "domestic",
+    signal,
+    signalScore: panelScore,
+    detail: indexFilter.message || `후보 ${candidateItems.length}개 · 감시 ${activeItems.length}개`,
+    actionText: stats.strong ? "강한 후보 차트 확인" : signalActionText(signal, panelScore, "domestic"),
+  });
   document.querySelector("#stocksMetricGrid").innerHTML = [
     { label: "공통점수", value: `${panelScore}점`, text: `감시 ${activeItems.length}개` },
     { label: "오늘 확인", value: `${stats.strong}개`, text: "신규 부각/강한 관찰" },
     { label: "위험/약화", value: `${stats.risk}개`, text: "축소 또는 보류" },
     { label: "분석 종목", value: formatNum(universe.total_count, 0), text: `1일 ${formatNum(shortTerm.candidate_count, 0)} · 1달 ${formatNum(swing.candidate_count, 0)}` },
   ].map(metricCard).join("");
+  renderStockReliability("domestic", stocks);
   renderStockManagePanel("domestic");
 }
 
 function renderUsStocksPanel() {
   const usStocks = state.assetArchive?.us_stocks || {};
+  retryEmptyAssetSection("us_stocks", Boolean((usStocks.assets || []).length || (usStocks.top || []).length));
   const summary = usStocks.summary || {};
   const signal = signalClass(summary.signal || "neutral");
   const board = document.querySelector("#usStocksBoard");
@@ -2679,13 +3459,144 @@ function renderUsStocksPanel() {
   const candidateItems = stockManageCandidateItems("us");
   const stats = stockManageStats(activeItems, candidateItems);
   const panelScore = stats.avgScore || commonSignalScore({ signal, score: summary.score });
+  renderBoardDecision("#usStocksBoard", {
+    scope: "us",
+    signal,
+    signalScore: panelScore,
+    detail: summary.message || `후보 ${candidateItems.length}개 · 감시 ${activeItems.length}개`,
+    actionText: stats.strong ? "상대강도 유지 확인" : signalActionText(signal, panelScore, "us"),
+  });
   document.querySelector("#usStocksMetricGrid").innerHTML = [
     { label: "공통점수", value: `${panelScore}점`, text: `감시 ${activeItems.length}개` },
     { label: "오늘 확인", value: `${stats.strong}개`, text: "신규 부각/상대강도" },
     { label: "위험/약화", value: `${stats.risk}개`, text: "갭/추세 이탈" },
     { label: "추적군", value: formatNum(usStocks.ready_count, 0), text: `${formatNum(usStocks.tracked_count, 0)}개 중` },
   ].map(metricCard).join("");
+  renderStockReliability("us", usStocks);
   renderStockManagePanel("us");
+}
+
+function renderStockReliability(scope, payload = {}) {
+  const root = document.querySelector(scope === "us" ? "#usStocksReliabilityStrip" : "#stocksReliabilityStrip");
+  if (!root) return;
+  const feed = state.dataFeeds?.["asset-archive"] || {};
+  const hasData = scope === "us"
+    ? Boolean((payload.assets || []).length || (payload.top || []).length)
+    : Boolean((payload.short_term?.top || []).length || (payload.swing?.top || []).length || payload.index_filter?.label);
+  const dataState = assetSectionDataState(scope === "us" ? "us_stocks" : "stocks", hasData, feed);
+  const items = scope === "us"
+    ? [
+      { label: "데이터", value: dataState.value, signal: dataState.signal },
+      { label: "준비", value: `${formatNum(payload.ready_count, 0)}/${formatNum(payload.tracked_count, 0)}`, signal: number(payload.ready_count) ? "candidate" : "warning" },
+      { label: "후보", value: `${formatNum(payload.candidate_count, 0)}개`, signal: number(payload.candidate_count) ? "watch" : "neutral" },
+      { label: "기준", value: (payload.benchmarks || []).some((asset) => asset?.ok) ? "SPY/QQQ" : "부족", signal: (payload.benchmarks || []).some((asset) => asset?.ok) ? "candidate" : "warning" },
+    ]
+    : [
+      { label: "데이터", value: dataState.value, signal: dataState.signal },
+      { label: "지수", value: payload.index_filter?.label || "-", signal: signalClass(payload.index_filter?.signal || "watch") },
+      { label: "1일", value: `${formatNum(payload.short_term?.candidate_count, 0)}개`, signal: number(payload.short_term?.candidate_count) ? "watch" : "neutral" },
+      { label: "1달", value: `${formatNum(payload.swing?.candidate_count, 0)}개`, signal: number(payload.swing?.candidate_count) ? "watch" : "neutral" },
+    ];
+  root.innerHTML = items.map((item) => `
+    <article class="${escapeAttr(signalClass(item.signal || "neutral"))}">
+      <span>${escapeHtml(item.label)}</span>
+      <strong>${escapeHtml(item.value || "-")}</strong>
+    </article>
+  `).join("");
+}
+
+function renderCryptoReliability(crypto = state.assetArchive?.crypto || {}) {
+  const root = document.querySelector("#cryptoReliabilityStrip");
+  if (!root) return;
+  root.innerHTML = "";
+  root.hidden = true;
+}
+
+function setManageFilter(scope, filter) {
+  const key = manageScopeKey(scope);
+  const next = MANAGE_FILTERS.includes(filter) ? filter : "all";
+  state.manageFilters[key] = next;
+  renderAssetTabs();
+}
+
+function setStockFocus(scope, symbol) {
+  const key = manageScopeKey(scope);
+  if (!["domestic", "us"].includes(key)) return;
+  const target = normalizeSearchText(symbol);
+  if (!target) return;
+  state.focusedAssets[key] = target;
+  renderAssetTabs();
+  scheduleChartRedraw();
+  window.setTimeout(() => focusTargetCard(collectionItemKey(key, target)), 60);
+}
+
+function manageScopeKey(scope) {
+  return scope === "crypto" ? "crypto" : scope === "us" ? "us" : "domestic";
+}
+
+function currentManageFilter(scope) {
+  const key = manageScopeKey(scope);
+  return MANAGE_FILTERS.includes(state.manageFilters[key]) ? state.manageFilters[key] : "all";
+}
+
+function manageCandidateSignalItem(item, scope) {
+  if (scope === "crypto") {
+    const plan = item?.plan || {};
+    const score = cryptoCandidateScore(plan);
+    return {
+      ...plan,
+      signal: plan.className,
+      signalScore: score,
+      title: cryptoAssetName(item?.asset),
+      key: cryptoAssetKey(item?.asset),
+    };
+  }
+  const score = stockCandidateScore(item);
+  return {
+    ...item,
+    signalScore: score,
+    title: item?.name || item?.symbol,
+  };
+}
+
+function manageCandidateBucket(item, scope) {
+  const rank = signalOpportunityRank(manageCandidateSignalItem(item, scope));
+  if (rank === 0) return "strong";
+  if (rank >= 2 && rank <= 3) return "risk";
+  return "watch";
+}
+
+function filteredManageCandidates(scope, candidates = []) {
+  const filter = currentManageFilter(scope);
+  if (filter === "all") return candidates;
+  return candidates.filter((item) => manageCandidateBucket(item, scope) === filter);
+}
+
+function manageFilterTabs(scope, candidates = []) {
+  const key = manageScopeKey(scope);
+  const active = currentManageFilter(key);
+  const counts = {
+    all: candidates.length,
+    strong: candidates.filter((item) => manageCandidateBucket(item, key) === "strong").length,
+    watch: candidates.filter((item) => manageCandidateBucket(item, key) === "watch").length,
+    risk: candidates.filter((item) => manageCandidateBucket(item, key) === "risk").length,
+  };
+  const labels = {
+    all: "전체",
+    strong: "좋은 신호",
+    watch: "관찰",
+    risk: "위험",
+  };
+  return `
+    <div class="manage-filter-tabs" role="tablist" aria-label="추가 후보 필터">
+      ${MANAGE_FILTERS.map((filter) => `
+        <button type="button" class="${active === filter ? "active" : ""}" data-manage-scope="${escapeAttr(key)}" data-manage-filter="${escapeAttr(filter)}">
+          <span>${escapeHtml(labels[filter])}</span>
+          <strong>${formatNum(counts[filter], 0)}</strong>
+        </button>
+      `).join("")}
+    </div>
+  `;
 }
 
 function renderStockManagePanel(scope) {
@@ -2693,16 +3604,20 @@ function renderStockManagePanel(scope) {
   const panel = document.querySelector(config.panel);
   if (!panel) return;
   renderSearchResults(scope);
-  const activeItems = watchItemsForScope(scope);
+  const activeItems = sortBySignalPriority(watchItemsForScope(scope));
   const candidates = stockManageCandidateItems(scope);
   const stats = stockManageStats(activeItems, candidates);
-  setText(config.summary, `감시 ${activeItems.length}개 · 후보 ${candidates.length}개 · 평균 ${stats.avgScore}점`);
+  setText(config.summary, `감시 ${activeItems.length}개 · 추가 후보 ${candidates.length}개 · 평균 ${stats.avgScore}점`);
   renderStockSignalList(config, activeItems);
   const candidateRoot = document.querySelector(config.candidateList);
   if (candidateRoot) {
-    candidateRoot.innerHTML = candidates.length
-      ? candidates.slice(0, 16).map((item) => searchResultItem(item)).join("")
-      : `<article class="asset-manage-empty">추가 가능한 ${config.label} 후보가 없습니다.</article>`;
+    const filtered = filteredManageCandidates(scope, candidates);
+    candidateRoot.innerHTML = [
+      manageFilterTabs(scope, candidates),
+      filtered.length
+        ? filtered.slice(0, 16).map((item) => stockCandidateItem(item)).join("")
+        : `<article class="asset-manage-empty">선택한 필터에 표시할 ${config.label} 후보가 없습니다.</article>`,
+    ].join("");
   }
 }
 
@@ -2717,7 +3632,13 @@ function renderStockSignalList(config, activeItems = []) {
           <h2>감시 종목 없음</h2>
           <span class="signal-pill watch">대기</span>
         </header>
-        <p class="crypto-card-summary">${escapeHtml(`${config.label} 추가 패널에서 감시할 종목을 추가하면 이곳에서 삭제와 신호 확인을 같이 할 수 있습니다.`)}</p>
+        <details class="crypto-card-details">
+          <summary>상세 조건 보기</summary>
+          <div class="crypto-detail-section">
+            <strong>안내</strong>
+            <p class="crypto-card-summary">${escapeHtml(`${config.label} 추가 패널에서 감시할 종목을 추가하면 이곳에서 삭제와 신호 확인을 같이 할 수 있습니다.`)}</p>
+          </div>
+        </details>
       </article>
     `;
 }
@@ -2745,28 +3666,32 @@ function stockSignalCard(item) {
   const decision = signalDecisionSummary(item);
   const metrics = collectionCardMetrics(item);
   const detail = String(item.detail || "").trim();
-  const detailBlock = detail.length > 78
-    ? `
-      <details class="crypto-card-details">
-        <summary>상세 조건 보기</summary>
-        <p>${escapeHtml(detail)}</p>
-      </details>
-    `
-    : "";
+  const badgeText = stockBadgeText(item.badge, signal, decision.score);
+  const focusScope = manageScopeKey(item.scope);
+  const focusSymbol = normalizeSearchText(item.symbol);
+  const focusClass = state.focusedAssets[focusScope] === focusSymbol ? " is-chart-focus" : "";
   return `
-    <article class="crypto-signal-card stock-signal-card ${escapeAttr(signal)}" data-focus-key="${escapeAttr(collectionItemKey(item.scope, item.symbol))}">
+    <article class="crypto-signal-card stock-signal-card ${escapeAttr(signal)}${focusClass}" data-focus-key="${escapeAttr(collectionItemKey(item.scope, item.symbol))}" data-stock-focus-scope="${escapeAttr(focusScope)}" data-stock-focus-symbol="${escapeAttr(focusSymbol)}">
       <header>
         <h2>${escapeHtml(item.title || item.symbol || "-")}</h2>
-        <span class="signal-pill ${escapeAttr(signal)}">${escapeHtml(item.badge || "관찰")}</span>
+        <span class="signal-pill ${escapeAttr(signal)}">${escapeHtml(badgeText)}</span>
         ${scoreBadgeHtml(decision.score, signal)}
         <button class="mini-remove" type="button" data-watch-scope="${escapeAttr(item.scope)}" data-watch-remove="${escapeAttr(item.symbol)}">삭제</button>
       </header>
-      <p class="crypto-card-summary">${escapeHtml(detail || "지수 필터와 상대강도 기준으로 감시합니다.")}</p>
-      ${decisionStackHtml(decision)}
-      <div class="crypto-signal-grid">
-        ${cryptoSignalGridItems(metrics)}
-      </div>
-      ${detailBlock}
+      <details class="crypto-card-details">
+        <summary>상세 조건 보기</summary>
+        <div class="crypto-detail-section">
+          <strong>핵심 판단</strong>
+          <p class="crypto-card-summary">${escapeHtml(detail || "지수 필터와 상대강도 기준으로 감시합니다.")}</p>
+          ${decisionDetailHtml(decision)}
+        </div>
+        <div class="crypto-detail-section">
+          <strong>지표</strong>
+          <div class="crypto-signal-grid">
+            ${cryptoSignalGridItems(metrics)}
+          </div>
+        </div>
+      </details>
     </article>
   `;
 }
@@ -2788,7 +3713,7 @@ function stockManageCandidateItems(scope) {
         alreadyAdded: false,
       };
     })
-    .sort((a, b) => stockCandidateScore(b) - stockCandidateScore(a) || String(a.symbol).localeCompare(String(b.symbol)));
+    .sort((a, b) => signalOpportunitySort(stockManageCandidateSortItem(a), stockManageCandidateSortItem(b)));
 }
 
 function domesticSignalRows() {
@@ -2865,6 +3790,14 @@ function stockCandidateScore(item) {
   const hint = searchSignalHint(item);
   const match = item.scope === "us" ? findUsAsset(item.symbol) : findDomesticCandidate(item.symbol);
   return stockQualityScore(item, match, hint.signal);
+}
+
+function stockManageCandidateSortItem(item = {}) {
+  return {
+    ...item,
+    signalScore: stockCandidateScore(item),
+    title: item.name || item.symbol,
+  };
 }
 
 function stockQualityScore(item = {}, match = null, signalOverride = null) {
@@ -2969,11 +3902,119 @@ function cryptoPlanForAsset(asset, crypto = state.assetArchive?.crypto || {}) {
   return cryptoSignalPlan(asset, cryptoSignalPlanScope(crypto), { exceptionMode: cryptoAssetProfile(asset).assetType === "exception" });
 }
 
+function backendCryptoSignalPlan(asset = {}) {
+  const plan = asset?.signal_plan || asset?.backend_signal || null;
+  if (!plan || typeof plan !== "object") return null;
+  return plan;
+}
+
+function backendCryptoSignalComplete(asset = {}) {
+  const plan = backendCryptoSignalPlan(asset);
+  return Boolean(plan && plan.source === "backend" && plan.calculation_status === "complete" && plan.fallback !== true);
+}
+
+function backendCryptoErrorPlan(asset = {}) {
+  const key = cryptoAssetKey(asset);
+  const name = cryptoAssetName(asset);
+  const plan = backendCryptoSignalPlan(asset);
+  const message = plan?.message || plan?.reason || "서버 계산값이 없어 임시 신호를 차단했습니다.";
+  return {
+    key,
+    name,
+    className: "warning",
+    label: plan?.label || "계산 오류",
+    message,
+    signalSource: "backend_required",
+    signalReliability: "error",
+    candidateScore: 0,
+    sortRank: 3,
+    backendAction: plan?.action || "서버 신호 계산을 확인하기 전까지 후보 판단을 사용하지 않습니다.",
+  };
+}
+
+function applyBackendCryptoSignalPlan(asset = {}, plan = {}) {
+  const backend = backendCryptoSignalPlan(asset);
+  if (!backendCryptoSignalComplete(asset)) {
+    const errorPlan = backendCryptoErrorPlan(asset);
+    return {
+      ...plan,
+      ...errorPlan,
+      actionText: errorPlan.backendAction,
+    };
+  }
+  const signal = signalClass(backend.className || backend.signal || "warning");
+  const candidateScore = clampScore(backend.candidate_score ?? backend.score ?? 0);
+  return {
+    ...plan,
+    className: signal,
+    label: backend.label || plan.label,
+    message: backend.message || backend.reason || plan.message,
+    score: clampScore(backend.score ?? candidateScore),
+    candidateScore,
+    sortRank: Number(backend.sort_rank ?? 3),
+    signalSource: "backend",
+    signalReliability: "complete",
+    backendAction: backend.action || "",
+    backendReason: backend.reason || backend.message || "",
+    signalTimeText: compactDateTime(backend.signal_at) || plan.signalTimeText,
+  };
+}
+
 function cryptoCandidateScore(plan = {}) {
-  return cryptoQualityScore(plan);
+  if (plan.signalSource === "backend") return clampScore(plan.candidateScore ?? plan.score ?? 0);
+  if (plan.signalReliability === "error" || plan.signalSource === "backend_required") return 0;
+  let score = cryptoQualityScore(plan);
+  const daily = plan.daily || {};
+  if (daily.position === "above") score += 10;
+  if (daily.chikou === "bullish") score += 8;
+  if (daily.position === "below") score -= 8;
+  if (daily.chikou === "bearish") score -= 8;
+  if (plan.fibBox?.crossed50) score += 4;
+  if (plan.fibBox?.crossed618) score -= 3;
+  if (plan.trendReversal?.strong || plan.fourHourRisk?.boxBreak) score += 7;
+  if (plan.trackingAlert) score -= 18;
+  const close = number(plan.close);
+  const stop = number(plan.finalStopLevel ?? plan.stop);
+  if (close != null && stop != null && close > 0) {
+    const stopGapPct = Math.max(-1, (close - stop) / close);
+    if (stopGapPct > 0 && stopGapPct <= 0.08) score += 5;
+    if (stopGapPct <= 0) score -= 15;
+  }
+  return clampScore(score);
+}
+
+function cryptoManageCandidateSortItem(item = {}) {
+  const plan = item.plan || {};
+  return {
+    ...plan,
+    signal: plan.className,
+    signalScore: cryptoCandidateScore(plan),
+    title: cryptoAssetName(item.asset),
+    key: cryptoAssetKey(item.asset),
+  };
+}
+
+function cryptoWatchedSignalItem(asset, assets = [], options = {}) {
+  const plan = cryptoSignalPlan(asset, assets, options);
+  return {
+    ...plan,
+    signal: plan.className,
+    signalScore: cryptoQualityScore(plan),
+    title: cryptoAssetName(asset),
+    key: cryptoAssetKey(asset),
+  };
+}
+
+function sortCryptoAssetsBySignalPriority(assets = [], scopeAssets = [], options = {}) {
+  return [...assets].sort((a, b) => signalPrioritySort(
+    cryptoWatchedSignalItem(a, scopeAssets, options),
+    cryptoWatchedSignalItem(b, scopeAssets, options),
+  ));
 }
 
 function cryptoQualityScore(plan = {}) {
+  if (plan.signalSource === "backend") return clampScore(plan.score ?? plan.candidateScore ?? 0);
+  if (plan.signalReliability === "error" || plan.signalSource === "backend_required") return 0;
   const signal = signalClass(plan.className || "watch");
   let score = commonSignalScore({
     signal,
@@ -3012,19 +4053,29 @@ function renderCryptoTabButtons(crypto = state.assetArchive?.crypto || {}) {
 function renderCryptoManagePanel(crypto = state.assetArchive?.crypto || {}) {
   const panel = document.querySelector("#cryptoManagePanel");
   if (!panel) return;
+  if (state.cryptoTab !== "all") {
+    panel.hidden = true;
+    panel.open = false;
+    return;
+  }
+  panel.hidden = false;
   const universe = cryptoAssetUniverse(crypto);
   const selected = cryptoVisibleKeys();
   const activeAssets = universe.filter((asset) => selected.has(cryptoAssetKey(asset)));
   const candidates = universe
     .filter((asset) => !selected.has(cryptoAssetKey(asset)))
     .map((asset) => ({ asset, plan: cryptoPlanForAsset(asset, crypto) }))
-    .sort((a, b) => cryptoCandidateScore(b.plan) - cryptoCandidateScore(a.plan) || cryptoAssetName(a.asset).localeCompare(cryptoAssetName(b.asset)));
+    .sort((a, b) => signalOpportunitySort(cryptoManageCandidateSortItem(a), cryptoManageCandidateSortItem(b)));
   setText("#cryptoManageSummary", `감시 ${activeAssets.length}개 · 추가 후보 ${candidates.length}개`);
   const candidateRoot = document.querySelector("#cryptoCandidateList");
   if (candidateRoot) {
-    candidateRoot.innerHTML = candidates.length
-      ? candidates.slice(0, 16).map((item) => cryptoCandidateItem(item.asset, item.plan)).join("")
-      : `<article class="crypto-manage-empty">추가 가능한 후보가 없습니다. 감시 코인은 아래 카드에서 삭제하세요.</article>`;
+    const filtered = filteredManageCandidates("crypto", candidates);
+    candidateRoot.innerHTML = [
+      manageFilterTabs("crypto", candidates),
+      filtered.length
+        ? filtered.slice(0, 16).map((item) => cryptoCandidateItem(item.asset, item.plan)).join("")
+        : `<article class="crypto-manage-empty">선택한 필터에 표시할 코인 후보가 없습니다.</article>`,
+    ].join("");
   }
 }
 
@@ -3040,18 +4091,23 @@ function cryptoCandidateItem(asset, plan = {}) {
         <strong>${escapeHtml(cryptoAssetName(asset))}</strong>
         <small>${escapeHtml(asset.label || asset.symbol || key.toUpperCase())} · ${escapeHtml(plan.typeLabel || "코인")}</small>
         <small class="search-hint">${escapeHtml(plan.label || "관찰")} · 공통점수 ${score}점 · ${escapeHtml(action)}</small>
+        <span class="recommendation-tags">
+          <em>${escapeHtml(signalStatusText(className, score))}</em>
+          <em>${escapeHtml(action)}</em>
+        </span>
       </div>
-      <span>${selected.close != null ? formatNum(selected.close, priceDigits(selected.close)) : plan.portfolioText || "-"}</span>
-      <button class="soft-button" type="button" data-crypto-add="${escapeAttr(key)}">추가</button>
+      <span class="candidate-price">${selected.close != null ? formatNum(selected.close, priceDigits(selected.close)) : plan.portfolioText || "-"}</span>
+      <button class="soft-button crypto-add-button" type="button" data-crypto-add="${escapeAttr(key)}" aria-label="${escapeAttr(`${cryptoAssetName(asset)} 감시군에 추가`)}">+ 추가</button>
     </article>
   `;
 }
 
 function addCryptoWatch(key) {
   const asset = cryptoAssetByKey(key);
-  if (!asset) return;
+  if (!asset) return false;
   const current = state.watchlists.crypto || [];
   const target = cryptoAssetKey(asset);
+  const focusKey = collectionItemKey("crypto", target);
   state.watchlists.crypto = normalizeCryptoWatchlist([
     ...current,
     {
@@ -3061,9 +4117,14 @@ function addCryptoWatch(key) {
       addedAt: new Date().toISOString(),
     },
   ]);
+  state.cryptoTab = "all";
   addCollectionOrderKey(collectionItemKey("crypto", target));
   saveWatchlists();
   renderAssetTabs();
+  const managePanel = document.querySelector("#cryptoManagePanel");
+  if (managePanel) managePanel.open = false;
+  window.setTimeout(() => focusTargetCard(focusKey), 80);
+  return true;
 }
 
 function removeCryptoWatch(key) {
@@ -3081,6 +4142,7 @@ function removeCryptoWatch(key) {
 
 function renderCryptoPanel() {
   const crypto = state.assetArchive?.crypto || {};
+  retryEmptyAssetSection("crypto", Boolean(cryptoAssetUniverse(crypto).length));
   const assets = cryptoVisibleAssets(crypto.assets || []);
   const exceptionAssets = cryptoVisibleAssets(crypto.exception_assets || []);
   const cashAssets = crypto.cash_assets || [];
@@ -3088,6 +4150,7 @@ function renderCryptoPanel() {
   ensureCryptoTabAvailable(crypto);
   renderCryptoTabButtons(crypto);
   renderCryptoManagePanel(crypto);
+  renderCryptoReliability(crypto);
   syncCryptoControls();
   if (state.cryptoTab !== "all") {
     renderCryptoDetailPanel(cryptoSelectedAsset(detailAssets), detailAssets);
@@ -3110,16 +4173,24 @@ function renderCryptoPanel() {
   setText("#cryptoDateText", cryptoHeaderDateText({ latestPlan }));
   setText("#cryptoMessage", summary.message || "메이저 코인 기본 감시를 표시합니다.");
   setText("#cryptoTitle", "코인");
-  document.querySelector("#cryptoMetricGrid").innerHTML = cryptoMetricItems(assets, exceptionAssets, cashAssets).map(metricCard).join("");
+  clearBoardDecision("#cryptoBoard");
+  const metricGrid = document.querySelector("#cryptoMetricGrid");
+  if (metricGrid) {
+    metricGrid.hidden = true;
+    metricGrid.innerHTML = "";
+  }
+  renderCryptoDetailFocus(null);
   clearCryptoAssetList();
+  const sortedAssets = sortCryptoAssetsBySignalPriority(assets, assets);
+  const sortedExceptionAssets = sortCryptoAssetsBySignalPriority(exceptionAssets, assets, { exceptionMode: true });
   const cards = [
-    ...assets.map((asset) => cryptoSignalCard(asset, assets, { removable: true })),
-    ...exceptionAssets.map((asset) => cryptoSignalCard(asset, assets, { exceptionMode: true, removable: true })),
+    ...sortedAssets.map((asset) => cryptoSignalCard(asset, assets, { removable: true })),
+    ...sortedExceptionAssets.map((asset) => cryptoSignalCard(asset, assets, { exceptionMode: true, removable: true })),
     cryptoExceptionApprovalCard(exceptionAssets, assets),
   ].filter(Boolean);
   document.querySelector("#cryptoSignalList").innerHTML = cards.length
     ? cards.join("")
-    : `<article class="crypto-signal-card watch"><header><h2>감시 코인 없음</h2><span class="signal-pill watch">대기</span></header><p class="crypto-card-summary">코인 추가 패널에서 감시할 코인을 추가하면 이곳에 한 카드로 정리됩니다.</p></article>`;
+    : `<article class="crypto-signal-card watch"><header><h2>감시 코인 없음</h2><span class="signal-pill watch">대기</span></header><details class="crypto-card-details"><summary>상세 조건 보기</summary><div class="crypto-detail-section"><strong>안내</strong><p class="crypto-card-summary">코인 추가 패널에서 감시할 코인을 추가하면 이곳에 한 카드로 정리됩니다.</p></div></details></article>`;
 }
 
 function renderCryptoDetailPanel(asset, assets = []) {
@@ -3141,11 +4212,69 @@ function renderCryptoDetailPanel(asset, assets = []) {
       ? ""
       : `${name} 데이터를 가져오지 못했습니다. 연결 상태를 확인한 뒤 다시 새로고침해 주세요.`;
   }
-  document.querySelector("#cryptoMetricGrid").innerHTML = cryptoDetailMetricItems(asset, assets, signal, rows).map(metricCard).join("");
+  clearBoardDecision("#cryptoBoard");
+  const metricGrid = document.querySelector("#cryptoMetricGrid");
+  if (metricGrid) {
+    metricGrid.hidden = true;
+    metricGrid.innerHTML = "";
+  }
+  renderCryptoDetailFocus(null);
   clearCryptoAssetList();
   document.querySelector("#cryptoSignalList").innerHTML = asset
     ? cryptoSignalCard(asset, assets, { rows, frame: state.cryptoFrame })
-    : `<article class="crypto-signal-card watch"><header><h2>${name}</h2><span class="signal-pill watch">대기</span></header><p>분봉 데이터를 기다리는 중입니다.</p></article>`;
+    : `<article class="crypto-signal-card watch"><header><h2>${name}</h2><span class="signal-pill watch">대기</span></header><details class="crypto-card-details"><summary>상세 조건 보기</summary><div class="crypto-detail-section"><strong>안내</strong><p>분봉 데이터를 기다리는 중입니다.</p></div></details></article>`;
+}
+
+function renderCryptoDetailFocus(signal = null, rows = []) {
+  const root = document.querySelector("#cryptoDetailFocus");
+  if (!root) return;
+  if (!signal) {
+    root.hidden = true;
+    root.innerHTML = "";
+    return;
+  }
+  const daily = signal.daily || {};
+  const chikouText = daily.chikou === "bullish" ? "상위" : daily.chikou === "bearish" ? "하위" : "확인";
+  const items = [
+    {
+      label: "일봉 구름",
+      value: signal.dailyLabel || daily.label || "-",
+      detail: signal.dailySubText || daily.subText || "큰 흐름",
+      signal: daily.position === "above" ? "candidate" : daily.position === "below" ? "warning" : "watch",
+    },
+    {
+      label: "후행스팬",
+      value: chikouText,
+      detail: chikouText === "상위" ? "추세 지지" : chikouText === "하위" ? "비중 제한" : "대기",
+      signal: daily.chikou === "bullish" ? "candidate" : daily.chikou === "bearish" ? "warning" : "watch",
+    },
+    {
+      label: "30분 손절",
+      value: signal.thirtyBoxStopLevel != null ? formatNum(signal.thirtyBoxStopLevel, priceDigits(signal.thirtyBoxStopLevel)) : signal.stopText || "-",
+      detail: signal.thirtySubText || "빠른 위험선",
+      signal: signal.trackingAlert ? "warning" : "watch",
+    },
+    {
+      label: "최종손절",
+      value: signal.finalStopLevel != null ? formatNum(signal.finalStopLevel, priceDigits(signal.finalStopLevel)) : signal.stopText || "-",
+      detail: signal.finalStopReason || "포지션 보호",
+      signal: ["sell", "avoid", "warning"].includes(signalClass(signal.className)) ? "warning" : "watch",
+    },
+    {
+      label: "목표비중",
+      value: signal.portfolioText || signal.stageText || "-",
+      detail: signal.actionText || signal.label || "운용 단계",
+      signal: signalClass(signal.className || "watch"),
+    },
+  ];
+  root.hidden = false;
+  root.innerHTML = items.map((item) => `
+    <article class="${escapeAttr(signalClass(item.signal || "watch"))}">
+      <span>${escapeHtml(item.label)}</span>
+      <strong>${escapeHtml(item.value || "-")}</strong>
+      <small>${escapeHtml(item.detail || "")}</small>
+    </article>
+  `).join("");
 }
 
 function clearCryptoAssetList() {
@@ -4577,15 +5706,16 @@ function cryptoSignalCard(asset, allAssets = [], options = {}) {
     signalScore: score,
     badge: signal.label,
     detail: signal.message || signal.thirtySubText,
+    actionText: signal.backendAction || "",
   });
   const focusKey = collectionItemKey("crypto", signal.key);
   const removeButton = options.removable
     ? `<button class="mini-remove" type="button" data-crypto-remove="${escapeAttr(signal.key)}">삭제</button>`
     : "";
   const coreItems = [
-    { label: "점수", value: `${score}점`, text: decision.status },
     { label: "현재가", value: formatNum(signal.close, priceDigits(signal.close)), text: signal.signalTimeText },
     { label: "목표비중", value: signal.portfolioText, text: signal.slotText },
+    { label: "목표축소", value: signal.riskTargetText, text: signal.trackingAlert ? "손절 후 유지 비중" : "위험 때 기준" },
     { label: "최종손절", value: signal.stopText, text: signal.trailText },
   ];
   const detailItems = [
@@ -4612,23 +5742,33 @@ function cryptoSignalCard(asset, allAssets = [], options = {}) {
     signal.baseBuildOrder?.active ? signal.baseBuildOrderSubText : "",
     signal.pyramidOrder?.active ? signal.pyramidOrderSubText : "",
   ].filter(Boolean).join(" ");
+  const focusClass = state.cryptoTab === signal.key ? " is-chart-focus" : "";
   return `
-    <article class="crypto-signal-card ${escapeAttr(signal.className)}" data-focus-key="${escapeAttr(focusKey)}">
+    <article class="crypto-signal-card ${escapeAttr(signal.className)}${focusClass}" data-focus-key="${escapeAttr(focusKey)}" data-crypto-focus="${escapeAttr(signal.key)}">
       <header>
         <h2>${escapeHtml(signal.name)}</h2>
         <span class="signal-pill ${escapeAttr(signal.className)}">${escapeHtml(signal.label)}</span>
         ${scoreBadgeHtml(score, signal.className)}
         ${removeButton}
       </header>
-      <p class="crypto-card-summary">${escapeHtml(summaryText || "코인 감시 조건을 요약합니다.")}</p>
-      ${decisionStackHtml(decision)}
-      <div class="crypto-signal-grid">
-        ${cryptoSignalGridItems(coreItems)}
-      </div>
       <details class="crypto-card-details">
         <summary>상세 조건 보기</summary>
-        <div class="crypto-signal-grid">
-          ${cryptoSignalGridItems(detailItems)}
+        <div class="crypto-detail-section">
+          <strong>핵심 판단</strong>
+          <p class="crypto-card-summary">${escapeHtml(summaryText || "코인 감시 조건을 요약합니다.")}</p>
+          ${decisionDetailHtml(decision)}
+        </div>
+        <div class="crypto-detail-section">
+          <strong>비중/리스크</strong>
+          <div class="crypto-signal-grid">
+            ${cryptoSignalGridItems(coreItems)}
+          </div>
+        </div>
+        <div class="crypto-detail-section">
+          <strong>차트 조건</strong>
+          <div class="crypto-signal-grid">
+            ${cryptoSignalGridItems(detailItems)}
+          </div>
         </div>
       </details>
     </article>
@@ -4771,7 +5911,7 @@ function cryptoSignalPlan(asset, allAssets = [], options = {}) {
   const trail = displayCloud?.lower != null
     ? `${cryptoFrameLabel(displayFrame)} 구름하단 ${formatNum(displayCloud.lower, priceDigits(close))}`
     : ma20 != null ? `${lineLabel} ${formatNum(ma20, priceDigits(close))}` : lineLabel;
-  return {
+  const plan = {
     key: profile.key,
     name: cryptoAssetName(asset),
     assetType: profile.assetType,
@@ -4862,6 +6002,7 @@ function cryptoSignalPlan(asset, allAssets = [], options = {}) {
     take2Text: take2 != null ? formatNum(take2, priceDigits(take2)) : "-",
     trailText: trail,
   };
+  return applyBackendCryptoSignalPlan(asset, plan);
 }
 
 function cryptoEntryPrice(close, ma20, ma60, high20, high55, className) {
@@ -5060,8 +6201,23 @@ function drawEtfChart() {
   });
 }
 
+function focusedStockItem(scope) {
+  const key = manageScopeKey(scope);
+  const symbol = state.focusedAssets[key];
+  if (!symbol) return null;
+  if (key === "us") {
+    return findUsAsset(symbol) || usManageCandidateUniverse().find((item) => normalizeSearchText(item.symbol) === symbol) || null;
+  }
+  return findDomesticCandidate(symbol) || domesticManageCandidateUniverse().find((item) => normalizeSearchText(item.symbol) === symbol) || null;
+}
+
+function stockFocusLabel(item, fallback = "") {
+  return String(item?.label || item?.name || item?.symbol || fallback || "").trim();
+}
+
 function drawStocksChart() {
   const market = state.assetArchive?.market || {};
+  const focus = focusedStockItem("domestic");
   const instrument = market.index_proxy || market.kospi200 || state.assetArchive?.etf;
   drawAssetTrendChart({
     canvasSelector: "#stocksChart",
@@ -5070,15 +6226,18 @@ function drawStocksChart() {
     label: instrument?.proxy_for ? `${instrument.label || "KODEX200"} 대체지표` : instrument?.label || "지수 필터",
     emptyTitle: "국장 종목 차트 자료 없음",
     emptyDetail: "지수 필터 일봉 데이터가 아직 없습니다.",
+    extraBadges: focus ? [{ label: "선택", value: stockFocusLabel(focus) }] : [],
   });
 }
 
 function drawUsStocksChart() {
   const usStocks = state.assetArchive?.us_stocks || {};
   const assets = usStocks.assets || [];
+  const focus = focusedStockItem("us");
+  const focusAsset = Array.isArray(focus?.history) && focus.history.length ? focus : null;
   const watchAsset = (state.watchlists.us || []).map((item) => findUsAsset(item.symbol)).find((asset) => asset?.history?.length);
   const benchmark = assets.find((asset) => asset.symbol === "SPY") || assets.find((asset) => asset.symbol === "QQQ");
-  const instrument = watchAsset || benchmark || assets.find((asset) => asset?.history?.length);
+  const instrument = focusAsset || watchAsset || benchmark || assets.find((asset) => asset?.history?.length);
   drawAssetTrendChart({
     canvasSelector: "#usStocksChart",
     legendSelector: "#usStocksLegend",
@@ -5087,6 +6246,7 @@ function drawUsStocksChart() {
     emptyTitle: "미장 차트 자료 없음",
     emptyDetail: usStocks.archive_note || "미장 핵심 추적군 일봉 데이터를 아직 가져오지 못했습니다.",
     averageSet: "us",
+    extraBadges: focus ? [{ label: "선택", value: stockFocusLabel(focus) }] : [],
   });
 }
 
@@ -5104,23 +6264,25 @@ function drawCryptoChart() {
   const points = cryptoComparisonPoints(comparisonAssets, state.selectedDate, 180);
   if (!points.length) {
     drawEmptyChart(canvas, "코인 차트 자료 없음", 260, "메이저 코인 일봉 데이터가 아직 없습니다.");
-    document.querySelector("#cryptoLegend").innerHTML = "";
+    renderCryptoLegend([]);
     if (canvas) canvas.setAttribute("aria-label", "메이저 코인 비교 차트");
     return;
   }
   if (canvas) canvas.setAttribute("aria-label", "메이저 코인 비교 차트");
   const series = cryptoComparisonSeries(comparisonAssets);
-  document.querySelector("#cryptoLegend").innerHTML = series
-    .map((item) => ({ label: `${item.label} 기준 100`, color: item.color }))
-    .map(legendItem)
-    .join("");
+  renderCryptoLegend(series.map((item) => ({ label: `${item.label} 기준 100`, color: item.color })));
   const primary = series[0] || { key: "btc" };
   drawLineChart(canvas, {
-    height: 260,
-    padding: { top: 42, right: 50, bottom: 38, left: 28 },
+    height: 230,
+    padding: { top: 38, right: 50, bottom: 46, left: 28 },
     points,
     valueKey: primary.key,
     timeKey: "date",
+    compactLatestLabel: true,
+    chartBadges: [
+      { label: "상대비교", value: "기준 100" },
+      { label: "감시", value: `${comparisonAssets.length}개` },
+    ],
     extraSeries: series.slice(1).map((item) => ({ key: item.key, label: item.label, color: item.color, width: 2.1 })),
   });
 }
@@ -5132,7 +6294,7 @@ function drawCryptoDetailChart(canvas, asset, assets = []) {
   const points = cryptoDetailPoints(rows, state.cryptoFrame, detailLimit);
   if (!points.length) {
     drawEmptyChart(canvas, `${name} 차트 자료 없음`, 260, `${cryptoFrameLabel(state.cryptoFrame)} 데이터를 확인하는 중입니다.`);
-    document.querySelector("#cryptoLegend").innerHTML = "";
+    renderCryptoLegend([]);
     return;
   }
   if (canvas) canvas.setAttribute("aria-label", `${name} ${cryptoFrameLabel(state.cryptoFrame)} 신호 차트`);
@@ -5201,7 +6363,7 @@ function drawCryptoDetailChart(canvas, asset, assets = []) {
   const averageKey = state.cryptoFrame === "30m" ? "ma30" : "ma20";
   const averageLabel = state.cryptoFrame === "30m" ? "30이평" : state.cryptoFrame === "1w" ? "20주선" : "20선";
   const boxLabel = state.cryptoFrame === "1w" ? "26주 박스" : "30일 박스";
-  document.querySelector("#cryptoLegend").innerHTML = [
+  renderCryptoLegend([
     { label: `${name} 종가`, color: themeColor("--chart-line", "#e8eef5") },
     { label: "구름상단", color: themeColor("--amber", "#d5a04e") },
     { label: "구름하단", color: themeColor("--blue", "#82a7e6") },
@@ -5220,14 +6382,21 @@ function drawCryptoDetailChart(canvas, asset, assets = []) {
     ...(pyramidLevels.length ? [{ label: "불타기주문", color: "#df7a72" }] : []),
     ...(stopLevels.length ? [{ label: "최종손절선/박스", color: "#9aa8b8" }] : []),
     ...(cardChartLevels.length ? [{ label: "카드 기준선", color: "#f1aaa5" }] : []),
-  ].map(legendItem).join("");
+  ]);
   drawLineChart(canvas, {
-    height: 260,
-    padding: { top: 42, right: 50, bottom: 38, left: 28 },
+    height: 230,
+    padding: { top: 38, right: 50, bottom: 46, left: 28 },
     points,
     valueKey: "close",
     timeKey: "date",
+    compactLatestLabel: true,
     levels,
+    chartBadges: [
+      { label: "선택", value: name },
+      { label: cryptoFrameLabel(state.cryptoFrame), value: signal.label || "관찰" },
+      { label: "일봉", value: signal.dailyLabel || signal.daily?.label || "-" },
+      { label: "후행", value: signal.daily?.chikou === "bullish" ? "우위" : signal.daily?.chikou === "bearish" ? "이탈" : "확인" },
+    ],
     extraSeries: [
       { key: "cloudUpper", label: "구름상단", color: themeColor("--amber", "#d5a04e"), width: 1.35, dash: [5, 4] },
       { key: "cloudLower", label: "구름하단", color: themeColor("--blue", "#82a7e6"), width: 1.35, dash: [5, 4] },
@@ -5253,7 +6422,7 @@ function drawCryptoDetailChart(canvas, asset, assets = []) {
   });
 }
 
-function drawAssetTrendChart({ canvasSelector, legendSelector, instrument, label, emptyTitle, emptyDetail, averageSet = "default" }) {
+function drawAssetTrendChart({ canvasSelector, legendSelector, instrument, label, emptyTitle, emptyDetail, averageSet = "default", extraBadges = [] }) {
   const canvas = document.querySelector(canvasSelector);
   const points = assetTrendPoints(instrument, state.selectedDate, 180);
   if (!points.length) {
@@ -5279,6 +6448,13 @@ function drawAssetTrendChart({ canvasSelector, legendSelector, instrument, label
       ...averages.map((line) => ({ label: line.label, color: line.color })),
     ].map(legendItem).join("");
   }
+  const latestPoint = points[points.length - 1] || {};
+  const chartBadges = [
+    { label: "현재", value: formatNum(latestPoint.close, 2) },
+    { label: "20일", value: latestPoint.ma20 != null && latestPoint.close >= latestPoint.ma20 ? "위" : "아래" },
+    { label: "자료", value: `${points.length}봉` },
+    ...extraBadges,
+  ];
   drawLineChart(canvas, {
     height: 260,
     padding: { top: 42, right: 50, bottom: 38, left: 28 },
@@ -5286,6 +6462,7 @@ function drawAssetTrendChart({ canvasSelector, legendSelector, instrument, label
     valueKey: "close",
     timeKey: "date",
     extraSeries: averages,
+    chartBadges,
   });
 }
 
@@ -5611,13 +6788,14 @@ function searchResultItem(item, active = false) {
   const signal = item.alreadyAdded ? "neutral" : hint.signal;
   const score = hint.score ?? commonSignalScore({ signal });
   const tag = hint.tag || stockSignalTag(item, score, signal);
+  const badgeText = stockBadgeText(hint.badge, signal, score);
   const priceText = item.close != null ? `${formatNum(item.close, 0)} · ${formatPercent(item.change_pct)}` : item.group || item.market || "";
   return `
     <article class="search-result ${escapeAttr(signal)}${active ? " active" : ""}" data-search-result="${escapeAttr(item.symbol)}">
       <div>
         <strong>${escapeHtml(item.name || item.symbol)}</strong>
         <small>${escapeHtml(item.symbol)} · ${escapeHtml(item.market || item.group || "")}</small>
-        <small class="search-hint">${escapeHtml(hint.badge)} · 공통점수 ${score}점 · ${escapeHtml(hint.detail)}</small>
+        <small class="search-hint">${escapeHtml(badgeText)} · 공통점수 ${score}점 · ${escapeHtml(hint.detail)}</small>
         <span class="recommendation-tags">
           <em>${escapeHtml(tag)}</em>
           <em>${escapeHtml(signalActionText(signal, score, item.scope))}</em>
@@ -5629,6 +6807,46 @@ function searchResultItem(item, active = false) {
       </button>
     </article>
   `;
+}
+
+function stockCandidateItem(item) {
+  const hint = searchSignalHint(item);
+  const signal = signalClass(item.signal || hint.signal || "watch");
+  const score = stockCandidateScore(item);
+  const tag = stockSignalTag(item, score, signal);
+  const action = signalActionText(signal, score, item.scope);
+  const badgeText = stockBadgeText(hint.badge, signal, score);
+  const close = number(item.close);
+  const priceText = close != null
+    ? `${formatNum(close, item.scope === "us" ? 2 : 0)} · ${formatPercent(item.change_pct)}`
+    : item.group || item.market || "-";
+  const focusScope = manageScopeKey(item.scope);
+  const focusSymbol = normalizeSearchText(item.symbol);
+  const focusClass = state.focusedAssets[focusScope] === focusSymbol ? " is-chart-focus" : "";
+  return `
+    <article class="search-result stock-candidate ${escapeAttr(signal)}${focusClass}" data-focus-key="${escapeAttr(collectionItemKey(focusScope, focusSymbol))}" data-stock-focus-scope="${escapeAttr(focusScope)}" data-stock-focus-symbol="${escapeAttr(focusSymbol)}">
+      <div>
+        <strong>${escapeHtml(item.name || item.symbol)}</strong>
+        <small>${escapeHtml(item.symbol)} · ${escapeHtml(item.market || item.group || "")}</small>
+        <small class="search-hint">${escapeHtml(badgeText || tag)} · 공통점수 ${score}점 · ${escapeHtml(hint.detail || action)}</small>
+        <span class="recommendation-tags">
+          <em>${escapeHtml(tag)}</em>
+          <em>${escapeHtml(action)}</em>
+        </span>
+      </div>
+      <span>${escapeHtml(priceText)}</span>
+      <button class="soft-button" type="button" data-search-scope="${escapeAttr(item.scope)}" data-search-add="${escapeAttr(item.symbol)}">추가</button>
+    </article>
+  `;
+}
+
+function stockBadgeText(value, signal = "watch", score = null) {
+  const text = String(value || "").trim();
+  const internalSignals = new Set(["neutral", "watch", "candidate", "buy", "warning", "sell", "avoid"]);
+  if (!text || internalSignals.has(text.toLowerCase())) {
+    return signalStatusText(signal, score);
+  }
+  return text;
 }
 
 function normalizeSearchText(value) {
@@ -5960,6 +7178,7 @@ function removeWatchSymbol(scope, symbol) {
   const name = item?.name || symbol;
   if (!window.confirm(`${name}을(를) ${scopeLabel} 관심종목에서 삭제할까요?`)) return;
   state.watchlists[scope] = current.filter((entry) => normalizeSearchText(entry.symbol) !== target);
+  if (state.focusedAssets[manageScopeKey(scope)] === target) state.focusedAssets[manageScopeKey(scope)] = "";
   removeCollectionOrderKey(collectionItemKey(scope, target));
   saveWatchlists();
   renderAssetTabs();
@@ -7073,7 +8292,7 @@ async function useAndroidLocalBackend() {
   state.settings.apiBaseUrl = ANDROID_BACKEND_LOCAL_URL;
   saveSettings();
   renderSettings();
-  setText("#androidBackendStatus", "이 폰의 로컬 백엔드 주소를 적용했습니다.");
+  setText("#androidBackendStatus", "이 폰의 로컬 서버 주소를 적용했습니다.");
   await testBackendConnection(ANDROID_BACKEND_LOCAL_URL);
   await loadMonitor(true);
   await refreshReplayFromApi();
@@ -7230,7 +8449,7 @@ async function maybeRefreshLiveAssetArchive() {
   if (!state.alertsEnabled && state.activeTab !== "crypto") return;
   const now = Date.now();
   if (now - (state.lastAssetArchiveRefreshAt || 0) < ASSET_ARCHIVE_POLL_MS) return;
-  await refreshAssetArchive(state.selectedDate);
+  await refreshAssetArchive(state.selectedDate, (state.activeTab === "crypto" || state.alertsEnabled) ? ["crypto"] : assetSectionsForTab(state.activeTab));
   renderAssetTabs();
 }
 
@@ -7539,7 +8758,7 @@ function drawLiveChart(livePlan = buildLiveTradePlan(state.monitor)) {
       canvas,
       signal.title || "옵션 감시 연결 대기",
       320,
-      signal.message || "백엔드 주소와 로컬 서버 실행 상태를 확인하세요.",
+      signal.message || "서버 주소와 로컬 서버 실행 상태를 확인하세요.",
     );
     return;
   }
@@ -7562,13 +8781,18 @@ function drawLiveChart(livePlan = buildLiveTradePlan(state.monitor)) {
     extraSeries: CHART_EXTRA_SERIES,
     marker: state.monitor?.signal?.type !== "neutral",
     tradeMarkers,
+    chartBadges: [
+      { label: "신호", value: state.monitor?.signal?.label || "대기" },
+      { label: "최신", value: state.monitor?.main?.latest?.time || "-" },
+      { label: "61.8", value: formatNum(liveSession.levels?.fib_618, 2) },
+    ],
   });
 }
 
 function drawReplayChart(session, tradePlan = null) {
   const canvas = document.querySelector("#replayChart");
   if (!session?.series?.length) {
-    drawEmptyChart(canvas, "복기 자료 없음", 360, "날짜 또는 백엔드 연결 상태를 확인하세요.");
+    drawEmptyChart(canvas, "복기 자료 없음", 360, "날짜 또는 서버 연결 상태를 확인하세요.");
     return;
   }
   drawLineChart(document.querySelector("#replayChart"), {
@@ -7629,7 +8853,7 @@ function ensureChartControls(canvas, enabled = true) {
     controls.innerHTML = `
       <button type="button" data-chart-action="zoom-in" aria-label="차트 확대">+</button>
       <button type="button" data-chart-action="zoom-out" aria-label="차트 축소">-</button>
-      <button type="button" data-chart-action="reset" aria-label="차트 초기화">초기</button>
+      <button type="button" data-chart-action="reset" aria-label="차트 초기화" title="초기화">↺</button>
     `;
     frame.appendChild(controls);
   }
@@ -7732,12 +8956,13 @@ function drawLineChart(canvas, options) {
   const yFor = (value) => height - padding.bottom - ((value - min) / span) * plotHeight;
 
   drawGrid(context, width, height, padding);
+  drawChartBadges(context, options.chartBadges || [], padding, width);
   (options.levels || []).forEach((level) => drawHorizontalLevel(context, width, padding, yFor(number(level.value)), level));
   (options.extraSeries || []).forEach((series) => {
     drawSeries(context, points.map((point) => number(point[series.key])), xFor, yFor, series.color, series.width || 1.5, series.dash || []);
   });
   drawSeries(context, values, xFor, yFor, themeColor("--chart-line", "#e8eef5"), 2.6, []);
-  drawLatestPoint(context, points, values, xFor, yFor, options);
+  drawLatestPoint(context, points, values, xFor, yFor, options, padding, height);
   if (options.tradeMarkers?.length) {
     drawTradeMarkers(context, points, xFor, yFor, options);
   } else {
@@ -7746,7 +8971,32 @@ function drawLineChart(canvas, options) {
   drawAxisLabels(context, width, height, padding, axisPoints, scaleValues.length ? scaleValues : values, options.timeKey);
 }
 
-function drawLatestPoint(context, points, values, xFor, yFor, options) {
+function drawChartBadges(context, badges = [], padding = {}, canvasWidth = 0) {
+  const items = (Array.isArray(badges) ? badges : [])
+    .filter((item) => item?.label && item?.value != null && item.value !== "-")
+    .slice(0, 4);
+  if (!items.length) return;
+  context.save();
+  context.font = "bold 11px Segoe UI, sans-serif";
+  let x = padding.left || 8;
+  const y = Math.max(12, (padding.top || 32) - 28);
+  items.forEach((item) => {
+    const text = `${item.label} ${item.value}`;
+    const width = Math.ceil(context.measureText(text).width) + 16;
+    if (x + width > canvasWidth - (padding.right || 8)) return;
+    fillRoundRect(context, x, y, width, 20, 6, "rgba(13, 20, 29, 0.78)");
+    context.strokeStyle = "rgba(154, 168, 184, 0.32)";
+    context.strokeRect(x + 0.5, y + 0.5, width - 1, 19);
+    context.fillStyle = themeColor("--chart-line", "#e8eef5");
+    context.textAlign = "center";
+    context.textBaseline = "middle";
+    context.fillText(text, x + width / 2, y + 10.5);
+    x += width + 6;
+  });
+  context.restore();
+}
+
+function drawLatestPoint(context, points, values, xFor, yFor, options, padding = {}, height = 210) {
   const lastIndex = values.length - 1;
   const latest = values[lastIndex];
   if (latest == null) return;
@@ -7759,7 +9009,11 @@ function drawLatestPoint(context, points, values, xFor, yFor, options) {
   context.fillStyle = themeColor("--chart-line", "#e8eef5");
   context.font = "11px Segoe UI, sans-serif";
   context.textAlign = "right";
-  context.fillText(`${points[lastIndex][options.timeKey] || ""} ${formatNum(latest, 2)}`, x, Math.max(13, y - 9));
+  const label = options.compactLatestLabel
+    ? formatNum(latest, 2)
+    : `${compactAxisTimeLabel(points[lastIndex][options.timeKey], context.canvas.getBoundingClientRect().width || 360)} ${formatNum(latest, 2)}`;
+  const safeY = Math.max((padding.top || 0) + 12, Math.min(y - 9, height - (padding.bottom || 0) - 10));
+  context.fillText(label, x, safeY);
 }
 
 function drawSignalMarkers(context, points, xFor, yFor, options) {
@@ -7904,13 +9158,40 @@ function fillRoundRect(context, x, y, width, height, radius, color) {
 }
 
 function drawAxisLabels(context, width, height, padding, points, values, timeKey) {
+  const firstLabel = compactAxisTimeLabel(points[0]?.[timeKey], width);
+  const lastLabel = compactAxisTimeLabel(points[points.length - 1]?.[timeKey], width);
+  const y = height - Math.max(13, Math.min(18, padding.bottom * 0.42));
+  drawAxisLabelChip(context, firstLabel, padding.left, y, "left");
+  drawAxisLabelChip(context, lastLabel, width - padding.right, y, "right");
   context.fillStyle = themeColor("--muted", "#9aa8b8");
   context.font = "10px Segoe UI, sans-serif";
-  context.textAlign = "left";
-  context.fillText(points[0]?.[timeKey] || "", padding.left, height - 8);
   context.textAlign = "right";
-  context.fillText(points[points.length - 1]?.[timeKey] || "", width - padding.right, height - 8);
   context.fillText(formatNum(Math.max(...values), 2), width - padding.right, padding.top - 12);
+}
+
+function compactAxisTimeLabel(value, width = 360) {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  const match = text.match(/^(\d{4})-(\d{2})-(\d{2})(?:[T\s](\d{2}):(\d{2}))?/);
+  if (!match) return text.length > 12 && width < 430 ? text.slice(-11) : text;
+  const date = width < 520 ? `${match[2]}-${match[3]}` : `${match[1]}-${match[2]}-${match[3]}`;
+  return match[4] ? `${date} ${match[4]}:${match[5]}` : date;
+}
+
+function drawAxisLabelChip(context, text, x, y, align = "left") {
+  if (!text) return;
+  context.save();
+  context.font = "10px Segoe UI, sans-serif";
+  const paddingX = 5;
+  const width = Math.ceil(context.measureText(text).width) + paddingX * 2;
+  const height = 17;
+  const chipX = align === "right" ? x - width : x;
+  fillRoundRect(context, chipX, y - height / 2, width, height, 5, "rgba(13, 20, 29, 0.72)");
+  context.fillStyle = themeColor("--muted", "#9aa8b8");
+  context.textAlign = align === "right" ? "right" : "left";
+  context.textBaseline = "middle";
+  context.fillText(text, align === "right" ? x - paddingX : x + paddingX, y + 0.5);
+  context.restore();
 }
 
 function drawGrid(context, width, height, padding) {

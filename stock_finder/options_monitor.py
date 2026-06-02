@@ -25,7 +25,9 @@ NAVER_RECENT_PAGES = 14
 NAVER_FULL_SESSION_PAGES = 80
 SIGNAL_LOG_PATH = PROJECT_ROOT / "site" / "data" / "options_signal_log.json"
 SIGNAL_LOG_SCHEMA_VERSION = 1
+SIGNAL_LOG_LOCK_TIMEOUT_SECONDS = 2.0
 SIGNAL_LOG_LOCK = threading.Lock()
+SIGNAL_LOG_WRITE_LOCK = threading.Lock()
 _SNAPSHOT_CACHE: dict[str, Any] = {"created_at": 0.0, "payload": None}
 CODEX_EXPERIMENTAL_PROFIT_EXTENSION_TAG = "codex_experimental_profit_extension"
 TRADE_COLORS = {
@@ -132,8 +134,12 @@ def fetch_symbol_candles(symbol: str, range_value: str = "1y", interval: str = "
 
 
 def load_options_signal_log() -> dict[str, Any]:
-    with SIGNAL_LOG_LOCK:
+    locked = SIGNAL_LOG_LOCK.acquire(timeout=SIGNAL_LOG_LOCK_TIMEOUT_SECONDS)
+    try:
         archive = _read_signal_log()
+    finally:
+        if locked:
+            SIGNAL_LOG_LOCK.release()
     entries = sorted(
         archive.get("entries") or [],
         key=lambda item: item.get("sourceAt") or item.get("createdAt") or "",
@@ -150,10 +156,22 @@ def load_options_signal_log() -> dict[str, Any]:
 
 
 def clear_options_signal_log() -> dict[str, Any]:
-    with SIGNAL_LOG_LOCK:
+    locked = SIGNAL_LOG_LOCK.acquire(timeout=SIGNAL_LOG_LOCK_TIMEOUT_SECONDS)
+    if not locked:
+        return {
+            "ok": False,
+            "source": "backend",
+            "generated_at": _iso(datetime.now(KST)),
+            "error": "signal log busy",
+            "count": 0,
+            "entries": [],
+        }
+    try:
         archive = _empty_signal_log()
         archive["cleared_at"] = _iso(datetime.now(KST))
-        _write_signal_log(archive)
+        _write_signal_log_async(archive)
+    finally:
+        SIGNAL_LOG_LOCK.release()
     _SNAPSHOT_CACHE["created_at"] = 0.0
     _SNAPSHOT_CACHE["payload"] = None
     return {
@@ -357,7 +375,18 @@ def _fetch_yahoo_candles(symbol: str, range_value: str = "5d", interval: str = "
 
 
 def _persist_signal_entries(entries: list[dict[str, Any]], generated_at: datetime) -> list[dict[str, Any]]:
-    with SIGNAL_LOG_LOCK:
+    if not entries:
+        archive = _read_signal_log()
+        return sorted(
+            archive.get("entries") or [],
+            key=lambda item: item.get("sourceAt") or item.get("createdAt") or "",
+            reverse=True,
+        )
+
+    locked = SIGNAL_LOG_LOCK.acquire(timeout=SIGNAL_LOG_LOCK_TIMEOUT_SECONDS)
+    if not locked:
+        return [_normalize_signal_log_entry(entry, generated_at) for entry in entries][-80:]
+    try:
         archive = _read_signal_log()
         merged: dict[str, dict[str, Any]] = {}
         for entry in archive.get("entries") or []:
@@ -380,8 +409,10 @@ def _persist_signal_entries(entries: list[dict[str, Any]], generated_at: datetim
         )
         archive["entries"] = ordered
         archive["updated_at"] = _iso(generated_at)
-        _write_signal_log(archive)
+        _write_signal_log_async(archive)
         return ordered
+    finally:
+        SIGNAL_LOG_LOCK.release()
 
 
 def _normalize_signal_log_entry(entry: dict[str, Any], generated_at: datetime) -> dict[str, Any]:
@@ -434,6 +465,23 @@ def _write_signal_log(archive: dict[str, Any]) -> None:
         file.write(body)
         temp_name = file.name
     Path(temp_name).replace(SIGNAL_LOG_PATH)
+
+
+def _write_signal_log_async(archive: dict[str, Any]) -> None:
+    if not SIGNAL_LOG_WRITE_LOCK.acquire(blocking=False):
+        return
+
+    def runner() -> None:
+        try:
+            _write_signal_log(archive)
+        finally:
+            try:
+                SIGNAL_LOG_WRITE_LOCK.release()
+            except RuntimeError:
+                pass
+
+    thread = threading.Thread(target=runner, daemon=True)
+    thread.start()
 
 
 def _build_etf_fibonacci_context(generated_at: datetime, intraday_candles: list[dict[str, Any]]) -> dict[str, Any] | None:
@@ -1585,7 +1633,7 @@ def _signal_detail(kind: str, signal: dict[str, Any], setup: dict[str, Any], act
             if active
             else f"위험 신호 · 보유 포지션 없음 · {signal.get('message') or ''}"
         )
-    return signal.get("message") or signal.get("alert") or "백엔드 계산 차트 이벤트"
+    return signal.get("message") or signal.get("alert") or "서버 계산 차트 이벤트"
 
 
 def _trade_label(kind: str) -> str:
