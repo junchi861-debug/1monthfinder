@@ -227,6 +227,11 @@ const CRYPTO_REENTRY_BOUNCE_PCT = {
   alt: 7,
   exception: 10,
 };
+const CRYPTO_BTC_FIB_LOOKBACK_DAYS = 300;
+const CRYPTO_BTC_BREAKDOWN_LOOKBACK_DAYS = 200;
+const CRYPTO_BTC_SHORT_LOW_LOOKBACK_DAYS = 60;
+const CRYPTO_BTC_REBOUND_PCT = 5;
+const CRYPTO_BTC_BREAKDOWN_RETAIN_RATIO = 0.4;
 const CRYPTO_REENTRY_HARD_MULTIPLIER = 1.2;
 const CRYPTO_REENTRY_LOOKBACK_BARS = 80;
 const CRYPTO_LINE_TOUCH_BUFFER_PCT = 1.2;
@@ -5424,20 +5429,22 @@ function cryptoDailyAnalysis(rows = [], selectedDate = state.selectedDate) {
   const chikou = cryptoChikouState(visible, index, close);
   const low60 = rollingExtremeAt(visible, index, 60, "low", "min");
   const reboundPct = close != null && low60 ? close / low60 - 1 : null;
-  const bottomBounce = reboundPct != null && reboundPct >= 0.07;
+  const bottomBounce = reboundPct != null && reboundPct >= CRYPTO_BTC_REBOUND_PCT / 100;
   const nearLower = close != null && cloud.lower != null && close >= cloud.lower && (close - cloud.lower) / close <= 0.035;
+  const ma30 = movingAverageAt(visible, index, 30);
+  const aboveMa30 = close != null && ma30 != null && close >= ma30;
 
   if (position === "above" && chikou === "bullish") {
-    return { label: "상단+후행", subText: "불타기 확인", position, chikou, bottomBounce, nearLower, reboundPct, cloud };
+    return { label: "상단+후행", subText: "불타기 확인", position, chikou, bottomBounce, nearLower, reboundPct, cloud, ma30, aboveMa30 };
   }
   if (position === "above") {
-    return { label: "구름 상단", subText: "기본물량 전환", position, chikou, bottomBounce, nearLower, reboundPct, cloud };
+    return { label: "구름 상단", subText: "기본물량 전환", position, chikou, bottomBounce, nearLower, reboundPct, cloud, ma30, aboveMa30 };
   }
   if (position === "inside") {
-    return { label: "구름 내부", subText: "돌파 확인", position, chikou, bottomBounce, nearLower, reboundPct, cloud };
+    return { label: "구름 내부", subText: "돌파 확인", position, chikou, bottomBounce, nearLower, reboundPct, cloud, ma30, aboveMa30 };
   }
   if (position === "below" && chikou === "bearish") {
-    return { label: "하단+후행 이탈", subText: "기초 이하 관리", position, chikou, bottomBounce, nearLower, reboundPct, cloud };
+    return { label: "하단+후행 이탈", subText: "기초 이하 관리", position, chikou, bottomBounce, nearLower, reboundPct, cloud, ma30, aboveMa30 };
   }
   if (position === "below") {
     return {
@@ -5449,13 +5456,15 @@ function cryptoDailyAnalysis(rows = [], selectedDate = state.selectedDate) {
       nearLower,
       reboundPct,
       cloud,
+      ma30,
+      aboveMa30,
     };
   }
-  return { label: "계산 대기", subText: "일봉 부족", position, chikou, bottomBounce, nearLower, reboundPct, cloud };
+  return { label: "계산 대기", subText: "일봉 부족", position, chikou, bottomBounce, nearLower, reboundPct, cloud, ma30, aboveMa30 };
 }
 
 function cryptoDailyFibBoxAnalysis(rows = [], selectedDate = state.selectedDate) {
-  const visible = cryptoVisibleRows(rows, selectedDate).slice(-365);
+  const visible = cryptoVisibleRows(rows, selectedDate).slice(-CRYPTO_BTC_FIB_LOOKBACK_DAYS);
   const index = visible.length - 1;
   if (index < 30) {
     return { valid: false, label: "피보 대기", subText: "일봉 자료 부족", positionPct: null, levels: {} };
@@ -5468,61 +5477,56 @@ function cryptoDailyFibBoxAnalysis(rows = [], selectedDate = state.selectedDate)
     if (bestHigh == null || currentHigh > bestHigh) return rowIndex;
     return best;
   }, 0);
-  const afterHigh = visible.slice(highIndex);
-  const lowOffset = afterHigh.reduce((best, row, rowIndex) => {
+  const lowIndex = visible.reduce((best, row, rowIndex) => {
     const currentLow = number(row.low);
-    const bestLow = number(afterHigh[best]?.low);
+    const bestLow = number(visible[best]?.low);
     if (currentLow == null) return best;
     if (bestLow == null || currentLow < bestLow) return rowIndex;
     return best;
   }, 0);
-  const lowIndex = highIndex + lowOffset;
-  if (lowIndex <= highIndex) {
-    return { valid: false, label: "피보 대기", subText: "하락 추세 박스 대기", positionPct: null, levels: {} };
-  }
   const trendHigh = number(visible[highIndex]?.high);
   const recentLow = number(visible[lowIndex]?.low);
   const close = number(visible[index]?.close);
   if (trendHigh == null || recentLow == null || close == null || trendHigh <= recentLow) {
-    return { valid: false, label: "피보 대기", subText: "하락 박스 산출 대기", positionPct: null, levels: {} };
+    return { valid: false, label: "피보 대기", subText: "300일 고저점 산출 대기", positionPct: null, levels: {} };
   }
 
-  const downSpan = trendHigh - recentLow;
-  const fib77Top = trendHigh - downSpan * 0.77;
-  if (fib77Top <= recentLow) {
-    return { valid: false, label: "피보 대기", subText: "77% 박스 대기", positionPct: null, levels: {} };
-  }
-
-  const boxSpan = fib77Top - recentLow;
-  const rawPct = ((close - recentLow) / boxSpan) * 100;
+  const span = trendHigh - recentLow;
+  const rawPct = ((trendHigh - close) / span) * 100;
   const positionPct = Math.max(0, Math.min(150, rawPct));
   const levels = {
     low: recentLow,
-    box382: recentLow + boxSpan * 0.382,
-    box50: recentLow + boxSpan * 0.5,
-    box618: recentLow + boxSpan * 0.618,
-    top: fib77Top,
+    box382: trendHigh - span * 0.382,
+    box50: trendHigh - span * 0.5,
+    box618: trendHigh - span * 0.618,
+    top: trendHigh,
     trendHigh,
+    fib0: trendHigh,
+    fib100: recentLow,
   };
-  const crossed382 = rawPct >= 38.2;
-  const crossed50 = rawPct >= 50;
-  const crossed618 = rawPct >= 61.8;
-  const zone = crossed618 ? "61.8 돌파" : crossed50 ? "50 회복" : crossed382 ? "38.2 추가검토" : "38.2 대기";
+  const crossed382 = rawPct <= 38.2;
+  const crossed50 = rawPct <= 50;
+  const crossed618 = rawPct <= 61.8;
+  const inDeepBottomZone = rawPct >= 61.8 && rawPct <= 100;
+  const zone = inDeepBottomZone ? "61.8~100 바닥권" : rawPct > 100 ? "저점 하회" : crossed382 ? "상단 회복권" : crossed50 ? "50% 위" : crossed618 ? "61.8 위" : "중립권";
   return {
     valid: true,
     label: `피보 ${formatNum(positionPct, 1)}%`,
-    subText: `${zone} · 상단 ${formatNum(fib77Top, priceDigits(fib77Top))}`,
+    subText: `${zone} · 0% ${formatNum(trendHigh, priceDigits(trendHigh))} / 100% ${formatNum(recentLow, priceDigits(recentLow))}`,
     positionPct,
     rawPct,
     zone,
     crossed382,
     crossed50,
     crossed618,
-    addWatch: crossed382 && !crossed618,
+    inDeepBottomZone,
+    addWatch: rawPct <= 61.8 && rawPct >= 38.2,
     levels,
     trendHigh,
     recentLow,
-    fib77Top,
+    fib77Top: trendHigh,
+    highDate: visible[highIndex]?.date || null,
+    lowDate: visible[lowIndex]?.date || null,
   };
 }
 
@@ -6280,6 +6284,60 @@ function cryptoFourHourRiskAnalysis(rows = [], selectedDate = state.selectedDate
   };
 }
 
+function cryptoWeeklyMaContext(rows = [], selectedDate = state.selectedDate) {
+  const visible = cryptoVisibleRows(rows, selectedDate);
+  const index = visible.length - 1;
+  const close = number(visible[index]?.close);
+  const ma20 = movingAverageAt(visible, index, 20);
+  const ma30 = movingAverageAt(visible, index, 30);
+  const tenkan = ichimokuMid(visible, index, 9);
+  const kijun = ichimokuMid(visible, index, 26);
+  const above20 = close != null && ma20 != null && close >= ma20;
+  const above30 = close != null && ma30 != null && close >= ma30;
+  const fullyTurned = above30
+    && (tenkan == null || close >= tenkan)
+    && (kijun == null || close >= kijun);
+  return {
+    valid: index >= 20 && close != null,
+    close,
+    ma20,
+    ma30,
+    tenkan,
+    kijun,
+    above20,
+    above30,
+    fullyTurned,
+    label: above30 ? "30주선 위" : above20 ? "20주선 위" : "20주선 아래",
+    subText: fullyTurned
+      ? "30주선·전환선·기준선 위"
+      : above20 ? "30주선 돌파 전, 기본물량까지만" : "대추세 미전환, 기초 중심",
+  };
+}
+
+function cryptoRecentLowBreakdownAnalysis(rows = [], selectedDate = state.selectedDate) {
+  const visible = cryptoVisibleRows(rows, selectedDate);
+  const index = visible.length - 1;
+  const close = number(visible[index]?.close);
+  const low200 = rollingExtremeAt(visible, index, CRYPTO_BTC_BREAKDOWN_LOOKBACK_DAYS, "low", "min", true);
+  const low60 = rollingExtremeAt(visible, index, CRYPTO_BTC_SHORT_LOW_LOOKBACK_DAYS, "low", "min", false);
+  const reboundPct = close != null && low60 != null && low60 > 0 ? ((close - low60) / low60) * 100 : null;
+  const broken = close != null && low200 != null && close < low200;
+  const shortRebound = reboundPct != null && reboundPct >= CRYPTO_BTC_REBOUND_PCT;
+  return {
+    valid: index >= 60 && close != null,
+    broken,
+    low200,
+    low60,
+    reboundPct,
+    shortRebound,
+    retainRatio: CRYPTO_BTC_BREAKDOWN_RETAIN_RATIO,
+    label: broken ? "200일 저점 이탈" : shortRebound ? "60일 저점 +5%" : "저점 감시",
+    subText: broken
+      ? `기존 비중의 60% 축소, 40%만 유지`
+      : shortRebound ? `60일 저점 대비 +${formatNum(reboundPct, 1)}%, 기초+10 후보` : "200일 저점과 60일 반등률 확인",
+  };
+}
+
 function cryptoAllocationPlan(profile, daily, fourHour, thirtyEntry = {}, weekly = {}, context = {}) {
   if (profile.assetType === "cash") {
     return {
@@ -6323,6 +6381,87 @@ function cryptoAllocationPlan(profile, daily, fourHour, thirtyEntry = {}, weekly
         : weeklyStarter
           ? `주봉 기준선 위에서 단기 매물대를 돌파한 상승초입입니다. 다만 이미 진입이 늦은 자리라 전체 ${formatNum(portfolioPct, 2)}% 탐색 진입만 보고 손절 폭은 ${formatNum(CRYPTO_EXCEPTION_WEEKLY_WIDE_STOP_PCT, 0)}% 이상 넓게 둡니다. 예외풀 5%를 넘기면 사용자 승인 후 6~10% 범위에서만 확장하고 최대 15%는 넘기지 않습니다. 응답이 없으면 기계적으로 +1%만 임시 허용합니다.`
         : "사용자 지정 감시군 밖의 코인은 4시간봉 또는 30분봉 박스 돌파 전까지 운용 대상에서 제외합니다.",
+    };
+  }
+
+  if (profile.key === "btc") {
+    const weeklyMa = context.weeklyMa || {};
+    const fibBox = context.fibBox || {};
+    const breakdown = context.breakdown || {};
+    let slotPct = CRYPTO_SLOT_PCT.starter;
+    let stageText = "기초";
+    let message = "비트코인은 30분봉 단기 신호에 큰 비중을 싣지 않고 주봉 20/30주선과 일봉 30일선을 우선합니다.";
+    let baseRebuildNeeded = false;
+
+    if (weeklyMa.above20 && daily.aboveMa30) {
+      slotPct = CRYPTO_SLOT_PCT.base;
+      stageText = "기본";
+      message = "주봉이 20주선 위이고 일봉이 30일선 위라 주봉 에너지가 붙은 구간입니다. 기본물량까지 허용합니다.";
+      baseRebuildNeeded = true;
+      if (weeklyMa.above30 || weeklyMa.fullyTurned) {
+        slotPct = CRYPTO_SLOT_PCT.full;
+        stageText = "맥스";
+        message = "주봉이 30주선 위에 서고 전환선·기준선까지 회복하는 대추세 전환 후보라 맥스물량까지 열어둡니다.";
+        baseRebuildNeeded = false;
+      }
+    } else if (!weeklyMa.above20 && daily.aboveMa30) {
+      slotPct = CRYPTO_SLOT_PCT.starterPlus20;
+      stageText = "기초+20";
+      message = "주봉은 아직 20주선 아래라 대추세 확정 전이지만 일봉 30일선 위에서 반등 에너지가 살아 있어 50%까지만 유지합니다.";
+    } else if (weeklyMa.above20 && !daily.aboveMa30) {
+      slotPct = fourHour.aboveMa20 || fourHour.ma20Recovery ? CRYPTO_SLOT_PCT.starterPlus20 : CRYPTO_SLOT_PCT.starter;
+      stageText = slotPct >= CRYPTO_SLOT_PCT.starterPlus20 ? "기초+20" : "기초";
+      message = "주봉은 20주선 위지만 일봉 30일선 아래라 상방 전환 실패 또는 횡보 전환 가능성을 보고 기초~기초+20 안에서만 운용합니다.";
+    } else {
+      slotPct = fourHour.aboveMa20 || fourHour.ma20Recovery || breakdown.shortRebound
+        ? CRYPTO_SLOT_PCT.starterPlus10
+        : CRYPTO_SLOT_PCT.starter;
+      stageText = slotPct >= CRYPTO_SLOT_PCT.starterPlus10 ? "기초+10" : "기초";
+      message = "주봉 20주선 아래, 일봉 30일선 아래라 완전한 상승 전환 전입니다. 기술적 반등이 있어도 기초 또는 기초+10까지만 허용합니다.";
+    }
+
+    if (weeklyMa.valid && !weeklyMa.above30 && slotPct > CRYPTO_SLOT_PCT.base) {
+      slotPct = CRYPTO_SLOT_PCT.base;
+      stageText = "기본상한";
+      message = `${message} 주봉 30주선 아래에서는 최대 비중을 기본물량 65%로 제한합니다.`;
+      baseRebuildNeeded = true;
+    }
+
+    if (fibBox.valid && fibBox.inDeepBottomZone && slotPct > CRYPTO_SLOT_PCT.starter) {
+      slotPct = breakdown.shortRebound ? CRYPTO_SLOT_PCT.starterPlus10 : CRYPTO_SLOT_PCT.starter;
+      stageText = breakdown.shortRebound ? "기초+10" : "기초";
+      message = `${message} 300일 피보가 61.8~100% 바닥권이라 큰그림은 아직 정배열 전환 전으로 보고 기초 중심으로 낮춥니다.`;
+    }
+
+    if (breakdown.shortRebound && slotPct < CRYPTO_SLOT_PCT.starterPlus10) {
+      slotPct = CRYPTO_SLOT_PCT.starterPlus10;
+      stageText = "기초+10";
+      message = `${message} 60일 최저점 대비 ${formatNum(breakdown.reboundPct, 1)}% 반등해 기초+10 40% 셋업을 허용합니다.`;
+    }
+
+    if (breakdown.broken) {
+      const reducedSlotPct = Math.round(slotPct * breakdown.retainRatio);
+      slotPct = Math.max(CRYPTO_SLOT_PCT.scout, reducedSlotPct);
+      stageText = slotPct < CRYPTO_SLOT_PCT.starter ? "기초이하" : "저점이탈축소";
+      message = `${message} 최근 200일 저점을 하향 이탈해 기존 목표비중의 60%를 덜고 ${formatNum(slotPct, 0)}%만 유지합니다. ${slotPct < CRYPTO_SLOT_PCT.starter ? "기초물량 이하 꼬리표입니다." : ""}`;
+      baseRebuildNeeded = false;
+    }
+
+    const portfolioPct = profile.capPct * slotPct / 100;
+    const className = slotPct >= CRYPTO_SLOT_PCT.base
+      ? "candidate"
+      : slotPct >= CRYPTO_SLOT_PCT.starter ? "watch" : "warning";
+    return {
+      slotPct,
+      portfolioPct,
+      stageText,
+      className,
+      label: `${stageText} ${formatNum(slotPct, 0)}%`,
+      capText: `${profile.typeLabel} ${formatNum(profile.capPct, 0)}%`,
+      slotText: `종목 ${formatNum(slotPct, 0)}%`,
+      portfolioText: `전체 ${formatNum(portfolioPct, 1)}%`,
+      message,
+      baseRebuildNeeded,
     };
   }
 
@@ -6632,8 +6771,8 @@ function cryptoDetailMetricItems(asset, allAssets = [], signal = null, rows = []
     { label: "기본증가", value: signal?.baseBuildOrderText || "-", text: signal?.baseBuildOrderSubText || "-" },
     { label: "불타기주문", value: signal?.pyramidOrderText || "-", text: signal?.pyramidOrderSubText || "-" },
     { label: "일봉 위치", value: signal?.dailyText || "-", text: signal?.dailySubText || "-" },
-    { label: "피보박스", value: signal?.fibBoxText || "-", text: signal?.fibBoxSubText || "-" },
-    { label: "주봉 전환", value: signal?.weeklyTrendText || "-", text: signal?.weeklyTrendSubText || "기준선·단기매물 돌파 확인" },
+    { label: "300일 피보", value: signal?.fibBoxText || "-", text: signal?.fibBoxSubText || "-" },
+    { label: "주봉 20/30", value: signal?.weeklyMaText || signal?.weeklyTrendText || "-", text: signal?.weeklyMaSubText || signal?.weeklyTrendSubText || "20/30주선 확인" },
     { label: "4H 수급", value: signal?.fourHourText || "-", text: signal?.fourHourSubText || "-" },
     { label: "4H 방어", value: signal?.fourHourRiskText || "-", text: signal?.fourHourRiskSubText || "-" },
     { label: "추세전환", value: signal?.trendReversalText || "-", text: signal?.trendReversalSubText || "후행·구름·정배열 전환 대기" },
@@ -6643,6 +6782,10 @@ function cryptoDetailMetricItems(asset, allAssets = [], signal = null, rows = []
     { label: "고점컷", value: signal?.forcedReduceText || "-", text: signal?.forcedReduceSubText || "메이저15·알트20·예외25%" },
     { label: "최종손절선", value: finalStopValue, text: finalStopText },
   ];
+  if (signal?.key === "btc") {
+    items.splice(10, 0, { label: "저점방어", value: signal?.breakdownText || "-", text: signal?.breakdownSubText || "200일 저점/60일 반등 확인" });
+    return items.filter((item, index) => [0, 3, 4, 8, 9, 10, 11, 14].includes(index));
+  }
   return items.filter((item, index) => [0, 3, 4, 5, 10, 11, 13, 17].includes(index));
 }
 
@@ -6674,8 +6817,9 @@ function cryptoSignalCard(asset, allAssets = [], options = {}) {
     { label: "기본증가", value: signal.baseBuildOrderText },
     { label: "불타기주문", value: signal.pyramidOrderText },
     { label: "일봉", value: signal.dailyText },
-    { label: "피보박스", value: signal.fibBoxText },
-    { label: "주봉", value: signal.weeklyTrendText },
+    { label: "300일피보", value: signal.fibBoxText },
+    { label: "주봉20/30", value: signal.weeklyMaText || signal.weeklyTrendText },
+    ...(signal.key === "btc" ? [{ label: "200일저점", value: signal.breakdownText }] : []),
     { label: "4시간", value: signal.fourHourText },
     { label: "4H방어", value: signal.fourHourRiskText },
     { label: "추세전환", value: signal.trendReversalText },
@@ -6736,12 +6880,14 @@ function cryptoSignalPlan(asset, allAssets = [], options = {}) {
   const fibBox = cryptoDailyFibBoxAnalysis(asset?.history || [], state.selectedDate);
   const thirtyRows = cryptoRowsForFrame(asset, "30m");
   const weekly = cryptoWeeklyTrendAnalysis(cryptoRowsForFrame(asset, "1w"), state.selectedDate);
+  const weeklyMa = cryptoWeeklyMaContext(cryptoRowsForFrame(asset, "1w"), state.selectedDate);
+  const breakdown = cryptoRecentLowBreakdownAnalysis(asset?.history || [], state.selectedDate);
   const fourHourRows = cryptoRowsForFrame(asset, "240m");
   const fourHour = cryptoFourHourAnalysis(fourHourRows, state.selectedDate);
   const fourHourRisk = cryptoFourHourRiskAnalysis(fourHourRows, state.selectedDate);
   const thirtyEntry = cryptoThirtyMinuteEntryAnalysis(thirtyRows, state.selectedDate);
   const thirtyMinute = cryptoThirtyMinuteAnalysis(thirtyRows, state.selectedDate, { profile });
-  const allocation = cryptoAllocationPlan(profile, daily, fourHour, thirtyEntry, weekly, { reentry: thirtyMinute.reentry, thirtyMinute });
+  const allocation = cryptoAllocationPlan(profile, daily, fourHour, thirtyEntry, weekly, { reentry: thirtyMinute.reentry, thirtyMinute, weeklyMa, fibBox, breakdown });
   const entered = allocation.slotPct >= CRYPTO_SLOT_PCT.base || allocation.weeklyStarter;
   const noticeAfterExit = ["reentry_bounce", "fib618_touch_rebound"].includes(thirtyMinute.status);
   const trackingExit = entered && !allocation.weeklyStarter && thirtyMinute.finalStop;
@@ -6791,13 +6937,15 @@ function cryptoSignalPlan(asset, allAssets = [], options = {}) {
     : allocation.message;
   if (!trackingExit && fibBox.valid) {
     if (addPyramidCandidate) {
-      message = `${message} 일봉 피보박스 ${formatNum(fibBox.positionPct, 1)}%: 38.2~61.8 구간이라 30분 추세 유지 시 추가 불타기 검토입니다.`;
+      message = `${message} 300일 피보 ${formatNum(fibBox.positionPct, 1)}%: 38.2~61.8 구간이라 30분 추세 유지 시 추가 불타기 검토입니다.`;
     } else if (fibBox.crossed618) {
-      message = `${message} 일봉 피보박스는 61.8%를 넘겨 과열/돌파 지속 여부를 확인합니다.`;
+      message = `${message} 300일 피보는 61.8% 위로 회복했습니다.`;
     } else if (fibBox.crossed50) {
-      message = `${message} 일봉 피보박스는 중심값 50%를 회복했습니다.`;
+      message = `${message} 300일 피보는 중심값 50%를 회복했습니다.`;
     } else if (fibBox.crossed382) {
-      message = `${message} 일봉 피보박스 38.2% 회복 구간입니다. 30분 추세가 붙는지 확인합니다.`;
+      message = `${message} 300일 피보 38.2% 회복 구간입니다. 30분 추세가 붙는지 확인합니다.`;
+    } else if (fibBox.inDeepBottomZone) {
+      message = `${message} 300일 피보가 61.8~100% 바닥권에 있어 큰그림은 기초물량 중심입니다.`;
     }
   }
   if (!trackingExit && profile.assetType === "exception" && weekly.strong) {
@@ -6903,6 +7051,12 @@ function cryptoSignalPlan(asset, allAssets = [], options = {}) {
     weeklyTrend: weekly,
     weeklyTrendText: weekly.label || "-",
     weeklyTrendSubText: weekly.subText || "주봉 기준선·매물대 확인",
+    weeklyMa,
+    weeklyMaText: profile.key === "btc" ? weeklyMa.label || "-" : weekly.label || "-",
+    weeklyMaSubText: profile.key === "btc" ? weeklyMa.subText || "20/30주선 확인" : weekly.subText || "주봉 기준선·매물대 확인",
+    breakdown,
+    breakdownText: breakdown.label || "-",
+    breakdownSubText: breakdown.subText || "200일 저점/60일 반등 확인",
     weeklyStarter: Boolean(allocation.weeklyStarter),
     exceptionEntryStrong: profile.assetType === "exception" && Boolean(fourHour.strong || thirtyEntry.strong || allocation.weeklyStarter),
     thirtyEntryText: thirtyEntry.label,
@@ -7998,6 +8152,7 @@ function drawCryptoDetailChart(canvas, asset, assets = []) {
     { label: "구름하단", color: themeColor("--blue", "#82a7e6") },
     { label: boxLabel, color: themeColor("--teal", "#4eb7b1") },
     { label: averageLabel, color: themeColor("--green", "#5fc79b") },
+    ...(state.cryptoFrame === "1w" ? [{ label: "30주선", color: themeColor("--blue", "#82a7e6") }] : []),
     ...(state.cryptoFrame === "30m"
       ? [
         { label: "5이평", color: themeColor("--green", "#5fc79b") },
@@ -8037,6 +8192,9 @@ function drawCryptoDetailChart(canvas, asset, assets = []) {
       ] : []),
       ...(state.cryptoFrame === "240m" ? [
         { key: "ma30", label: "30선", color: themeColor("--blue", "#82a7e6"), width: 1.2, dash: [4, 4] },
+      ] : []),
+      ...(state.cryptoFrame === "1w" ? [
+        { key: "ma30", label: "30주선", color: themeColor("--blue", "#82a7e6"), width: 1.25, dash: [4, 4] },
       ] : []),
       { key: averageKey, label: averageLabel, color: themeColor("--green", "#5fc79b"), width: 1.4 },
     ],

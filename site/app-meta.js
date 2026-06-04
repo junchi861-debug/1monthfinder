@@ -1,5 +1,5 @@
 (function exposeAppMeta(root) {
-  const version = "20260603-algorithm-next";
+  const version = "20260604-btc-weekly-risk";
   const appShell = [
     "./",
     "./index.html",
