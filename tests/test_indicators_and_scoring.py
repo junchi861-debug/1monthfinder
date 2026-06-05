@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 
 from stock_finder.indicators import average_traded_value, max_drawdown, pct_return, rsi
-from stock_finder.scoring import score_history
+from stock_finder.scoring import _inverse_clip_score, score_history
 
 
 class IndicatorTests(unittest.TestCase):
@@ -39,6 +39,9 @@ class IndicatorTests(unittest.TestCase):
 
 
 class ScoringTests(unittest.TestCase):
+    def test_inverse_clip_does_not_reward_missing_risk_value(self) -> None:
+        self.assertEqual(_inverse_clip_score(float("nan"), 0.18, 0.75), 0.0)
+
     def test_score_history_returns_bounded_score_and_expected_fields(self) -> None:
         close = pd.Series(np.linspace(100.0, 128.0, 90))
         volume = pd.Series([1_000_000] * 90)
@@ -51,6 +54,8 @@ class ScoringTests(unittest.TestCase):
         self.assertIn(result["expected_action"], {"candidate", "watch", "avoid"})
         self.assertEqual(result["last_close"], 128.0)
         self.assertIn("liquidity_score", result)
+        self.assertEqual(result["score_basis"], "market_signals:1m:balanced")
+        self.assertIn("legacy_score", result)
 
 
 if __name__ == "__main__":

@@ -668,12 +668,16 @@ def _attach_signal_outcomes(
                     raw_return = (close / entry_close - 1) * 100
                     adjusted_return = ((close - entry_close - cost_model["index_points"]) / entry_close) * 100
                     horizons[label] = {
+                        "basis": "kospi200_index_proxy",
                         "close": round(close, 4),
                         "return_pct": round(raw_return, 3),
                         "cost_adjusted_return_pct": round(adjusted_return, 3),
                     }
 
         outcome = {
+            "performance_basis": "kospi200_index_proxy",
+            "is_real_option_fill": False,
+            "requires_option_quote_validation": True,
             "status": "ready" if horizons else "pending",
             "evaluated_at": _iso(generated_at),
             "bars_elapsed": max(0, latest_index - candle_index),
@@ -697,6 +701,9 @@ def _signal_execution_cost_model() -> dict[str, float]:
     spread_pct = _settings_number(settings.get("option_spread_pct"), 0.04)
     slippage_pct = _settings_number(settings.get("option_slippage_pct"), 0.015)
     return {
+        "basis": "index_proxy_only",
+        "is_real_option_fill": False,
+        "requires_option_quote_validation": True,
         "index_points": round(index_points, 4),
         "option_spread_pct": round(spread_pct, 4),
         "option_slippage_pct": round(slippage_pct, 4),
@@ -1671,6 +1678,8 @@ def _log_trade_from_signal(signal: dict[str, Any]) -> dict[str, Any] | None:
             "tp1": premium["tp1"],
             "tp2": premium["tp2"],
             "contracts": premium["contracts"],
+            "premium_basis": premium.get("premium_basis"),
+            "requires_option_quote_validation": premium.get("requires_option_quote_validation", True),
         }
     if _is_late_session_signal(signal):
         return _late_session_trade_plan(signal, premium)
@@ -1682,6 +1691,8 @@ def _log_trade_from_signal(signal: dict[str, Any]) -> dict[str, Any] | None:
             "tp1": premium["tp1"],
             "tp2": premium["tp2"],
             "contracts": premium["contracts"],
+            "premium_basis": premium.get("premium_basis"),
+            "requires_option_quote_validation": premium.get("requires_option_quote_validation", True),
         }
     return None
 
@@ -1715,6 +1726,8 @@ def _late_session_trade_plan(signal: dict[str, Any], premium: dict[str, Any]) ->
         "stopText": f"3.3 후 {trailing_stop:.2f} 방어" if is_aggressive and trailing_stop is not None else "기준/전환 확인",
         "tp2Text": "15:30까지" if is_aggressive else "15:30 준비",
         "contracts": 1,
+        "premium_basis": premium.get("premium_basis"),
+        "requires_option_quote_validation": premium.get("requires_option_quote_validation", True),
         "experimentalTag": metrics.get("codex_experimental_tag") or CODEX_EXPERIMENTAL_PROFIT_EXTENSION_TAG,
     }
 
@@ -1785,6 +1798,8 @@ def _trade_setup_from_signal(signal: dict[str, Any], levels: dict[str, Any], ent
         "tp1": premium["tp1"],
         "tp2": premium["tp2"],
         "contracts": premium["contracts"],
+        "premium_basis": premium.get("premium_basis"),
+        "requires_option_quote_validation": premium.get("requires_option_quote_validation", True),
         "tp1_contracts": 1 if premium["contracts"] > 1 else 0,
         "stop_label": "지수컷" if is_tenkan_pullback and stop_reference is not None else None,
         "stop_text": f"기준 {stop_reference:.2f} · 선물확인" if is_tenkan_pullback and stop_reference is not None else None,
@@ -1809,6 +1824,8 @@ def _option_premium_plan(signal: dict[str, Any]) -> dict[str, Any]:
         "tp1": profile.get("tp1", entry * profile.get("tp1_multiplier", 1.3)),
         "tp2": profile.get("tp2", entry * profile.get("tp2_multiplier", 1.45)),
         "contracts": int(profile.get("contracts") or 1),
+        "premium_basis": profile.get("premium_basis", "planned_premium_not_live_quote"),
+        "requires_option_quote_validation": True,
     }
 
 
@@ -1817,7 +1834,7 @@ def _premium_profile(signal: dict[str, Any]) -> dict[str, Any]:
     metrics = signal.get("metrics") or {}
     action = str(signal.get("action") or signal.get("rule") or "")
     if signal.get("trade_decision") == "test":
-        return {"entry": 1.0, "contracts": 1, "stop_multiplier": 0.6, "tp1_multiplier": 1.3, "tp2_multiplier": 1.45}
+        return {"entry": 1.0, "contracts": 1, "stop_multiplier": 0.6, "tp1_multiplier": 1.3, "tp2_multiplier": 1.45, "premium_basis": "planned_test_premium_not_live_quote"}
     explicit_entry = _num(metrics.get("option_entry_premium"))
     if explicit_entry is not None:
         explicit_tp1 = _num(metrics.get("option_tp1_premium")) or explicit_entry * 1.13
@@ -1827,6 +1844,7 @@ def _premium_profile(signal: dict[str, Any]) -> dict[str, Any]:
             "stop_multiplier": 0.68,
             "tp1": explicit_tp1,
             "tp2": max(explicit_tp1, explicit_entry * 1.37),
+            "premium_basis": "signal_metric_planned_premium_not_live_quote",
         }
     if "INDEX_RESET" in action or "RESET_MID" in action:
         return {
@@ -1835,6 +1853,7 @@ def _premium_profile(signal: dict[str, Any]) -> dict[str, Any]:
             "stop_multiplier": 0.7,
             "tp1_multiplier": 1.35,
             "tp2_multiplier": 1.55,
+            "premium_basis": "reset_config_planned_premium_not_live_quote",
         }
     if "TENKAN_PULLBACK" in action or "KIJUN_SUPPORT" in action:
         entry = float(settings["tenkan_entry_premium"])
@@ -1844,6 +1863,7 @@ def _premium_profile(signal: dict[str, Any]) -> dict[str, Any]:
             "stop_multiplier": 0.68,
             "tp1": max(2.6, entry * 1.13),
             "tp2": max(2.6, entry * 1.37),
+            "premium_basis": "tenkan_config_planned_premium_not_live_quote",
         }
     return {
         "entry": float(settings["default_entry_premium"]),
@@ -1851,6 +1871,7 @@ def _premium_profile(signal: dict[str, Any]) -> dict[str, Any]:
         "stop_multiplier": 0.7,
         "tp1_multiplier": 1.3,
         "tp2_multiplier": 1.45,
+        "premium_basis": "default_config_planned_premium_not_live_quote",
     }
 
 
@@ -1993,6 +2014,8 @@ def _trade_for_marker(setup: dict[str, Any], kind: str) -> dict[str, Any]:
         "tp1": setup.get("tp1"),
         "tp2": setup.get("tp2"),
         "contracts": setup.get("contracts", 1),
+        "premium_basis": setup.get("premium_basis"),
+        "requires_option_quote_validation": setup.get("requires_option_quote_validation", True),
     }
 
 

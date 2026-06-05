@@ -37,6 +37,7 @@ class StrategyResult:
     rows: list[dict[str, object]]
     funnel: list[dict[str, object]]
     backtest: dict[str, object]
+    quality_report: dict[str, object]
     final_candidates: list[dict[str, object]]
     watch: list[dict[str, object]]
 
@@ -87,6 +88,7 @@ def _period_payload(config: dict[str, object], result: StrategyResult, algorithm
         "rows": result.rows,
         "funnel": result.funnel,
         "backtest": result.backtest,
+        "quality_report": result.quality_report,
         "final_candidates": result.final_candidates,
         "watch": result.watch,
     }
@@ -130,10 +132,14 @@ def build_market_site_data(
             "rows": default_payload["rows"],
             "funnel": default_payload["funnel"],
             "backtest": default_payload["backtest"],
+            "quality_report": default_payload["quality_report"],
             "final_candidates": default_payload["final_candidates"],
             "watch": default_payload["watch"],
         }
 
+    out_path = Path(out_dir)
+    out_path.mkdir(parents=True, exist_ok=True)
+    signal_tracking = _build_signal_tracking_report(period_results, histories, out_path, generated_at)
     report = {
         "generated_at": generated_at.isoformat(),
         "timezone": TIMEZONE,
@@ -153,13 +159,12 @@ def build_market_site_data(
             "raw_universe": _clean(universe),
             "history_symbols": [{"symbol": row["symbol"], "name": row["name"], "market": row["market"]} for row in selected],
             "periods": period_results,
+            "signal_tracking": signal_tracking,
         },
         "us": _planned_asset("미국 주식"),
         "crypto": _planned_asset("코인"),
     }
 
-    out_path = Path(out_dir)
-    out_path.mkdir(parents=True, exist_ok=True)
     (out_path / "market_report.json").write_text(
         json.dumps(_clean(report), ensure_ascii=False, indent=2, allow_nan=False),
         encoding="utf-8",
@@ -290,9 +295,11 @@ def _build_strategy(
         row["reason"] = _reason_for_row(row, period_key, algorithm_key)
         rows.append(_clean(row))
 
+    _attach_cross_sectional_percentiles(rows)
     rows = sorted(rows, key=lambda row: _number(row.get("score")), reverse=True)
     for index, row in enumerate(rows, start=1):
         row["rank"] = index
+        _apply_risk_and_regime_filters(row, period_key, algorithm_key)
 
     backtest = _backtest_period(period_key, config, algorithm_key, selected_by_symbol, histories, transaction_cost)
     strategy_ok = _strategy_validation(backtest)
@@ -302,12 +309,19 @@ def _build_strategy(
             row["final_action"] = "watch"
             row["trade_signal"] = _signal_for_action(row["final_action"])
             row["reason"] = "점수는 높지만 과거 동일 규칙 검증 기준을 아직 통과하지 못했습니다."
+            blocked_by = list(row.get("candidate_blocked_by") or [])
+            if "strategy_validation" not in blocked_by:
+                blocked_by.append("strategy_validation")
+            row["candidate_blocked_by"] = blocked_by
 
     _promote_target_candidates(rows, period_key, algorithm_key, strategy_ok)
+    _apply_correlation_diversification(rows, histories, period_key, algorithm_key)
+    _attach_exit_plans(rows, period_key, algorithm_key)
     for row in rows:
         row["trade_signal"] = _signal_for_action(row["final_action"])
 
     funnel = _build_period_funnel(period_key, algorithm_key, universe, selected, histories, rows)
+    quality_report = _signal_quality_report(rows, backtest, strategy_ok, period_key, algorithm_key)
     final_candidates = [row for row in rows if row["final_action"] == "candidate"][:20]
     watch = [row for row in rows if row["final_action"] == "watch"][:20]
     _attach_price_history(final_candidates + watch, histories)
@@ -316,6 +330,7 @@ def _build_strategy(
         rows=rows[:500],
         funnel=funnel,
         backtest=backtest,
+        quality_report=quality_report,
         final_candidates=final_candidates,
         watch=watch,
     )
@@ -341,6 +356,8 @@ def _price_points(history: pd.DataFrame, days: int) -> list[dict[str, object]]:
 def _features_at(history: pd.DataFrame, position: int) -> dict[str, object]:
     sample = history.iloc[: position + 1]
     close = sample["close"]
+    high = sample["high"] if "high" in sample else close
+    low = sample["low"] if "low" in sample else close
     volume = sample["volume"]
     amount = close * volume
     returns = close.pct_change()
@@ -360,6 +377,7 @@ def _features_at(history: pd.DataFrame, position: int) -> dict[str, object]:
     ma60 = close.rolling(60).mean().iloc[-1] if len(close) >= 60 else np.nan
     ma120 = close.rolling(120).mean().iloc[-1] if len(close) >= 120 else np.nan
     high_252 = close.tail(252).max() if len(close) else np.nan
+    atr_14_pct = _atr_pct(high, low, close, 14)
 
     amount_5d = amount.tail(5).mean()
     amount_20d = amount.tail(20).mean()
@@ -371,6 +389,7 @@ def _features_at(history: pd.DataFrame, position: int) -> dict[str, object]:
     high_proximity = float(close.iloc[-1] / high_252) if high_252 and not pd.isna(high_252) else np.nan
 
     features = {
+        "history_days": len(sample),
         "last_close": round(float(close.iloc[-1]), 4),
         "ret_1d": _round(ret_1d, 4),
         "ret_5d": _round(ret_5d, 4),
@@ -381,6 +400,7 @@ def _features_at(history: pd.DataFrame, position: int) -> dict[str, object]:
         "vol_5d": _round(vol_5d, 4),
         "vol_21d": _round(vol_21d, 4),
         "vol_63d": _round(vol_63d, 4),
+        "atr_14_pct": _round(atr_14_pct, 4),
         "max_drawdown_63d": _round(drawdown_63d, 4),
         "max_drawdown_252d": _round(drawdown_252d, 4),
         "amount_5d": _round(amount_5d, 2),
@@ -419,6 +439,28 @@ def _period_score(period_key: str, features: dict[str, object], algorithm_key: s
         "issue_score": round(float(components["attention"]), 4),
         "trend_score": round(float(components["trend"]), 4),
     }
+
+
+def _attach_cross_sectional_percentiles(rows: list[dict[str, object]]) -> None:
+    fields = {
+        "score": "score_percentile",
+        "momentum_score": "momentum_percentile",
+        "risk_score": "risk_percentile",
+        "liquidity_score": "liquidity_percentile",
+        "issue_score": "issue_percentile",
+        "trend_score": "trend_percentile",
+    }
+    if not rows:
+        return
+
+    for field, output in fields.items():
+        values = pd.Series([_number(row.get(field), default=np.nan) for row in rows], dtype="float64")
+        if values.dropna().empty:
+            continue
+        percentiles = values.rank(method="average", pct=True)
+        for row, percentile in zip(rows, percentiles, strict=False):
+            if pd.notna(percentile):
+                row[output] = round(float(percentile), 4)
 
 
 def _market_regime_for_features(features: dict[str, object]) -> str:
@@ -479,6 +521,151 @@ def _action_for_row(row: dict[str, object], period_key: str, algorithm_key: str)
     if score >= _watch_threshold(period_key, algorithm_key, regime):
         return "watch"
     return "avoid"
+
+
+def _apply_risk_and_regime_filters(row: dict[str, object], period_key: str, algorithm_key: str) -> None:
+    initial_action = str(row.get("final_action") or "avoid")
+    row["action_before_safety_filters"] = initial_action
+    blocked_by: list[str] = []
+
+    risk_gate = _risk_gate_for_row(row, period_key)
+    row["risk_gate"] = risk_gate
+    if not risk_gate["passed"] and _downgrade_action(row.get("final_action"), risk_gate["downgrade_action"]):
+        if initial_action == "candidate":
+            blocked_by.append("risk_gate")
+        row["final_action"] = risk_gate["downgrade_action"]
+        row["reason"] = _combine_reasons(row.get("reason"), risk_gate["summary"])
+
+    regime_filter = _market_regime_filter_for_row(row, period_key, algorithm_key)
+    row["market_regime_filter"] = regime_filter
+    if not regime_filter["passed"] and _downgrade_action(row.get("final_action"), regime_filter["downgrade_action"]):
+        if initial_action == "candidate":
+            blocked_by.append("market_regime_filter")
+        row["final_action"] = regime_filter["downgrade_action"]
+        row["reason"] = _combine_reasons(row.get("reason"), regime_filter["summary"])
+
+    if blocked_by:
+        row["candidate_blocked_by"] = blocked_by
+
+
+def _risk_gate_for_row(row: dict[str, object], period_key: str) -> dict[str, object]:
+    config = STRATEGY_CONFIG.get("risk_gate", {})
+    if not isinstance(config, dict) or config.get("enabled") is False:
+        return _gate_result(True, "리스크 게이트 비활성", [], "pass")
+
+    shared = config.get("shared", {}) if isinstance(config.get("shared"), dict) else {}
+    periods = config.get("periods", {}) if isinstance(config.get("periods"), dict) else {}
+    period_config = periods.get(period_key, {}) if isinstance(periods.get(period_key), dict) else {}
+    rules = {**shared, **period_config}
+    reasons: list[str] = []
+    downgrade_action = "pass"
+
+    def fail(reason: str, action: str = "watch") -> None:
+        nonlocal downgrade_action
+        reasons.append(reason)
+        if action == "avoid":
+            downgrade_action = "avoid"
+        elif downgrade_action == "pass":
+            downgrade_action = "watch"
+
+    min_history = int(_number(rules.get("min_history_days"), PERIODS.get(period_key, {}).get("min_lookback", 0)))
+    history_days = int(_number(row.get("history_days"), 0))
+    if min_history and history_days < min_history:
+        fail(f"가격 이력 {history_days}일로 기준 {min_history}일 미만", "avoid")
+
+    min_liquidity_score = _number(rules.get("min_liquidity_score"), 0)
+    if _number(row.get("liquidity_score")) < min_liquidity_score:
+        fail(f"유동성 점수 {_number(row.get('liquidity_score')):.2f} < {min_liquidity_score:.2f}", "avoid")
+
+    min_amount_20d = _number(rules.get("min_amount_20d"), 0)
+    amount_20d = _number(row.get("amount_20d"), default=np.nan)
+    if min_amount_20d and (not math.isfinite(amount_20d) or amount_20d < min_amount_20d):
+        fail(f"20일 평균 거래대금 {amount_20d:,.0f} < {min_amount_20d:,.0f}", "avoid")
+
+    min_risk_score = _number(rules.get("min_risk_score"), 0)
+    if _number(row.get("risk_score")) < min_risk_score:
+        fail(f"리스크 점수 {_number(row.get('risk_score')):.2f} < {min_risk_score:.2f}")
+
+    max_abs_1d_return = _number(rules.get("max_abs_1d_return"), 0)
+    ret_1d = _number(row.get("ret_1d"), default=np.nan)
+    if max_abs_1d_return and math.isfinite(ret_1d) and abs(ret_1d) > max_abs_1d_return:
+        fail(f"1일 등락률 {ret_1d:.1%}로 과열/급락 기준 {max_abs_1d_return:.1%} 초과")
+
+    vol_feature = str(rules.get("max_volatility_feature") or "")
+    max_volatility = _number(rules.get("max_volatility"), 0)
+    volatility = _number(row.get(vol_feature), default=np.nan) if vol_feature else np.nan
+    if max_volatility and math.isfinite(volatility) and volatility > max_volatility:
+        fail(f"{vol_feature} {volatility:.2f} > {max_volatility:.2f}")
+
+    drawdown_feature = str(rules.get("max_drawdown_feature") or "")
+    max_drawdown = _number(rules.get("max_drawdown"), default=np.nan)
+    drawdown = _number(row.get(drawdown_feature), default=np.nan) if drawdown_feature else np.nan
+    if math.isfinite(max_drawdown) and math.isfinite(drawdown) and drawdown <= max_drawdown:
+        fail(f"{drawdown_feature} {drawdown:.1%} <= {max_drawdown:.1%}")
+
+    passed = not reasons
+    return _gate_result(passed, "리스크 게이트 통과" if passed else " · ".join(reasons[:3]), reasons, downgrade_action)
+
+
+def _market_regime_filter_for_row(row: dict[str, object], period_key: str, algorithm_key: str) -> dict[str, object]:
+    config = STRATEGY_CONFIG.get("market_regime_filter", {})
+    guards = config.get("candidate_guards", {}) if isinstance(config, dict) else {}
+    regime = str(row.get("market_regime") or "range")
+    guard = guards.get(regime, {}) if isinstance(guards, dict) else {}
+    if not isinstance(guard, dict) or not guard:
+        return _gate_result(True, f"{regime} 국면 추가 제한 없음", [], "pass")
+
+    reasons: list[str] = []
+    for field in ("min_liquidity_score", "min_momentum_score", "min_risk_score", "min_trend_score"):
+        if field not in guard:
+            continue
+        row_field = field.removeprefix("min_")
+        threshold = _number(guard.get(field))
+        value = _number(row.get(row_field))
+        if value < threshold:
+            reasons.append(f"{regime} 국면 {row_field} {value:.2f} < {threshold:.2f}")
+
+    if guard.get("requires_above_ma20") and not bool(row.get("above_ma20")):
+        reasons.append(f"{regime} 국면에서 20일선 회복 전")
+    if guard.get("requires_above_ma60") and not bool(row.get("above_ma60")):
+        reasons.append(f"{regime} 국면에서 60일선 회복 전")
+
+    passed = not reasons
+    summary = f"{regime} 국면 필터 통과" if passed else " · ".join(reasons[:3])
+    action = str(guard.get("downgrade_action") or "watch")
+    if action not in {"watch", "avoid"}:
+        action = "watch"
+    return _gate_result(passed, summary, reasons, "pass" if passed else action)
+
+
+def _gate_result(passed: bool, summary: str, reasons: list[str], downgrade_action: str) -> dict[str, object]:
+    action = downgrade_action if downgrade_action in {"watch", "avoid"} else "pass"
+    return {
+        "passed": passed,
+        "summary": summary,
+        "reasons": reasons or [summary],
+        "downgrade_action": action,
+    }
+
+
+def _downgrade_action(current_action: object, downgrade_action: object) -> bool:
+    current = str(current_action or "avoid")
+    downgrade = str(downgrade_action or "pass")
+    if downgrade == "avoid":
+        return current in {"candidate", "watch"}
+    if downgrade == "watch":
+        return current == "candidate"
+    return False
+
+
+def _combine_reasons(existing: object, addition: object) -> str:
+    base = str(existing or "").strip()
+    extra = str(addition or "").strip()
+    if not base:
+        return extra
+    if not extra or extra in base:
+        return base
+    return f"{base} 안전필터: {extra}"
 
 
 def _signal_for_action(action: object) -> str:
@@ -586,12 +773,12 @@ def _promote_target_candidates(
     selected_symbols = set(
         row["symbol"]
         for row in rows
-        if _short_term_guardrail(row)
+        if _short_term_guardrail(row) and _allows_opportunity_watch(row)
     )
     selected_symbols = set([row["symbol"] for row in rows if row["symbol"] in selected_symbols][:target])
     if len(selected_symbols) < target:
         for row in rows:
-            if row["symbol"] in selected_symbols or _number(row.get("score")) < 45:
+            if row["symbol"] in selected_symbols or _number(row.get("score")) < 45 or not _allows_opportunity_watch(row):
                 continue
             selected_symbols.add(row["symbol"])
             if len(selected_symbols) >= target:
@@ -599,12 +786,191 @@ def _promote_target_candidates(
 
     for row in rows:
         if row["symbol"] in selected_symbols:
-            row["final_action"] = "candidate"
+            row["final_action"] = "watch"
             row["strategy_validation"] = strategy_ok
-            row["reason"] = "1일 단기 알고리즘 기준 상위 3개 후보입니다. 당일 이슈성 신호라 검증 지표와 리스크를 함께 확인하세요."
+            row["opportunity_action"] = "top_issue_watch"
+            row["opportunity_signal"] = "warning"
+            row["opportunity_ranked"] = True
+            row["reason"] = "1일 단기 알고리즘 기준 상위 3개 검증 관찰입니다. 실거래 후보가 아니라 당일 이슈성 신호와 리스크를 함께 확인하세요."
         elif row["final_action"] == "candidate":
             row["final_action"] = "watch"
-            row["reason"] = "후보 기준은 넘었지만 1일 화면에서는 상위 3개만 최종 후보로 표시합니다."
+            row["opportunity_action"] = "score_watch"
+            row["reason"] = "후보 기준은 넘었지만 1일 단기 알고리즘은 검증 관찰로만 표시합니다."
+
+
+def _allows_opportunity_watch(row: dict[str, object]) -> bool:
+    for key in ("risk_gate", "market_regime_filter"):
+        gate = row.get(key)
+        if isinstance(gate, dict) and not gate.get("passed") and gate.get("downgrade_action") == "avoid":
+            return False
+    return True
+
+
+def _apply_correlation_diversification(
+    rows: list[dict[str, object]],
+    histories: dict[str, pd.DataFrame],
+    period_key: str,
+    algorithm_key: str,
+) -> None:
+    config = STRATEGY_CONFIG.get("diversification", {})
+    if not isinstance(config, dict) or config.get("enabled") is False:
+        return
+
+    window = max(5, int(_number(config.get("return_window_days"), 63)))
+    threshold = _number(config.get("correlation_threshold"), 0.88)
+    max_group = max(1, int(_number(config.get("max_correlated_candidates"), 2)))
+    min_score = _number(config.get("min_score_for_group"), 55)
+    selected: list[dict[str, object]] = []
+    selected_returns: dict[str, pd.Series] = {}
+
+    for row in rows:
+        row["diversification_filter"] = {"passed": True, "summary": "상관 중복 제한 통과", "group": None}
+        if row.get("final_action") != "candidate" or _number(row.get("score")) < min_score:
+            continue
+
+        symbol = str(row.get("symbol") or "")
+        series = _returns_for_symbol(histories.get(symbol), window)
+        if series.empty:
+            row["diversification_filter"] = {
+                "passed": True,
+                "summary": "상관계수 계산 표본 부족, 점수 순위 유지",
+                "group": None,
+            }
+            selected.append(row)
+            selected_returns[symbol] = series
+            continue
+
+        correlated = []
+        for kept in selected:
+            kept_symbol = str(kept.get("symbol") or "")
+            corr = _return_correlation(series, selected_returns.get(kept_symbol))
+            if corr is not None and corr >= threshold:
+                correlated.append((kept, corr))
+
+        if len(correlated) >= max_group:
+            lead = correlated[0][0]
+            lead_symbol = str(lead.get("symbol") or "")
+            lead_name = str(lead.get("name") or lead_symbol)
+            row["final_action"] = "watch"
+            row["opportunity_action"] = "correlation_watch"
+            blocked_by = list(row.get("candidate_blocked_by") or [])
+            if "correlation_diversification" not in blocked_by:
+                blocked_by.append("correlation_diversification")
+            row["candidate_blocked_by"] = blocked_by
+            row["diversification_filter"] = {
+                "passed": False,
+                "summary": f"{lead_name} 등 이미 선택된 후보와 최근 {window}일 상관이 높아 관찰로 낮췄습니다.",
+                "group": lead_symbol,
+                "max_correlation": round(float(max(corr for _, corr in correlated)), 4),
+                "threshold": threshold,
+                "max_correlated_candidates": max_group,
+            }
+            row["reason"] = _combine_reasons(row.get("reason"), row["diversification_filter"]["summary"])
+            continue
+
+        if correlated:
+            lead = correlated[0][0]
+            max_corr = max(corr for _, corr in correlated)
+            row["diversification_filter"] = {
+                "passed": True,
+                "summary": f"상관 후보군 {len(correlated) + 1}/{max_group}개 범위 안에서 유지",
+                "group": str(lead.get("symbol") or ""),
+                "max_correlation": round(float(max_corr), 4),
+                "threshold": threshold,
+                "max_correlated_candidates": max_group,
+            }
+        selected.append(row)
+        selected_returns[symbol] = series
+
+
+def _returns_for_symbol(history: pd.DataFrame | None, window: int) -> pd.Series:
+    if history is None or "close" not in history or len(history) < max(5, window // 2):
+        return pd.Series(dtype="float64")
+    returns = history["close"].dropna().astype(float).pct_change().dropna().tail(window)
+    returns.index = pd.RangeIndex(len(returns))
+    return returns
+
+
+def _return_correlation(left: pd.Series, right: pd.Series | None) -> float | None:
+    if right is None or left.empty or right.empty:
+        return None
+    length = min(len(left), len(right))
+    if length < 5:
+        return None
+    corr = left.tail(length).reset_index(drop=True).corr(right.tail(length).reset_index(drop=True))
+    if pd.isna(corr) or not math.isfinite(float(corr)):
+        return None
+    return float(corr)
+
+
+def _attach_exit_plans(rows: list[dict[str, object]], period_key: str, algorithm_key: str) -> None:
+    for row in rows:
+        row["exit_plan"] = _exit_plan_for_row(row, period_key, algorithm_key)
+
+
+def _exit_plan_for_row(row: dict[str, object], period_key: str, algorithm_key: str) -> dict[str, object]:
+    config = _exit_rule_config(period_key)
+    entry = _number(row.get("last_close"), default=np.nan)
+    if not math.isfinite(entry) or entry <= 0:
+        return {
+            "status": "unavailable",
+            "basis": "missing_entry_price",
+            "message": "진입 기준가가 없어 매도 계획을 계산하지 못했습니다.",
+        }
+
+    holding_days = int(PERIODS.get(period_key, {}).get("holding_days", 0) or 0)
+    time_stop_days = config.get("time_stop_days")
+    if time_stop_days is None:
+        time_stop_days = holding_days
+    atr_pct = _number(row.get("atr_14_pct"), default=np.nan)
+    if not math.isfinite(atr_pct) or atr_pct <= 0:
+        atr_pct = max(_number(row.get("vol_21d"), 0) / math.sqrt(TRADING_DAYS_PER_YEAR), _number(config.get("min_stop_pct"), 0.03))
+
+    stop_pct = float(np.clip(
+        atr_pct * _number(config.get("stop_atr_multiple"), 2.0),
+        _number(config.get("min_stop_pct"), 0.03),
+        _number(config.get("max_stop_pct"), 0.12),
+    ))
+    take_profit_r = _number(config.get("take_profit_r_multiple"), 2.0)
+    take_profit_pct = stop_pct * take_profit_r
+    weak_days = int(_number(config.get("weak_momentum_exit_days"), max(1, holding_days // 4 or 1)))
+    trailing_pct = _number(config.get("trailing_stop_pct"), stop_pct)
+    action = str(row.get("final_action") or "avoid")
+    status = "active" if action == "candidate" else "watch_only" if action == "watch" else "inactive"
+    message = (
+        f"손절 {stop_pct:.1%}, 1차 목표 {take_profit_pct:.1%}, "
+        f"시간 손절 {int(time_stop_days)}거래일을 매수 점수와 별도로 관리합니다."
+    )
+    if _number(row.get("momentum_score")) < 0.35:
+        message += f" 모멘텀이 약해 {weak_days}거래일 안에 회복 확인이 필요합니다."
+
+    return _clean(
+        {
+            "status": status,
+            "basis": "atr_volatility_exit_rule",
+            "period": period_key,
+            "algorithm": algorithm_key,
+            "entry_price": round(float(entry), 4),
+            "stop_loss_pct": round(stop_pct, 4),
+            "stop_loss_price": round(float(entry * (1 - stop_pct)), 4),
+            "take_profit_pct": round(take_profit_pct, 4),
+            "take_profit_price": round(float(entry * (1 + take_profit_pct)), 4),
+            "trailing_stop_pct": round(float(trailing_pct), 4),
+            "time_stop_days": int(time_stop_days),
+            "weak_momentum_exit_days": weak_days,
+            "message": message,
+        }
+    )
+
+
+def _exit_rule_config(period_key: str) -> dict[str, object]:
+    config = STRATEGY_CONFIG.get("exit_rules", {})
+    if not isinstance(config, dict):
+        return {}
+    base = config.get("default", {}) if isinstance(config.get("default"), dict) else {}
+    periods = config.get("periods", {}) if isinstance(config.get("periods"), dict) else {}
+    period = periods.get(period_key, {}) if isinstance(periods.get(period_key), dict) else {}
+    return {**base, **period}
 
 
 def _backtest_period(
@@ -620,6 +986,12 @@ def _backtest_period(
     step = int(config["step"])
     embargo_days = _backtest_embargo_days()
     cost_model = _backtest_cost_model(transaction_cost)
+    validation_scope = {
+        "scope": "current_universe_history",
+        "universe": "latest_krx_amount_ranked_symbols",
+        "price_history": "historical_daily_prices_for_current_symbols",
+        "bias_warning": "과거 시점별 상장/거래대금 유니버스가 아니라 최신 유니버스 기준 검증입니다.",
+    }
     trades: list[dict[str, object]] = []
 
     for symbol, history in histories.items():
@@ -636,6 +1008,10 @@ def _backtest_period(
             exit_price = float(history["close"].iloc[position + holding_days])
             gross = exit_price / entry - 1
             net = gross - float(cost_model["total_cost"])
+            path = history["close"].iloc[position : position + holding_days + 1].dropna().astype(float)
+            path_returns = path / entry - 1 if not path.empty else pd.Series(dtype="float64")
+            max_adverse = float(path_returns.min()) if not path_returns.empty else gross
+            max_favorable = float(path_returns.max()) if not path_returns.empty else gross
             trades.append(
                 {
                     "as_of": _date_string(history.index[feature_position]),
@@ -647,6 +1023,8 @@ def _backtest_period(
                     "market_regime": features.get("market_regime"),
                     "gross_return": round(gross, 4),
                     "net_return": round(net, 4),
+                    "max_adverse_return": round(max_adverse, 4),
+                    "max_favorable_return": round(max_favorable, 4),
                 }
             )
 
@@ -673,6 +1051,9 @@ def _backtest_period(
         "median_return": round(float(returns.median()), 4),
         "best_return": round(float(returns.max()), 4),
         "worst_return": round(float(returns.min()), 4),
+        "average_max_adverse_return": round(float(top_frame["max_adverse_return"].astype(float).mean()), 4) if "max_adverse_return" in top_frame else None,
+        "worst_max_adverse_return": round(float(top_frame["max_adverse_return"].astype(float).min()), 4) if "max_adverse_return" in top_frame else None,
+        "average_max_favorable_return": round(float(top_frame["max_favorable_return"].astype(float).mean()), 4) if "max_favorable_return" in top_frame else None,
         "cumulative_return": round(float(equity[-1]["equity"] - 1), 4) if equity else 0,
         "max_drawdown": round(float(_equity_max_drawdown([point["equity"] for point in equity])), 4),
         "transaction_cost": cost_model["transaction_cost"],
@@ -682,6 +1063,9 @@ def _backtest_period(
         "portfolio_model": "slot_limited_exit_marked",
         "max_positions": max_positions,
         "embargo_days": embargo_days,
+        "validation_scope": validation_scope["scope"],
+        "universe_selection": validation_scope["universe"],
+        "validation_bias_warning": validation_scope["bias_warning"],
         "regime_counts": regime_counts,
     }
 
@@ -694,6 +1078,7 @@ def _backtest_period(
         "best_trades": _clean(best),
         "worst_trades": _clean(worst),
         "validation": _strategy_validation({"metrics": metrics}),
+        "validation_scope": validation_scope,
     }
 
 
@@ -806,6 +1191,9 @@ def _empty_backtest(
         "median_return": None,
         "best_return": None,
         "worst_return": None,
+        "average_max_adverse_return": None,
+        "worst_max_adverse_return": None,
+        "average_max_favorable_return": None,
         "cumulative_return": None,
         "max_drawdown": None,
         "transaction_cost": costs["transaction_cost"],
@@ -815,6 +1203,9 @@ def _empty_backtest(
         "portfolio_model": "slot_limited_exit_marked",
         "max_positions": max_positions,
         "embargo_days": embargo_days,
+        "validation_scope": "current_universe_history",
+        "universe_selection": "latest_krx_amount_ranked_symbols",
+        "validation_bias_warning": "과거 시점별 상장/거래대금 유니버스가 아니라 최신 유니버스 기준 검증입니다.",
         "regime_counts": {},
     }
     return {"metrics": metrics, "equity_curve": [], "best_trades": [], "worst_trades": [], "validation": _strategy_validation({"metrics": metrics})}
@@ -848,7 +1239,497 @@ def _strategy_validation(backtest: dict[str, object]) -> dict[str, object]:
         reasons.append("평균 수익률 기준 미달")
     if max_drawdown is not None and float(max_drawdown) <= max_drawdown_floor:
         reasons.append("최대 낙폭 기준 미달")
-    return {"passed": passed, "reasons": reasons or ["검증 기준 통과"]}
+    warnings = []
+    scope = metrics.get("validation_scope")
+    if scope == "current_universe_history":
+        warnings.append("최신 유니버스 기준 검증이므로 생존편향/현재 거래대금 편향 가능성이 있습니다.")
+    return {
+        "passed": passed,
+        "reasons": reasons or ["검증 기준 통과"],
+        "warnings": warnings,
+        "scope": scope,
+    }
+
+
+def _signal_quality_report(
+    rows: list[dict[str, object]],
+    backtest: dict[str, object],
+    strategy_ok: dict[str, object],
+    period_key: str,
+    algorithm_key: str,
+) -> dict[str, object]:
+    metrics = backtest.get("metrics", {}) if isinstance(backtest, dict) else {}
+    trade_count = int(metrics.get("trade_count") or 0)
+    win_rate = metrics.get("win_rate")
+    average_return = metrics.get("average_return")
+    max_drawdown = metrics.get("max_drawdown")
+    initial_candidates = [row for row in rows if row.get("action_before_safety_filters") == "candidate"]
+    final_candidates = [row for row in rows if row.get("final_action") == "candidate"]
+    watch = [row for row in rows if row.get("final_action") == "watch"]
+    risk_blocked = [row for row in initial_candidates if "risk_gate" in (row.get("candidate_blocked_by") or [])]
+    regime_blocked = [row for row in initial_candidates if "market_regime_filter" in (row.get("candidate_blocked_by") or [])]
+    validation_blocked = [row for row in initial_candidates if "strategy_validation" in (row.get("candidate_blocked_by") or [])]
+    blocked_total = len({str(row.get("symbol")) for row in risk_blocked + regime_blocked + validation_blocked})
+
+    score = 52.0
+    min_trades = int(_number(STRATEGY_CONFIG.get("validation", {}).get("min_trades"), 20))
+    score += min(12.0, trade_count / max(1, min_trades) * 8.0)
+    score += 14.0 if strategy_ok.get("passed") else -8.0
+    if win_rate is not None:
+        score += float(np.clip((float(win_rate) - 0.48) * 80, -12, 12))
+    if average_return is not None:
+        score += float(np.clip(float(average_return) * 450, -10, 12))
+    if max_drawdown is not None and float(max_drawdown) <= -0.35:
+        score -= 8.0
+    if initial_candidates:
+        score -= min(18.0, blocked_total / len(initial_candidates) * 18.0)
+    if not final_candidates and initial_candidates:
+        score -= 6.0
+
+    score = round(float(np.clip(score, 0, 100)), 1)
+    signal = "candidate" if score >= 72 else "watch" if score >= 52 else "warning"
+    warnings = list(strategy_ok.get("warnings") or [])
+    if risk_blocked:
+        warnings.append(f"리스크 게이트로 후보 {len(risk_blocked)}개 하향")
+    if regime_blocked:
+        warnings.append(f"시장 국면 필터로 후보 {len(regime_blocked)}개 하향")
+    if validation_blocked:
+        warnings.append(f"전략 검증 기준으로 후보 {len(validation_blocked)}개 하향")
+    if metrics.get("validation_bias_warning"):
+        warnings.append(str(metrics["validation_bias_warning"]))
+
+    reason = (
+        f"검증 {trade_count}건 · 승률 {_rate_text(win_rate)} · 평균 {_return_text(average_return)} · "
+        f"초기 후보 {len(initial_candidates)}개 중 안전필터 하향 {blocked_total}개"
+    )
+    action = "후보 유지" if signal == "candidate" else "관찰 우선" if signal == "watch" else "신규 진입 보류"
+
+    return _clean(
+        {
+            "period": period_key,
+            "algorithm": algorithm_key,
+            "score": score,
+            "signal": signal,
+            "reason": reason,
+            "action": action,
+            "candidate_count": len(final_candidates),
+            "watch_count": len(watch),
+            "initial_candidate_count": len(initial_candidates),
+            "blocked_candidate_count": blocked_total,
+            "risk_gate_blocked_count": len(risk_blocked),
+            "market_regime_blocked_count": len(regime_blocked),
+            "strategy_validation_blocked_count": len(validation_blocked),
+            "trade_count": trade_count,
+            "win_rate": win_rate,
+            "average_return": average_return,
+            "max_drawdown": max_drawdown,
+            "strategy_validation_passed": bool(strategy_ok.get("passed")),
+            "warnings": _unique_strings(warnings),
+            "blocked_symbols": [
+                {
+                    "symbol": row.get("symbol"),
+                    "name": row.get("name"),
+                    "blocked_by": row.get("candidate_blocked_by") or [],
+                    "reason": row.get("reason"),
+                }
+                for row in initial_candidates
+                if row.get("candidate_blocked_by")
+            ][:12],
+            "basis": "current_universe_daily_history_with_safety_filters",
+        }
+    )
+
+
+def _rate_text(value: object) -> str:
+    number = _number(value, default=np.nan)
+    return "-" if not math.isfinite(number) else f"{number:.1%}"
+
+
+def _return_text(value: object) -> str:
+    number = _number(value, default=np.nan)
+    return "-" if not math.isfinite(number) else f"{number:.2%}"
+
+
+def _unique_strings(values: list[object]) -> list[str]:
+    result = []
+    seen = set()
+    for value in values:
+        text = str(value or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        result.append(text)
+    return result
+
+
+def _build_signal_tracking_report(
+    period_results: dict[str, dict[str, object]],
+    histories: dict[str, pd.DataFrame],
+    out_path: Path,
+    generated_at: datetime,
+) -> dict[str, object]:
+    config = STRATEGY_CONFIG.get("signal_tracking", {})
+    if not isinstance(config, dict) or config.get("enabled") is False:
+        return {"enabled": False, "basis": "disabled"}
+
+    snapshot_dir = out_path / str(config.get("snapshot_dir") or "signal_snapshots")
+    snapshot_dir.mkdir(parents=True, exist_ok=True)
+    horizons = _tracking_horizons(config)
+    current_snapshot = _build_signal_snapshot(period_results, generated_at, config)
+    previous_snapshots = _load_signal_snapshots(snapshot_dir, exclude_as_of=str(current_snapshot.get("as_of") or ""))
+    outcomes: list[dict[str, object]] = []
+    unresolved = 0
+    for snapshot in previous_snapshots:
+        result = _snapshot_outcomes(snapshot, histories, horizons)
+        outcomes.extend(result["resolved"])
+        unresolved += int(result["unresolved_count"])
+
+    performance = _aggregate_algorithm_performance(outcomes)
+    summary = _tracking_summary(outcomes, performance, current_snapshot)
+    _write_signal_snapshot(snapshot_dir, current_snapshot)
+    recent_limit = max(1, int(_number(config.get("recent_outcome_limit"), 80)))
+    return _clean(
+        {
+            "enabled": True,
+            "basis": "daily_signal_snapshots_with_current_history_outcomes",
+            "snapshot_dir": snapshot_dir.name,
+            "horizons": horizons,
+            "snapshot_count": len(previous_snapshots) + 1,
+            "current_snapshot": {
+                "as_of": current_snapshot.get("as_of"),
+                "generated_at": current_snapshot.get("generated_at"),
+                "signal_count": len(current_snapshot.get("signals") or []),
+                "periods": current_snapshot.get("periods") or {},
+            },
+            "summary": summary,
+            "performance_by_algorithm": performance,
+            "recent_outcomes": sorted(outcomes, key=lambda item: str(item.get("snapshot_as_of") or ""), reverse=True)[:recent_limit],
+            "unresolved_count": unresolved,
+            "warnings": [
+                "스냅샷은 생성일 이후 데이터가 충분히 쌓인 항목만 성과 계산됩니다.",
+                "현재 확보한 일봉 이력 기준이므로 실제 체결가/슬리피지는 별도 검증이 필요합니다.",
+            ],
+        }
+    )
+
+
+def _tracking_horizons(config: dict[str, object]) -> list[int]:
+    raw = config.get("horizons") or [1, 3, 5, 20]
+    if not isinstance(raw, list):
+        raw = [1, 3, 5, 20]
+    horizons = sorted({max(1, int(_number(value, 0))) for value in raw if _number(value, 0) > 0})
+    return horizons or [1, 3, 5, 20]
+
+
+def _build_signal_snapshot(
+    period_results: dict[str, dict[str, object]],
+    generated_at: datetime,
+    config: dict[str, object] | None = None,
+) -> dict[str, object]:
+    config = config or {}
+    track_actions = set(config.get("track_actions") or ["candidate", "watch"])
+    max_rows = max(1, int(_number(config.get("max_rows_per_period_algorithm"), 60)))
+    periods: dict[str, object] = {}
+    signals: list[dict[str, object]] = []
+
+    for period_key, period in period_results.items():
+        algorithms = period.get("algorithms") if isinstance(period, dict) else {}
+        if not isinstance(algorithms, dict) or not algorithms:
+            algorithms = {str(period.get("algorithm") or "default"): period}
+        period_counts = {"candidate": 0, "watch": 0, "tracked": 0}
+        for algorithm_key, payload in algorithms.items():
+            if not isinstance(payload, dict):
+                continue
+            rows = payload.get("rows") or []
+            if not isinstance(rows, list):
+                continue
+            tracked = [
+                row
+                for row in rows
+                if isinstance(row, dict) and str(row.get("final_action") or "") in track_actions
+            ][:max_rows]
+            for row in tracked:
+                signal = _snapshot_row(row, period_key, str(algorithm_key), payload)
+                signals.append(signal)
+                action = str(signal.get("final_action") or "watch")
+                if action in period_counts:
+                    period_counts[action] += 1
+                period_counts["tracked"] += 1
+        periods[period_key] = period_counts
+
+    generated_date = generated_at.date().isoformat()
+    as_of = _snapshot_as_of(signals) or generated_date
+    return _clean(
+        {
+            "schema_version": 1,
+            "generated_at": generated_at.isoformat(),
+            "as_of": as_of,
+            "timezone": TIMEZONE,
+            "basis": "market_report_default_and_algorithm_rows",
+            "periods": periods,
+            "signals": signals,
+        }
+    )
+
+
+def _snapshot_row(row: dict[str, object], period_key: str, algorithm_key: str, payload: dict[str, object]) -> dict[str, object]:
+    fields = [
+        "symbol",
+        "name",
+        "market",
+        "as_of",
+        "rank",
+        "score",
+        "score_percentile",
+        "final_action",
+        "trade_signal",
+        "reason",
+        "market_regime",
+        "momentum_score",
+        "risk_score",
+        "liquidity_score",
+        "issue_score",
+        "trend_score",
+        "last_close",
+        "ret_1d",
+        "ret_5d",
+        "ret_21d",
+        "vol_21d",
+        "atr_14_pct",
+        "candidate_blocked_by",
+        "risk_gate",
+        "market_regime_filter",
+        "diversification_filter",
+        "exit_plan",
+    ]
+    result = {field: row.get(field) for field in fields if field in row}
+    result.update(
+        {
+            "period": period_key,
+            "algorithm": algorithm_key,
+            "algorithm_label": row.get("algorithm_label") or payload.get("algorithm_label") or algorithm_key,
+            "holding_days": payload.get("holding_days"),
+            "entry_close": row.get("last_close"),
+            "tracking_key": f"{period_key}:{algorithm_key}:{row.get('symbol')}:{row.get('as_of')}",
+        }
+    )
+    return result
+
+
+def _snapshot_as_of(signals: list[dict[str, object]]) -> str | None:
+    dates = sorted({str(row.get("as_of") or "") for row in signals if row.get("as_of")})
+    return dates[-1] if dates else None
+
+
+def _write_signal_snapshot(snapshot_dir: Path, snapshot: dict[str, object]) -> Path:
+    as_of = str(snapshot.get("as_of") or datetime.now(ZoneInfo(TIMEZONE)).date().isoformat())[:10]
+    target = snapshot_dir / f"{as_of}.json"
+    target.write_text(json.dumps(_clean(snapshot), ensure_ascii=False, indent=2, allow_nan=False), encoding="utf-8")
+    return target
+
+
+def _load_signal_snapshots(snapshot_dir: Path, exclude_as_of: str = "") -> list[dict[str, object]]:
+    snapshots = []
+    if not snapshot_dir.exists():
+        return snapshots
+    for path in sorted(snapshot_dir.glob("*.json")):
+        try:
+            snapshot = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(snapshot, dict):
+            continue
+        if exclude_as_of and str(snapshot.get("as_of") or "")[:10] == exclude_as_of[:10]:
+            continue
+        snapshots.append(snapshot)
+    return snapshots
+
+
+def _snapshot_outcomes(
+    snapshot: dict[str, object],
+    histories: dict[str, pd.DataFrame],
+    horizons: list[int],
+) -> dict[str, object]:
+    resolved: list[dict[str, object]] = []
+    unresolved_count = 0
+    signals = snapshot.get("signals") or []
+    if not isinstance(signals, list):
+        return {"resolved": resolved, "unresolved_count": 0}
+
+    for signal in signals:
+        if not isinstance(signal, dict):
+            continue
+        history = histories.get(str(signal.get("symbol") or ""))
+        outcomes = _outcomes_for_signal(signal, history, horizons, str(snapshot.get("as_of") or ""))
+        if outcomes:
+            resolved.extend(outcomes)
+        else:
+            unresolved_count += 1
+    return {"resolved": resolved, "unresolved_count": unresolved_count}
+
+
+def _outcomes_for_signal(
+    signal: dict[str, object],
+    history: pd.DataFrame | None,
+    horizons: list[int],
+    snapshot_as_of: str,
+) -> list[dict[str, object]]:
+    if history is None or "close" not in history or history.empty:
+        return []
+    as_of = str(signal.get("as_of") or snapshot_as_of or "")[:10]
+    entry_position = _history_position_for_date(history, as_of)
+    if entry_position is None:
+        return []
+    close = history["close"].dropna().astype(float)
+    if entry_position >= len(close):
+        return []
+    entry_price = _number(signal.get("entry_close"), default=np.nan)
+    if not math.isfinite(entry_price) or entry_price <= 0:
+        entry_price = float(close.iloc[entry_position])
+    if entry_price <= 0:
+        return []
+
+    rows: list[dict[str, object]] = []
+    for horizon in horizons:
+        exit_position = entry_position + horizon
+        if exit_position >= len(close):
+            continue
+        path = close.iloc[entry_position : exit_position + 1]
+        path_returns = path / entry_price - 1
+        raw_return = float(close.iloc[exit_position] / entry_price - 1)
+        rule = _rule_exit_outcome(signal.get("exit_plan"), path, entry_price, horizon)
+        rows.append(
+            _clean(
+                {
+                    "snapshot_as_of": as_of,
+                    "symbol": signal.get("symbol"),
+                    "name": signal.get("name"),
+                    "period": signal.get("period"),
+                    "algorithm": signal.get("algorithm"),
+                    "algorithm_label": signal.get("algorithm_label"),
+                    "final_action": signal.get("final_action"),
+                    "score": signal.get("score"),
+                    "horizon": horizon,
+                    "entry_price": round(float(entry_price), 4),
+                    "exit_date": _date_string(close.index[exit_position]),
+                    "return": round(raw_return, 4),
+                    "max_adverse_return": round(float(path_returns.min()), 4),
+                    "max_favorable_return": round(float(path_returns.max()), 4),
+                    "win": raw_return > 0,
+                    "rule_return": rule.get("return"),
+                    "rule_exit_day": rule.get("exit_day"),
+                    "rule_exit_reason": rule.get("reason"),
+                    "basis": "close_to_close_snapshot_outcome",
+                }
+            )
+        )
+    return rows
+
+
+def _history_position_for_date(history: pd.DataFrame, as_of: str) -> int | None:
+    if not as_of:
+        return None
+    close = history["close"].dropna()
+    if close.empty:
+        return None
+    target = pd.Timestamp(as_of)
+    dates = pd.Series(pd.to_datetime(close.index).date, index=range(len(close)))
+    eligible = [index for index, value in dates.items() if pd.Timestamp(value) <= target]
+    if not eligible:
+        return None
+    return int(eligible[-1])
+
+
+def _rule_exit_outcome(exit_plan: object, path: pd.Series, entry_price: float, horizon: int) -> dict[str, object]:
+    if not isinstance(exit_plan, dict) or path.empty:
+        return {"return": None, "exit_day": None, "reason": "no_exit_plan"}
+    stop_price = _number(exit_plan.get("stop_loss_price"), default=np.nan)
+    target_price = _number(exit_plan.get("take_profit_price"), default=np.nan)
+    time_stop_days = int(_number(exit_plan.get("time_stop_days"), horizon))
+    time_stop_days = max(1, min(horizon, time_stop_days))
+    for day, close in enumerate(path.iloc[1:], start=1):
+        price = float(close)
+        if math.isfinite(stop_price) and price <= stop_price:
+            return {"return": round(price / entry_price - 1, 4), "exit_day": day, "reason": "stop_loss"}
+        if math.isfinite(target_price) and price >= target_price:
+            return {"return": round(price / entry_price - 1, 4), "exit_day": day, "reason": "take_profit"}
+        if day >= time_stop_days:
+            return {"return": round(price / entry_price - 1, 4), "exit_day": day, "reason": "time_stop"}
+    price = float(path.iloc[-1])
+    return {"return": round(price / entry_price - 1, 4), "exit_day": min(horizon, len(path) - 1), "reason": "horizon_close"}
+
+
+def _aggregate_algorithm_performance(outcomes: list[dict[str, object]]) -> list[dict[str, object]]:
+    if not outcomes:
+        return []
+    frame = pd.DataFrame(outcomes)
+    required = {"period", "algorithm", "final_action", "horizon", "return"}
+    if not required.issubset(frame.columns):
+        return []
+    rows: list[dict[str, object]] = []
+    group_fields = ["period", "algorithm", "final_action", "horizon"]
+    for keys, group in frame.groupby(group_fields, dropna=False):
+        returns = group["return"].astype(float)
+        rule_returns = group["rule_return"].dropna().astype(float) if "rule_return" in group else pd.Series(dtype="float64")
+        row = {
+            "period": keys[0],
+            "algorithm": keys[1],
+            "final_action": keys[2],
+            "horizon": int(keys[3]),
+            "sample_count": int(len(group)),
+            "win_rate": round(float((returns > 0).mean()), 4),
+            "average_return": round(float(returns.mean()), 4),
+            "median_return": round(float(returns.median()), 4),
+            "best_return": round(float(returns.max()), 4),
+            "worst_return": round(float(returns.min()), 4),
+            "average_max_adverse_return": round(float(group["max_adverse_return"].astype(float).mean()), 4) if "max_adverse_return" in group else None,
+            "average_max_favorable_return": round(float(group["max_favorable_return"].astype(float).mean()), 4) if "max_favorable_return" in group else None,
+            "rule_average_return": round(float(rule_returns.mean()), 4) if not rule_returns.empty else None,
+        }
+        rows.append(_clean(row))
+    return sorted(rows, key=lambda item: (str(item["period"]), str(item["algorithm"]), int(item["horizon"]), str(item["final_action"])))
+
+
+def _tracking_summary(
+    outcomes: list[dict[str, object]],
+    performance: list[dict[str, object]],
+    current_snapshot: dict[str, object],
+) -> dict[str, object]:
+    candidate_perf = [
+        row for row in performance
+        if row.get("final_action") == "candidate" and int(row.get("horizon") or 0) in {3, 5, 20}
+    ]
+    sample_count = sum(int(row.get("sample_count") or 0) for row in candidate_perf)
+    avg_return = (
+        sum(_number(row.get("average_return")) * int(row.get("sample_count") or 0) for row in candidate_perf) / sample_count
+        if sample_count else None
+    )
+    avg_win_rate = (
+        sum(_number(row.get("win_rate")) * int(row.get("sample_count") or 0) for row in candidate_perf) / sample_count
+        if sample_count else None
+    )
+    score = 42.0 + min(18.0, len(outcomes) / 10)
+    if avg_win_rate is not None:
+        score += float(np.clip((avg_win_rate - 0.5) * 90, -12, 16))
+    if avg_return is not None:
+        score += float(np.clip(avg_return * 500, -12, 16))
+    score = round(float(np.clip(score, 0, 100)), 1)
+    signal = "candidate" if score >= 72 else "watch" if score >= 52 else "warning"
+    return _clean(
+        {
+            "score": score,
+            "signal": signal,
+            "outcome_count": len(outcomes),
+            "candidate_sample_count": sample_count,
+            "average_candidate_return": round(float(avg_return), 4) if avg_return is not None else None,
+            "average_candidate_win_rate": round(float(avg_win_rate), 4) if avg_win_rate is not None else None,
+            "current_signal_count": len(current_snapshot.get("signals") or []),
+            "message": (
+                f"성과 표본 {len(outcomes)}개 · 후보 평균 {_return_text(avg_return)} · 후보 승률 {_rate_text(avg_win_rate)}"
+                if outcomes else "이전 스냅샷이 없어 성과 표본을 아직 누적 중입니다."
+            ),
+        }
+    )
 
 
 def _build_period_funnel(
@@ -872,6 +1753,7 @@ def _build_period_funnel(
         ("history_ready", "가격 이력 확보", "기간별 지표와 백테스트가 가능한 종목만 남깁니다.", list(history_symbols)),
         ("liquidity", "유동성 검증", f"거래대금 기반 유동성 점수 {min_liquidity:g} 이상", [symbol for symbol, row in row_by_symbol.items() if _number(row.get("liquidity_score")) >= min_liquidity]),
         ("validated", "검증 필터", "모멘텀, 추세, 리스크 점수를 통과한 종목", [symbol for symbol, row in row_by_symbol.items() if _number(row.get("momentum_score")) >= min_momentum and _number(row.get("risk_score")) >= min_risk]),
+        ("safety_gate", "안전 게이트", "데이터 부족, 거래대금 부족, 급등락, 과변동성, 하락 국면 후보를 하향합니다.", [symbol for symbol, row in row_by_symbol.items() if _row_safety_gate_passed(row)]),
         ("issue", "이슈/관심도 필터", "거래량·거래대금 급증과 신고가 근접도 기반 관심도", [symbol for symbol, row in row_by_symbol.items() if _number(row.get("issue_score")) >= _issue_threshold(period_key)]),
         ("final", "최종 후보", _final_stage_description(period_key, algorithm_key), [row["symbol"] for row in rows if row.get("final_action") == "candidate"]),
     ]
@@ -898,6 +1780,14 @@ def _build_period_funnel(
     return funnel
 
 
+def _row_safety_gate_passed(row: dict[str, object]) -> bool:
+    for key in ("risk_gate", "market_regime_filter"):
+        gate = row.get(key)
+        if isinstance(gate, dict) and not gate.get("passed"):
+            return False
+    return True
+
+
 def _issue_threshold(period_key: str) -> float:
     thresholds = STRATEGY_CONFIG.get("funnel_thresholds", {}).get("issue_score_min_by_period", {})
     if isinstance(thresholds, dict) and period_key in thresholds:
@@ -907,7 +1797,7 @@ def _issue_threshold(period_key: str) -> float:
 
 def _final_stage_description(period_key: str, algorithm_key: str) -> str:
     if _keeps_short_term_candidates(period_key, algorithm_key):
-        return "1일 단기 알고리즘 상위 3개를 최종 후보로 표시"
+        return "1일 단기 알고리즘 상위 3개를 검증 관찰로 표시"
     return "점수와 과거 동일 규칙 검증을 함께 통과"
 
 
@@ -968,6 +1858,28 @@ def _volatility(returns: pd.Series, window: int) -> float:
     return float(sample.std() * np.sqrt(TRADING_DAYS_PER_YEAR))
 
 
+def _atr_pct(high: pd.Series, low: pd.Series, close: pd.Series, window: int) -> float:
+    if len(close) < max(2, window):
+        return np.nan
+    high = high.astype(float)
+    low = low.astype(float)
+    close = close.astype(float)
+    previous_close = close.shift(1)
+    true_range = pd.concat(
+        [
+            high - low,
+            (high - previous_close).abs(),
+            (low - previous_close).abs(),
+        ],
+        axis=1,
+    ).max(axis=1)
+    sample = true_range.dropna().tail(window)
+    latest = close.iloc[-1]
+    if sample.empty or not latest:
+        return np.nan
+    return float(sample.mean() / latest)
+
+
 def _max_drawdown(close: pd.Series, window: int) -> float:
     sample = close.tail(window)
     if sample.empty:
@@ -982,6 +1894,8 @@ def _clip(value: float, low: float, high: float) -> float:
 
 
 def _inverse_clip(value: float, low: float, high: float) -> float:
+    if math.isnan(value) or math.isinf(value) or high == low:
+        return 0.0
     return 1 - _clip(value, low, high)
 
 

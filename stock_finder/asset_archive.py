@@ -499,7 +499,11 @@ def _crypto_backend_signal_plan(asset: dict[str, Any]) -> dict[str, Any]:
     if not intraday.get("ok") or not (intraday.get("history") or []):
         return _crypto_error_signal_plan(key, "INTRADAY_MISSING", "30분 데이터가 없어 후보 계산을 중단했습니다.", signal_at)
 
-    score = _bounded_score(summary.get("score"), 50.0)
+    raw_score = _float_or_none(summary.get("score"))
+    if raw_score is None:
+        return _crypto_error_signal_plan(key, "SUMMARY_SCORE_MISSING", "일봉 요약 점수가 없어 후보 계산을 중단했습니다.", signal_at)
+
+    score = _bounded_score(raw_score, 0.0)
     ret_21 = _float_or_none(summary.get("ret_21d"))
     ret_63 = _float_or_none(summary.get("ret_63d"))
     intraday_selected = intraday.get("selected") or intraday.get("latest") or {}
@@ -759,6 +763,8 @@ def _summary_for_rows(rows: list[dict[str, Any]], selected: dict[str, Any] | Non
         score += 12 if close >= ma200 else -12
     score += 12 if ret_21 is not None and ret_21 >= 0 else -10
     score += 6 if ret_5 is not None and ret_5 >= 0 else -4
+    if len(closes) < 200:
+        score -= 4
     score = max(0, min(100, score))
     if score >= 70:
         signal = "candidate"
@@ -777,6 +783,9 @@ def _summary_for_rows(rows: list[dict[str, Any]], selected: dict[str, Any] | Non
         "label": label,
         "message": message,
         "score": round(score, 1),
+        "data_points": len(closes),
+        "score_basis": "daily_ma_return_state",
+        "score_warning": "200일 미만 데이터는 장기추세 신뢰도를 낮춰 감점합니다." if len(closes) < 200 else None,
         "ma20": round(ma20, 4) if ma20 is not None else None,
         "ma50": round(ma50, 4) if ma50 is not None else None,
         "ma60": round(ma60, 4) if ma60 is not None else None,
@@ -895,6 +904,7 @@ def _stocks_payload(market_report: dict[str, Any], kospi200: dict[str, Any]) -> 
         "index_filter": _index_filter(kospi200),
         "short_term": _period_stock_summary(one_day),
         "swing": _period_stock_summary(one_month),
+        "signal_tracking": domestic.get("signal_tracking") or {},
         "search_universe": _domestic_search_universe(domestic),
         "archive_note": "종목 탭은 주식 전용입니다. 90일 상세 종목 복기는 후보 스냅샷 저장이 쌓인 뒤 확장합니다.",
     }
@@ -934,6 +944,7 @@ def _period_stock_summary(period: dict[str, Any]) -> dict[str, Any]:
         "top": candidates[:8],
         "watch": watch[:6],
         "backtest": backtest.get("metrics") or backtest,
+        "quality_report": period.get("quality_report") or {},
     }
 
 

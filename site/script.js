@@ -2891,7 +2891,18 @@ function algorithmAuditItems() {
   const stockCount = (shortTerm.top || []).length + (swing.top || []).length;
   const stockBacktest = shortTerm.backtest || {};
   const stockWinRate = number(stockBacktest.win_rate ?? stockBacktest.winRate ?? stockBacktest.avg_win_rate);
-  const stockScore = clampScore(50 + stockCount * 5 + (stockWinRate != null ? (stockWinRate > 1 ? stockWinRate : stockWinRate * 100) * 0.22 : 0));
+  const stockQuality = shortTerm.quality_report || swing.quality_report || {};
+  const stockQualityScore = number(stockQuality.score);
+  const stockScore = stockQualityScore != null
+    ? clampScore(stockQualityScore)
+    : clampScore(50 + stockCount * 5 + (stockWinRate != null ? (stockWinRate > 1 ? stockWinRate : stockWinRate * 100) * 0.22 : 0));
+  const stockTracking = stocks.signal_tracking || {};
+  const stockTrackingSummary = stockTracking.summary || {};
+  const stockTrackingScore = number(stockTrackingSummary.score);
+  const stockTrackingOutcomeCount = number(stockTrackingSummary.outcome_count) || 0;
+  const stockTrackingSignal = stockTrackingScore != null
+    ? stockTrackingScore >= 70 ? "candidate" : stockTrackingScore >= 50 ? "watch" : "warning"
+    : "watch";
 
   const crypto = archive.crypto || {};
   const cryptoPlans = [
@@ -2973,9 +2984,17 @@ function algorithmAuditItems() {
       title: "국장 알고리즘",
       signal: stockScore >= 70 ? "candidate" : stockScore >= 50 ? "watch" : "warning",
       score: stockScore,
-      status: `${stockCount}개 후보`,
-      reason: `1일 ${formatNum(shortTerm.candidate_count, 0)} · 1달 ${formatNum(swing.candidate_count, 0)} · 지수 ${stocks.index_filter?.label || "대기"}`,
-      action: stockCount ? "후보 카드에서 차트 확인" : "거래대금/지수 필터 대기",
+      status: stockQuality.reason ? `${formatNum(stockQuality.candidate_count, 0)}개 후보 · ${formatNum(stockQuality.blocked_candidate_count, 0)}개 하향` : `${stockCount}개 후보`,
+      reason: stockQuality.reason || `1일 ${formatNum(shortTerm.candidate_count, 0)} · 1달 ${formatNum(swing.candidate_count, 0)} · 지수 ${stocks.index_filter?.label || "대기"}`,
+      action: stockQuality.action || (stockCount ? "후보 카드에서 차트 확인" : "거래대금/지수 필터 대기"),
+    },
+    {
+      title: "국장 성과추적",
+      signal: stockTrackingSignal,
+      score: stockTrackingScore != null ? stockTrackingScore : clampScore(42 + Math.min(stockTrackingOutcomeCount, 20) * 2),
+      status: stockTracking.enabled ? `성과 ${formatNum(stockTrackingOutcomeCount, 0)}개 · 스냅샷 ${formatNum(stockTracking.snapshot_count, 0)}개` : "스냅샷 대기",
+      reason: stockTrackingSummary.message || "후보 스냅샷을 저장하고 1/3/5/20거래일 성과를 누적합니다.",
+      action: stockTrackingOutcomeCount ? "성과표 기준 알고리즘 비교" : "다음 생성일부터 표본 누적",
     },
     {
       title: "코인 알고리즘",

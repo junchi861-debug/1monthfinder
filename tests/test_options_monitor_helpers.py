@@ -136,8 +136,12 @@ class OptionsMonitorHelperTests(unittest.TestCase):
 
         outcome = result[0]["outcome"]
         self.assertEqual(outcome["status"], "ready")
+        self.assertEqual(outcome["performance_basis"], "kospi200_index_proxy")
+        self.assertFalse(outcome["is_real_option_fill"])
         self.assertAlmostEqual(outcome["horizons"]["15m"]["return_pct"], 3.0)
         self.assertAlmostEqual(outcome["horizons"]["15m"]["cost_adjusted_return_pct"], 2.85)
+        self.assertEqual(outcome["horizons"]["15m"]["basis"], "kospi200_index_proxy")
+        self.assertTrue(outcome["cost_model"]["requires_option_quote_validation"])
         self.assertTrue(outcome["success_15m"])
 
     def test_signal_performance_summary_uses_bayesian_confidence(self) -> None:
