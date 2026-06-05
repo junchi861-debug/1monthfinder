@@ -25,6 +25,8 @@ NAVER_ITEM_TIME_URL = "https://finance.naver.com/item/sise_time.nhn"
 SNAPSHOT_CACHE_SECONDS = 45
 NAVER_RECENT_PAGES = 14
 NAVER_FULL_SESSION_PAGES = 80
+OPTIONS_SESSION_START = time(8, 45)
+OPTIONS_SESSION_END = time(15, 45)
 SIGNAL_LOG_PATH = PROJECT_ROOT / "site" / "data" / "options_signal_log.json"
 SIGNAL_LOG_SCHEMA_VERSION = 1
 SIGNAL_LOG_LOCK_TIMEOUT_SECONDS = 2.0
@@ -485,7 +487,7 @@ def _is_naver_live_window(moment: datetime) -> bool:
     if moment.weekday() >= 5:
         return False
     current_time = moment.time()
-    return time(8, 55) <= current_time <= time(15, 45)
+    return OPTIONS_SESSION_START <= current_time <= OPTIONS_SESSION_END
 
 
 def _fetch_yahoo_candles(symbol: str, range_value: str = "5d", interval: str = "5m") -> list[dict[str, Any]]:
@@ -1124,7 +1126,7 @@ def _fetch_naver_time_quotes(code: str, kind: str, pages: int, generated_at: dat
         if not page_quotes:
             break
         quotes.extend(page_quotes)
-        if page_quotes[-1]["datetime"].time() <= time(9, 0):
+        if page_quotes[-1]["datetime"].time() <= OPTIONS_SESSION_START:
             break
     quotes = _unique_ordered_quotes(quotes)
     if not quotes:
@@ -3178,7 +3180,7 @@ def _ichimoku_mid(candles: list[dict[str, Any]], window: int) -> float | None:
 def _is_market_time(moment: datetime) -> bool:
     if moment.weekday() >= 5:
         return False
-    return time(9, 0) <= moment.time() <= time(15, 45)
+    return OPTIONS_SESSION_START <= moment.time() <= OPTIONS_SESSION_END
 
 
 def _iso(moment: datetime) -> str:

@@ -2,11 +2,16 @@ from __future__ import annotations
 
 import unittest
 from datetime import datetime, timedelta
+from unittest.mock import patch
 
 from stock_finder.options_monitor import (
     KST,
+    _aggregate_candles_to_5m,
     _aggregate_candles_to_minutes,
     _attach_signal_outcomes,
+    _fetch_naver_time_quotes,
+    _is_market_time,
+    _is_naver_live_window,
     _latest_session_candles,
     _signal_performance_summary,
 )
@@ -45,6 +50,54 @@ class OptionsMonitorHelperTests(unittest.TestCase):
         self.assertEqual(result[0]["close"], 99)
         self.assertEqual(result[0]["volume"], 60)
         self.assertEqual(result[1]["time"], "09:05")
+
+    def test_options_market_time_starts_at_0845(self) -> None:
+        opening = datetime(2026, 6, 2, 8, 45, tzinfo=KST)
+
+        self.assertTrue(_is_market_time(opening))
+        self.assertTrue(_is_naver_live_window(opening))
+        self.assertFalse(_is_market_time(opening - timedelta(minutes=1)))
+        self.assertFalse(_is_naver_live_window(opening - timedelta(minutes=1)))
+
+    def test_aggregate_naver_minutes_preserves_0845_bucket(self) -> None:
+        start = datetime(2026, 6, 2, 8, 45, tzinfo=KST)
+        candles = [
+            candle_at(start, 100, 101, 99, 100.5, 10),
+            candle_at(start + timedelta(minutes=1), 100.5, 102, 100, 101, 20),
+            candle_at(start + timedelta(minutes=5), 101, 103, 101, 102, 30),
+        ]
+
+        result = _aggregate_candles_to_5m(candles)
+
+        self.assertEqual(result[0]["time"], "08:45")
+        self.assertEqual(result[0]["open"], 100)
+        self.assertEqual(result[0]["high"], 102)
+        self.assertEqual(result[0]["low"], 99)
+        self.assertEqual(result[0]["close"], 101)
+        self.assertEqual(result[0]["volume"], 30)
+        self.assertEqual(result[1]["time"], "08:50")
+
+    def test_fetch_naver_time_quotes_reads_back_to_0845(self) -> None:
+        trade_date = datetime(2026, 6, 2, 9, 10, tzinfo=KST)
+
+        def quote_at(hour: int, minute: int) -> dict[str, object]:
+            return {"datetime": trade_date.replace(hour=hour, minute=minute), "close": 100}
+
+        pages = {
+            1: [quote_at(9, 10), quote_at(9, 5), quote_at(9, 0)],
+            2: [quote_at(8, 55), quote_at(8, 50), quote_at(8, 45)],
+            3: [quote_at(8, 40)],
+        }
+
+        with patch(
+            "stock_finder.options_monitor._fetch_naver_time_page",
+            side_effect=lambda *args: pages.get(args[2], []),
+        ) as fetch_page:
+            result = _fetch_naver_time_quotes("KPI200", "index", 3, trade_date)
+
+        self.assertEqual(fetch_page.call_count, 2)
+        self.assertEqual(result[0]["datetime"].strftime("%H:%M"), "08:45")
+        self.assertEqual(result[-1]["datetime"].strftime("%H:%M"), "09:10")
 
     def test_latest_session_candles_returns_only_last_date(self) -> None:
         day_one = datetime(2026, 6, 1, 15, 30, tzinfo=KST)
